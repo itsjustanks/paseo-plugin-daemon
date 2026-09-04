@@ -72,3 +72,10 @@ export function createMonitorHandlers(options: MonitorRuntimeOptions = {}): Moni
     },
   };
 }
+
+// These direct handler exports keep index.ts safe for Paseo's split compiler:
+// the client target removes both this server import and each plugin.handle call.
+const monitorHandlers = createMonitorHandlers();
+export const handleMonitorSnapshot = monitorHandlers.snapshot;
+export const handleMonitorStop = monitorHandlers.stop;
+export const handleMonitorForceStop = monitorHandlers.forceStop;

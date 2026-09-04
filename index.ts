@@ -1,15 +1,14 @@
 import type { PluginContext } from "@getpaseo/plugin";
 import { monitorForceStop, monitorSnapshot, monitorStop } from "./contracts.shared";
-import { createMonitorHandlers } from "./handlers.server";
+import { handleMonitorForceStop, handleMonitorSnapshot, handleMonitorStop } from "./handlers.server";
 import { MonitorSurface } from "./surface.client";
 
 const SURFACE_ID = "monitor";
 
 export default function contribute(plugin: PluginContext) {
-  const handlers = createMonitorHandlers();
-  plugin.handle(monitorSnapshot, handlers.snapshot);
-  plugin.handle(monitorStop, handlers.stop);
-  plugin.handle(monitorForceStop, handlers.forceStop);
+  plugin.handle(monitorSnapshot, handleMonitorSnapshot);
+  plugin.handle(monitorStop, handleMonitorStop);
+  plugin.handle(monitorForceStop, handleMonitorForceStop);
 
   plugin.addSurface(SURFACE_ID, MonitorSurface);
   plugin.addSidebarItem({ id: SURFACE_ID, title: "Monitor", icon: "Activity", surface: SURFACE_ID });
