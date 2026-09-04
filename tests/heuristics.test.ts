@@ -73,6 +73,26 @@ describe("service detection", () => {
     expect(detectService(["next", "dev"], [3000])!.label).toBe("Next.js");
   });
 
+  it("recognises Next.js's self-titled production process (single-token argv from process.title)", () => {
+    // Next.js overwrites its own argv/cmdline with just the title text, so
+    // the parsed argv is a single element — not ["next", "start"].
+    const cases: Array<{ argv: string[]; ports: number[] }> = [
+      { argv: ["next-server (v16.2.7)"], ports: [3000] },
+      { argv: ["next-server (v16.3.4)"], ports: [3001] },
+      { argv: ["next-server"], ports: [3000] },
+    ];
+    for (const { argv, ports } of cases) {
+      const detected = detectService(argv, ports);
+      expect(detected).toMatchObject({ kind: "dev-server", confidence: "high", label: "Next.js" });
+    }
+  });
+
+  it("does not match words that merely contain next-server", () => {
+    expect(detectService(["/usr/bin/my-next-server-mock.sh"], [3000])).toMatchObject({ label: "Listening Process" });
+    expect(detectService(["next-server-experimental", "--flag"], [3000])).toMatchObject({ label: "Listening Process" });
+    expect(detectService(["echo", "next-server (v16.2.7) is great"], [3000])).toMatchObject({ label: "Listening Process" });
+  });
+
   it("labels unknown listeners honestly and never calls them dev servers", () => {
     const listener = detectService(["/usr/bin/some-daemon", "--serve"], [9000]);
     expect(listener).toMatchObject({ kind: "listener", label: "Listening Process", confidence: "medium" });

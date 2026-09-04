@@ -24,7 +24,9 @@ one of these. A PR that weakens one of these will not be merged, no matter how i
   change makes cross-user visibility or control even theoretically possible, it's out.
 - **Identity is re-verified at action time, not just at discovery time.** A process seen in a
   snapshot must be re-checked (PID, start-time identity, owning user) immediately before any signal
-  is sent. Acting on stale identity from an earlier read is not acceptable — PIDs get reused.
+  is sent — including every descendant a cascading stop touches, each matched individually against
+  its own start identity, not inherited from the parent's match. Acting on stale identity from an
+  earlier read is not acceptable — PIDs get reused.
 - **Protected processes stay protected.** Monitor's own process, the Paseo daemon/supervisor, PID 1,
   kernel/uid-0 processes, zombies, and every ancestor up through Paseo must remain unkillable
   through Monitor, and this protection must be checked freshly, not cached.
@@ -38,7 +40,9 @@ one of these. A PR that weakens one of these will not be merged, no matter how i
   should be added without a fresh security review.
 - **Redaction happens before data leaves the server boundary.** Secret-shaped values (tokens,
   passwords, keys, credentials in URLs) must never reach the client, logs, or test fixtures in raw
-  form. Raw argv is for server-side identity hashing only.
+  form. Raw argv and its hash are server-side only; when an action token needs to prove argv
+  identity across the RPC boundary, it carries a keyed HMAC proof over the hash, never the hash
+  itself.
 
 ## Making changes
 

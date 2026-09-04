@@ -28,6 +28,11 @@ users or tenants on the same host. Concretely:
   stop/signal processes owned by the OS user running Paseo, and nothing else. It does not attempt
   to enforce isolation *within* that user's own processes — any process you can already see or
   kill yourself from a terminal, Monitor can also see or (with confirmation) stop.
+- Action tokens exchanged with the client encode process identity (PID, uid, start time, expiry)
+  plus a keyed HMAC proof computed over the server-side argv hash — never the raw argv or its hash.
+  A client holding a token cannot learn or replay the underlying command line through it, and every
+  primary and descendant process instance is freshly re-verified by ownership and start identity
+  right before any signal is sent, not trusted from an earlier snapshot.
 - Monitor does not attempt to defend against a malicious *user* of the same machine account —
   that's outside its scope. Its safety mechanisms (identity re-verification, protected-ancestor
   checks, graceful-before-force) exist to prevent Monitor itself from being the cause of an
