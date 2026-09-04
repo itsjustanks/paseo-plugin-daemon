@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    name: typecheck (${{ matrix.os }})
+    name: check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -26,8 +26,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Hygiene (secret-shaped literals, whitespace, Markdown width)
+        run: npm run check:hygiene
+
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Test
-        run: npm test
+      - name: Test with coverage thresholds
+        run: npm run test:coverage
+
+      - name: Upload coverage report
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-lcov
+          path: coverage/lcov.info
+          if-no-files-found: error
