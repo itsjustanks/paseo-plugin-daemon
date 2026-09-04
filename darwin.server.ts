@@ -10,6 +10,7 @@ import {
   type ProcessIdentity,
   type RawProcess,
   type RawSystemSample,
+  type TreeRow,
 } from "./platform.server";
 
 const execFileAsync = promisify(execFile);
@@ -26,6 +27,27 @@ export const defaultExec: Exec = async (file, args) => {
 
 export const CWD_LOOKUP_CONCURRENCY = 4;
 export const MAX_CWD_LOOKUPS = 64;
+
+/** `ps -axo pid=,ppid=,uid=,lstart=`: three numbers then the five lstart tokens. */
+export const PS_TREE_FORMAT = "pid=,ppid=,uid=,lstart=";
+
+export function parsePsTree(text: string): TreeRow[] {
+  const rows: TreeRow[] = [];
+  for (const line of text.split("\n")) {
+    const tokens = line.trim().split(/\s+/);
+    if (tokens.length < 8) continue;
+    const [pid, ppid, uid] = tokens.slice(0, 3).map(Number);
+    if (!Number.isFinite(pid) || !Number.isFinite(ppid) || !Number.isFinite(uid)) continue;
+    rows.push({ pid: pid!, ppid: ppid!, uid: uid!, startId: tokens.slice(3, 8).join(" ") });
+  }
+  return rows;
+}
+
+/** A `ps -p <pid>` that exits 1 with no other failure means "no such process". */
+function psSaysGone(error: unknown): boolean {
+  const e = error as { code?: unknown; killed?: unknown; signal?: unknown; stderr?: unknown };
+  return e.code === 1 && !e.killed && !e.signal && !(typeof e.stderr === "string" && e.stderr.trim().length > 0);
+}
 
 // ------------------------------------------------------------------ parsers
 
@@ -244,8 +266,13 @@ export class DarwinAdapter implements PlatformAdapter {
     };
   }
 
-  private async psRows(): Promise<PsRow[]> {
-    return parsePsOutput(await this.exec("ps", ["-axo", PS_FORMAT]));
+  /** Null when `ps` failed, timed out, or overflowed its buffer. */
+  private async psRows(): Promise<PsRow[] | null> {
+    try {
+      return parsePsOutput(await this.exec("ps", ["-axo", PS_FORMAT]));
+    } catch {
+      return null;
+    }
   }
 
   private toRaw(row: PsRow, cwd: string | null): RawProcess {
@@ -258,6 +285,7 @@ export class DarwinAdapter implements PlatformAdapter {
       uid: row.uid,
       comm: argv[0]?.split("/").pop() ?? "",
       argv,
+      argvLossy: true,
       state: mapState(row.state),
       cpuSeconds: row.cpuSeconds,
       startId: row.lstart,
@@ -267,8 +295,16 @@ export class DarwinAdapter implements PlatformAdapter {
     };
   }
 
+  /**
+   * Same-user processes. `ps` lists every user (macOS `ps -U` cannot be
+   * combined with `-x` portably, and the fixed-argv all-user read is what the
+   * tree walk needs anyway); the filter happens here. A failed `ps` degrades
+   * to an empty list with a warning rather than failing the snapshot.
+   */
   async sampleProcesses(uid: number): Promise<{ processes: RawProcess[]; warnings: string[] }> {
-    const rows = (await this.psRows()).filter((row) => row.uid === uid);
+    const all = await this.psRows();
+    if (all === null) return { processes: [], warnings: ["Process list unavailable: `ps` failed or timed out."] };
+    const rows = all.filter((row) => row.uid === uid);
     const warnings: string[] = [];
     // cwd is only resolved for listening candidates (see listeningPorts) to
     // keep `lsof` invocations bounded; everything else reports null.
@@ -311,9 +347,19 @@ export class DarwinAdapter implements PlatformAdapter {
     return result;
   }
 
+  /**
+   * Null only when `ps` reports no such process; any other failure rejects
+   * so the guard refuses instead of mistaking a broken read for an exit.
+   */
   async readIdentity(pid: number): Promise<ProcessIdentity | null> {
     if (!Number.isInteger(pid) || pid <= 0) return null;
-    const out = await this.exec("ps", ["-o", PS_FORMAT, "-p", String(pid)]).catch(() => "");
+    let out: string;
+    try {
+      out = await this.exec("ps", ["-o", PS_FORMAT, "-p", String(pid)]);
+    } catch (error) {
+      if (psSaysGone(error)) return null;
+      throw new Error("process identity unreadable");
+    }
     const row = parsePsOutput(out).find((r) => r.pid === pid);
     if (!row) return null;
     return {
@@ -326,13 +372,14 @@ export class DarwinAdapter implements PlatformAdapter {
     };
   }
 
-  async readTree(): Promise<Array<{ pid: number; ppid: number; uid: number }>> {
-    const out = await this.exec("ps", ["-axo", "pid=,ppid=,uid="]);
-    const rows: Array<{ pid: number; ppid: number; uid: number }> = [];
-    for (const line of out.split("\n")) {
-      const [pid, ppid, uid] = line.trim().split(/\s+/).map(Number);
-      if (Number.isFinite(pid) && Number.isFinite(ppid) && Number.isFinite(uid)) rows.push({ pid: pid!, ppid: ppid!, uid: uid! });
+  /** Whole table, every user, with lstart so descendants can be re-verified. Rejects on failure. */
+  async readTree(): Promise<TreeRow[]> {
+    let out: string;
+    try {
+      out = await this.exec("ps", ["-axo", PS_TREE_FORMAT]);
+    } catch {
+      throw new Error("process table unreadable");
     }
-    return rows;
+    return parsePsTree(out);
   }
 }

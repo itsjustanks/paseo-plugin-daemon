@@ -166,8 +166,10 @@ export class Collector {
     const [system, sampled] = await Promise.all([this.adapter.sampleSystem(), this.adapter.sampleProcesses(this.uid)]);
     const at = this.clock.now();
     const warnings = [...sampled.warnings];
+    // Adapters already return only same-user rows, so this cap never lets
+    // other users' processes crowd ours out.
     const processes = sampled.processes.slice(0, MAX_TRACKED_PROCESSES);
-    if (sampled.processes.length > MAX_TRACKED_PROCESSES) warnings.push(`Only the first ${MAX_TRACKED_PROCESSES} processes are tracked.`);
+    if (sampled.processes.length > MAX_TRACKED_PROCESSES) warnings.push(`You have more than ${MAX_TRACKED_PROCESSES} processes; only the first ${MAX_TRACKED_PROCESSES} are tracked.`);
     const portScan = await this.ports(processes.map((p) => p.pid));
     warnings.push(...portScan.warnings);
 
@@ -214,7 +216,7 @@ export class Collector {
         pid: raw.pid,
         ppid: raw.ppid,
         name: displayName(raw.argv, raw.comm),
-        command: displayCommand(raw.argv, this.home),
+        command: displayCommand(raw.argv, this.home, { lossy: raw.argvLossy === true }),
         cwd: raw.cwd === null ? null : homeRelative(raw.cwd, this.home),
         state: raw.state,
         cpuPercent: track.cpuPercent === null ? null : round1(track.cpuPercent),

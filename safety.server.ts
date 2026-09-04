@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { ActionResult } from "./contracts.shared";
-import type { Clock, PlatformAdapter, ProcessIdentity, RawProcess } from "./platform.server";
+import type { Clock, PlatformAdapter, ProcessIdentity, RawProcess, TreeRow } from "./platform.server";
 import { systemClock } from "./platform.server";
 import { hashArgv } from "./redaction.server";
 
@@ -10,18 +10,31 @@ import { hashArgv } from "./redaction.server";
  * Invariants:
  * - Only current-user processes. Never uid 0, PID 1, kernel threads, zombies.
  * - Never Monitor itself, nor any ancestor (daemon, supervisor, launcher…).
- * - A token binds PID + uid + start identity + argv hash; all must still match
- *   a fresh read at action time. Reused PIDs are denied.
- * - Descendants are resolved fresh and filtered by the same rules; process
- *   groups are never signalled blindly.
+ * - A token binds PID + uid + start identity + a keyed proof of the argv
+ *   hash; all must still match a fresh read at action time. Reused PIDs are
+ *   denied. The plain argv hash never leaves the daemon.
+ * - Descendants are resolved from a fresh tree, then each one is re-read
+ *   immediately before its signal and must still carry the same uid and start
+ *   identity. A PID is never signalled just because it was a child earlier.
+ * - The primary is signalled first. If that fails for any reason other than
+ *   "already exited", no descendant is touched.
  * - SIGKILL requires a verified SIGTERM attempt on the same identity within
  *   the grace window.
+ * - Any failure to read identity or the process table denies the action.
+ *
+ * Known, unavoidable limitation: between the fresh identity read and the
+ * kill(2) syscall there is a window of a few microseconds in which the PID
+ * could exit and be reused. Closing it would need pidfd_send_signal (Linux
+ * 5.1+) or similar, which Node does not expose. Every other race is closed.
  */
 
 export const TOKEN_TTL_MS = 5 * 60 * 1000;
 export const GRACEFUL_WINDOW_MS = 60 * 1000;
 export const MAX_DESCENDANTS = 512;
 const MAX_GRACEFUL_RECORDS = 256;
+const PROOF_DOMAIN = "monitor-argv-proof\0";
+
+export type { TreeRow };
 
 type Signal = "SIGTERM" | "SIGKILL";
 export type KillFn = (pid: number, signal: Signal) => void;
@@ -30,7 +43,8 @@ interface TokenPayload {
   pid: number;
   uid: number;
   startId: string;
-  argvHash: string;
+  /** HMAC(key, pid|uid|startId|argvHash): proves the argv without revealing its hash. */
+  proof: string;
   exp: number;
 }
 
@@ -47,10 +61,13 @@ export interface GuardOptions {
   gracefulWindowMs?: number;
 }
 
-export interface TreeRow {
-  pid: number;
-  ppid: number;
-  uid: number;
+type SignalOutcome = "delivered" | "exited" | "denied" | "failed";
+
+interface DescendantOutcome {
+  delivered: number;
+  /** Exited, changed identity, or became protected between the tree read and the signal. */
+  skipped: number;
+  failed: number;
 }
 
 function base64url(input: Buffer | string): string {
@@ -61,8 +78,14 @@ function identityKey(identity: { pid: number; uid: number; startId: string; argv
   return `${identity.pid}:${identity.uid}:${identity.startId}:${identity.argvHash}`;
 }
 
+function constantTimeEqual(a: string, b: string): boolean {
+  const left = Buffer.from(a, "base64url");
+  const right = Buffer.from(b, "base64url");
+  return left.length === right.length && left.length > 0 && timingSafeEqual(left, right);
+}
+
 /** PID 1 plus the full ancestor chain of `selfPid`, walked over the given tree. */
-export function protectedSet(tree: readonly TreeRow[], selfPid: number, extra: readonly number[] = []): Set<number> {
+export function protectedSet(tree: readonly Pick<TreeRow, "pid" | "ppid">[], selfPid: number, extra: readonly number[] = []): Set<number> {
   const parents = new Map<number, number>();
   for (const row of tree) parents.set(row.pid, row.ppid);
   const set = new Set<number>([1, selfPid, ...extra]);
@@ -80,16 +103,17 @@ export function protectedSet(tree: readonly TreeRow[], selfPid: number, extra: r
 
 /**
  * Descendants of `root`, breadth-first, never crossing a protected or
- * other-user node (and never descending through one either).
+ * other-user node (and never descending through one either). These are
+ * *candidates*: each is re-verified against a fresh read before any signal.
  */
-export function descendants(tree: readonly TreeRow[], root: number, uid: number, protectedPids: ReadonlySet<number>): number[] {
+export function descendants(tree: readonly TreeRow[], root: number, uid: number, protectedPids: ReadonlySet<number>): TreeRow[] {
   const children = new Map<number, TreeRow[]>();
   for (const row of tree) {
     const list = children.get(row.ppid);
     if (list) list.push(row);
     else children.set(row.ppid, [row]);
   }
-  const out: number[] = [];
+  const out: TreeRow[] = [];
   const queue = [root];
   const seen = new Set<number>([root]);
   while (queue.length > 0 && out.length < MAX_DESCENDANTS) {
@@ -98,7 +122,7 @@ export function descendants(tree: readonly TreeRow[], root: number, uid: number,
       if (seen.has(child.pid)) continue;
       seen.add(child.pid);
       if (child.uid !== uid || protectedPids.has(child.pid)) continue;
-      out.push(child.pid);
+      out.push(child);
       queue.push(child.pid);
     }
   }
@@ -137,8 +161,8 @@ export class ProcessGuard {
     actionable: boolean;
     reason: string | null;
   } {
-    const rows: TreeRow[] = [];
-    for (const row of sampleTree.values()) rows.push({ pid: row.pid, ppid: row.ppid, uid: row.uid });
+    const rows: Array<Pick<TreeRow, "pid" | "ppid">> = [];
+    for (const row of sampleTree.values()) rows.push({ pid: row.pid, ppid: row.ppid });
     return this.evaluateAgainst(process, protectedSet(rows, this.selfPid, this.alwaysProtected));
   }
 
@@ -156,7 +180,13 @@ export class ProcessGuard {
   }
 
   mint(process: Pick<RawProcess, "pid" | "uid" | "startId">, argvHash: string, now: number = this.clock.now()): string {
-    const payload: TokenPayload = { pid: process.pid, uid: process.uid, startId: process.startId, argvHash, exp: now + this.tokenTtlMs };
+    const payload: TokenPayload = {
+      pid: process.pid,
+      uid: process.uid,
+      startId: process.startId,
+      proof: this.proveArgv(process, argvHash),
+      exp: now + this.tokenTtlMs,
+    };
     const body = base64url(JSON.stringify(payload));
     return `${body}.${this.sign(body)}`;
   }
@@ -165,14 +195,24 @@ export class ProcessGuard {
     return createHmac("sha256", this.key).update(body).digest("base64url");
   }
 
+  /**
+   * Keyed proof over the argv hash. A client holding a token learns nothing
+   * about the command line, and cannot test guesses against it, because the
+   * proof cannot be recomputed without the per-subprocess key.
+   */
+  private proveArgv(identity: Pick<RawProcess, "pid" | "uid" | "startId">, argvHash: string): string {
+    return createHmac("sha256", this.key)
+      .update(PROOF_DOMAIN)
+      .update(`${identity.pid}\0${identity.uid}\0${identity.startId}\0${argvHash}`)
+      .digest("base64url");
+  }
+
   /** Returns the payload only if the signature verifies and it has not expired. */
   verify(token: string, now: number = this.clock.now()): TokenPayload | null {
     const dot = token.lastIndexOf(".");
     if (dot <= 0) return null;
     const body = token.slice(0, dot);
-    const signature = Buffer.from(token.slice(dot + 1), "base64url");
-    const expected = Buffer.from(this.sign(body), "base64url");
-    if (signature.length !== expected.length || !timingSafeEqual(signature, expected)) return null;
+    if (!constantTimeEqual(token.slice(dot + 1), this.sign(body))) return null;
     let payload: unknown;
     try {
       payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
@@ -188,62 +228,110 @@ export class ProcessGuard {
 
   /**
    * Verify the token against a fresh read and the live tree. Returns the
-   * verified identity plus the descendants that may be signalled, or a denial.
+   * verified identity plus descendant candidates, or a denial. Any read
+   * failure is a denial: we never guess.
    */
-  private async authorize(token: string): Promise<{ ok: true; identity: ProcessIdentity; targets: number[] } | { ok: false; result: ActionResult }> {
+  private async authorize(
+    token: string,
+  ): Promise<{ ok: true; identity: ProcessIdentity; protectedPids: ReadonlySet<number>; candidates: TreeRow[] } | { ok: false; result: ActionResult }> {
     const deny = (message: string, pid: number | null = null): { ok: false; result: ActionResult } => ({
       ok: false,
       result: { ok: false, status: "denied", message, pid, signaledCount: 0 },
     });
     const payload = this.verify(token);
     if (!payload) return deny("Action token is invalid or expired. Refresh and try again.");
-    const identity = await this.adapter.readIdentity(payload.pid);
+    let identity: ProcessIdentity | null;
+    try {
+      identity = await this.adapter.readIdentity(payload.pid);
+    } catch {
+      return deny("Could not verify the process identity; refusing to signal.", payload.pid);
+    }
     if (!identity) return { ok: false, result: { ok: true, status: "already-exited", message: "Process has already exited.", pid: payload.pid, signaledCount: 0 } };
-    if (identity.uid !== payload.uid || identity.startId !== payload.startId || identity.argvHash !== payload.argvHash) {
+    if (identity.uid !== payload.uid || identity.startId !== payload.startId || !constantTimeEqual(payload.proof, this.proveArgv(identity, identity.argvHash))) {
       return deny("Process identity changed since the snapshot (PID may have been reused).", payload.pid);
     }
-    const tree = await this.adapter.readTree();
+    let tree: TreeRow[];
+    try {
+      tree = await this.adapter.readTree();
+    } catch {
+      return deny("Could not read the process table; refusing to signal.", payload.pid);
+    }
     const protectedPids = protectedSet(tree, this.selfPid, this.alwaysProtected);
     const decision = this.evaluateAgainst(identity, protectedPids);
     if (!decision.actionable) return deny(`Refusing to signal: ${decision.reason}.`, identity.pid);
-    return { ok: true, identity, targets: descendants(tree, identity.pid, this.uid, protectedPids) };
+    return { ok: true, identity, protectedPids, candidates: descendants(tree, identity.pid, this.uid, protectedPids) };
   }
 
-  private signalAll(pids: readonly number[], signal: Signal): { delivered: number; primaryExited: boolean; error: string | null } {
-    let delivered = 0;
-    let primaryExited = false;
-    let error: string | null = null;
-    pids.forEach((pid, index) => {
+  /**
+   * One kill(2). The caller has just re-read this PID's identity; only the
+   * syscall-sized window documented at the top of this file remains.
+   */
+  private trySignal(pid: number, signal: Signal): SignalOutcome {
+    try {
+      this.kill(pid, signal);
+      return "delivered";
+    } catch (caught) {
+      const code = (caught as { code?: unknown }).code;
+      if (code === "ESRCH") return "exited";
+      return code === "EPERM" ? "denied" : "failed";
+    }
+  }
+
+  /**
+   * Re-verify each candidate immediately before signalling it. A candidate
+   * is skipped when it has exited, when its uid or start identity no longer
+   * matches the tree row (PID reuse), or when the static rules now reject it.
+   */
+  private async signalDescendants(candidates: readonly TreeRow[], protectedPids: ReadonlySet<number>, signal: Signal): Promise<DescendantOutcome> {
+    const outcome: DescendantOutcome = { delivered: 0, skipped: 0, failed: 0 };
+    for (const candidate of candidates) {
+      let fresh: ProcessIdentity | null;
       try {
-        this.kill(pid, signal);
-        delivered += 1;
-      } catch (caught) {
-        const code = (caught as { code?: unknown }).code;
-        if (code === "ESRCH") {
-          if (index === 0) primaryExited = true;
-          return;
-        }
-        if (index === 0) error = code === "EPERM" ? "Permission denied by the operating system." : "Signal failed.";
+        fresh = await this.adapter.readIdentity(candidate.pid);
+      } catch {
+        fresh = null;
       }
-    });
-    return { delivered, primaryExited, error };
+      if (!fresh || fresh.uid !== candidate.uid || fresh.startId !== candidate.startId || !this.evaluateAgainst(fresh, protectedPids).actionable) {
+        outcome.skipped += 1;
+        continue;
+      }
+      const result = this.trySignal(candidate.pid, signal);
+      if (result === "delivered") outcome.delivered += 1;
+      else if (result === "exited") outcome.skipped += 1;
+      else outcome.failed += 1;
+    }
+    return outcome;
   }
 
-  /** SIGTERM the verified process and its eligible descendants; record the attempt. */
+  private describe(signal: Signal, pid: number, candidates: number, kids: DescendantOutcome): string {
+    if (candidates === 0) return `Sent ${signal} to PID ${pid}.`;
+    const parts = [`Sent ${signal} to PID ${pid} and ${kids.delivered} of ${candidates} child process(es).`];
+    if (kids.failed > 0) parts.push(`${kids.failed} child process(es) could not be signaled.`);
+    if (kids.skipped > 0) parts.push(`${kids.skipped} had already exited or changed identity and were left alone.`);
+    return parts.join(" ");
+  }
+
+  private failure(result: SignalOutcome, pid: number): ActionResult {
+    const message = result === "denied" ? "Permission denied by the operating system." : "Signal failed.";
+    return { ok: false, status: "failed", message, pid, signaledCount: 0 };
+  }
+
+  /** SIGTERM the verified process, record the attempt, then its re-verified descendants. */
   async stop(token: string): Promise<ActionResult> {
     const auth = await this.authorize(token);
     if (!auth.ok) return auth.result;
-    const { identity, targets } = auth;
-    const outcome = this.signalAll([identity.pid, ...targets], "SIGTERM");
-    if (outcome.primaryExited) return { ok: true, status: "already-exited", message: "Process has already exited.", pid: identity.pid, signaledCount: 0 };
-    if (outcome.error) return { ok: false, status: "failed", message: outcome.error, pid: identity.pid, signaledCount: outcome.delivered };
+    const { identity, protectedPids, candidates } = auth;
+    const primary = this.trySignal(identity.pid, "SIGTERM");
+    if (primary === "exited") return { ok: true, status: "already-exited", message: "Process has already exited.", pid: identity.pid, signaledCount: 0 };
+    if (primary !== "delivered") return this.failure(primary, identity.pid);
     this.recordGraceful(identity);
+    const kids = await this.signalDescendants(candidates, protectedPids, "SIGTERM");
     return {
       ok: true,
       status: "signaled",
-      message: targets.length > 0 ? `Sent SIGTERM to PID ${identity.pid} and ${targets.length} child process(es).` : `Sent SIGTERM to PID ${identity.pid}.`,
+      message: this.describe("SIGTERM", identity.pid, candidates.length, kids),
       pid: identity.pid,
-      signaledCount: outcome.delivered,
+      signaledCount: 1 + kids.delivered,
     };
   }
 
@@ -251,7 +339,7 @@ export class ProcessGuard {
   async forceStop(token: string): Promise<ActionResult> {
     const auth = await this.authorize(token);
     if (!auth.ok) return auth.result;
-    const { identity, targets } = auth;
+    const { identity, protectedPids, candidates } = auth;
     if (!this.hadRecentGraceful(identity)) {
       return {
         ok: false,
@@ -261,16 +349,17 @@ export class ProcessGuard {
         signaledCount: 0,
       };
     }
-    const outcome = this.signalAll([identity.pid, ...targets], "SIGKILL");
-    if (outcome.primaryExited) return { ok: true, status: "already-exited", message: "Process has already exited.", pid: identity.pid, signaledCount: 0 };
-    if (outcome.error) return { ok: false, status: "failed", message: outcome.error, pid: identity.pid, signaledCount: outcome.delivered };
+    const primary = this.trySignal(identity.pid, "SIGKILL");
+    if (primary === "exited") return { ok: true, status: "already-exited", message: "Process has already exited.", pid: identity.pid, signaledCount: 0 };
+    if (primary !== "delivered") return this.failure(primary, identity.pid);
     this.graceful.delete(identityKey(identity));
+    const kids = await this.signalDescendants(candidates, protectedPids, "SIGKILL");
     return {
       ok: true,
       status: "signaled",
-      message: targets.length > 0 ? `Sent SIGKILL to PID ${identity.pid} and ${targets.length} child process(es).` : `Sent SIGKILL to PID ${identity.pid}.`,
+      message: this.describe("SIGKILL", identity.pid, candidates.length, kids),
       pid: identity.pid,
-      signaledCount: outcome.delivered,
+      signaledCount: 1 + kids.delivered,
     };
   }
 
@@ -299,7 +388,7 @@ function isPayload(value: unknown): value is TokenPayload {
     (v.pid as number) > 0 &&
     Number.isInteger(v.uid) &&
     typeof v.startId === "string" &&
-    typeof v.argvHash === "string" &&
+    typeof v.proof === "string" &&
     typeof v.exp === "number" &&
     Number.isFinite(v.exp)
   );

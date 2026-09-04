@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   LinuxAdapter,
+  MAX_FDS_PER_PROCESS,
+  MAX_PROCESSES,
   parseCmdline,
   parseLoadavg,
   parseMeminfo,
@@ -161,6 +163,119 @@ describe("LinuxAdapter", () => {
 
   it("reads the whole tree including other users", async () => {
     const tree = await adapter.readTree();
-    expect(tree).toEqual(expect.arrayContaining([{ pid: 1458488, ppid: 1458477, uid: 1000 }, { pid: 9, ppid: 1, uid: 0 }]));
+    expect(tree).toEqual(
+      expect.arrayContaining([
+        { pid: 1458488, ppid: 1458477, uid: 1000, startId: "15076589" },
+        { pid: 9, ppid: 1, uid: 0, startId: "100" },
+      ]),
+    );
+  });
+});
+
+/** A procfs where every PID below `userFrom` is root's and the rest belong to uid 1000. */
+function crowdedFs(totalPids: number, userFrom: number, extra: Partial<Record<string, string[]>> = {}): LinuxFs & { readlinks: number } {
+  const ids = Array.from({ length: totalPids }, (_, i) => String(i + 1));
+  const statFor = (pid: number) => `${pid} (p${pid}) S 1 ${pid} ${pid} 0 -1 0 0 0 0 0 1 1 0 0 20 0 1 0 ${pid * 10} 0 5 0`;
+  const statusFor = (pid: number) => (pid < userFrom ? fx.PID_STATUS_ROOT : fx.PID_STATUS_DAEMON);
+  const fs = {
+    readlinks: 0,
+    async readFile(path: string) {
+      if (path === "/proc/uptime") return fx.UPTIME;
+      if (path === "/proc/net/tcp") return fx.NET_TCP;
+      if (path === "/proc/net/tcp6") return "";
+      const match = /^\/proc\/(\d+)\/(stat|status)$/.exec(path);
+      if (!match) throw Object.assign(new Error(`ENOENT ${path}`), { code: "ENOENT" });
+      const pid = Number(match[1]);
+      if (pid > totalPids) throw Object.assign(new Error(`ENOENT ${path}`), { code: "ENOENT" });
+      return match[2] === "stat" ? statFor(pid) : statusFor(pid);
+    },
+    async readFileBuffer(path: string) {
+      return Buffer.from(`${path}\0`);
+    },
+    async readdir(path: string) {
+      if (path === "/proc") return [...ids, "self", "cpuinfo"];
+      const listed = extra[path];
+      if (listed) return listed;
+      throw Object.assign(new Error(`ENOENT ${path}`), { code: "ENOENT" });
+    },
+    async readlink(path: string) {
+      fs.readlinks += 1;
+      if (path.endsWith("/cwd")) return "/home/paseo";
+      if (path.endsWith("/fd/1")) return "socket:[8233008]";
+      return "/dev/null";
+    },
+  };
+  return fs;
+}
+
+describe("LinuxAdapter bounds", () => {
+  it("does not let other users' processes crowd out the current user's", async () => {
+    // 5000 root PIDs come first in /proc; ours is the very last entry.
+    const total = 5001;
+    const adapter = new LinuxAdapter({ fs: crowdedFs(total, total), clockTicks: 100 });
+    const { processes, warnings } = await adapter.sampleProcesses(1000);
+    expect(processes.map((p) => p.pid)).toEqual([total]);
+    expect(warnings).toEqual([]);
+  });
+
+  it("caps only the same-user set and says so", async () => {
+    const total = MAX_PROCESSES + 20;
+    const adapter = new LinuxAdapter({ fs: crowdedFs(total, 1), clockTicks: 100 });
+    const { processes, warnings } = await adapter.sampleProcesses(1000);
+    expect(processes).toHaveLength(MAX_PROCESSES);
+    expect(warnings).toEqual([`You have more than ${MAX_PROCESSES} processes; only the first ${MAX_PROCESSES} are tracked.`]);
+    // The tree, needed for ancestor protection, is never capped.
+    expect(await adapter.readTree()).toHaveLength(total);
+  });
+
+  it("warns when a process's fd table is truncated and may hide ports", async () => {
+    const many = Array.from({ length: MAX_FDS_PER_PROCESS + 1 }, (_, i) => String(i + 2));
+    const fs = crowdedFs(3, 1, { "/proc/3/fd": many, "/proc/2/fd": ["0", "1", "2"] });
+    const adapter = new LinuxAdapter({ fs, clockTicks: 100 });
+    const result = await adapter.listeningPorts([2, 3]);
+    expect(result.ports.get(2)).toEqual([0xa3c3]);
+    expect(result.warnings).toEqual([
+      `1 process(es) have more than ${MAX_FDS_PER_PROCESS} open files; only the first ${MAX_FDS_PER_PROCESS} were checked, so some listening ports may be missing.`,
+    ]);
+  });
+
+  it("stops reading descriptors once every listening socket is attributed", async () => {
+    const fs = crowdedFs(2, 1, { "/proc/2/fd": ["0", "1", "2", "3", "4", "5"] });
+    const adapter = new LinuxAdapter({ fs, clockTicks: 100 });
+    // NET_TCP has three LISTEN sockets; only inode 8233008 (fd 1) belongs to this process,
+    // so the scan cannot stop early and must read every descriptor.
+    const result = await adapter.listeningPorts([2]);
+    expect(result.ports.get(2)).toEqual([0xa3c3]);
+    expect(fs.readlinks).toBe(6);
+    // With a single system-wide listener, the scan ends right after finding it.
+    const single = crowdedFs(2, 1, { "/proc/2/fd": ["0", "1", "2", "3", "4", "5"] });
+    single.readFile = async (path: string) => (path === "/proc/net/tcp" ? fx.NET_TCP.split("\n").slice(0, 2).join("\n") + "\n" : path === "/proc/net/tcp6" ? "" : fs.readFile(path));
+    const early = new LinuxAdapter({ fs: single, clockTicks: 100 });
+    expect((await early.listeningPorts([2])).ports.get(2)).toEqual([0xa3c3]);
+    expect(single.readlinks).toBe(2);
+  });
+
+  it("readIdentity distinguishes a vanished process from an unreadable one", async () => {
+    const base = crowdedFs(2, 1);
+    const denied = Object.assign(new Error("EACCES"), { code: "EACCES" });
+    const fs: LinuxFs = {
+      ...base,
+      readFile: async (path) => {
+        if (path.startsWith("/proc/2/")) throw denied;
+        return base.readFile(path);
+      },
+      readFileBuffer: async (path) => {
+        if (path === "/proc/1/cmdline") throw denied;
+        return base.readFileBuffer(path);
+      },
+    };
+    const adapter = new LinuxAdapter({ fs, clockTicks: 100 });
+    expect(await adapter.readIdentity(999)).toBeNull();
+    expect(await adapter.readIdentity(0)).toBeNull();
+    await expect(adapter.readIdentity(2)).rejects.toThrow("process identity unreadable");
+    await expect(adapter.readIdentity(1)).rejects.toThrow("process identity unreadable");
+    const gone = Object.assign(new Error("ESRCH"), { code: "ESRCH" });
+    const vanishing: LinuxFs = { ...base, readFileBuffer: async () => { throw gone; } };
+    expect(await new LinuxAdapter({ fs: vanishing, clockTicks: 100 }).readIdentity(1)).toBeNull();
   });
 });
