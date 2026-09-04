@@ -1,0 +1,79 @@
+export const PROC_STAT = `cpu  7399079 79538 3639026 139527888 391456 0 38540 1104790 0 0
+cpu0 799327 13924 472487 17566589 42850 0 12658 166250 0 0
+intr 1 2 3
+`;
+
+export const PROC_STAT_LATER = `cpu  7399279 79538 3639126 139528088 391456 0 38540 1104790 0 0
+cpu0 799327 13924 472487 17566589 42850 0 12658 166250 0 0
+`;
+
+export const LOADAVG = "2.04 1.03 1.35 2/947 2085523\n";
+
+export const MEMINFO = `MemTotal:       32864204 kB
+MemFree:        10913744 kB
+MemAvailable:   22870792 kB
+Buffers:         1357448 kB
+Cached:         10105500 kB
+SwapCached:            8 kB
+SwapTotal:      24820704 kB
+SwapFree:       24804736 kB
+Shmem:            206864 kB
+SReclaimable:    2685848 kB
+`;
+
+export const MEMINFO_OLD_KERNEL = `MemTotal:       1000000 kB
+MemFree:         100000 kB
+Buffers:          50000 kB
+Cached:          200000 kB
+SwapTotal:            0 kB
+SwapFree:             0 kB
+SReclaimable:     30000 kB
+`;
+
+export const PRESSURE_CPU = `some avg10=3.68 avg60=2.38 avg300=1.63 total=9356563029
+full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+`;
+
+export const UPTIME = "190635.00 1395278.93\n";
+
+/** Real `Paseo Daemon` row: comm contains a space. Field 22 (starttime) = 15076589. */
+export const PID_STAT_DAEMON =
+  "1458488 (Paseo Daemon) S 1458477 1458457 1458457 0 -1 4194304 29543165 129721824 0 725 96763 79197 673752 437308 20 0 11 0 15076589 12489326592 123969 18446744073709551615 104979626143744 104979626156053 140725242454704 0 0 0 0 16781312 83458 0 0 0 17 3 0 0 0 0 0 104979626167704 104979626168336 104980518977536 140725242461323 140725242461453 140725242461453 140725242462186 0\n";
+
+/** Pathological comm: parentheses inside the name. */
+export const PID_STAT_PARENS = "42 (weird (name)) R 1 42 42 0 -1 0 0 0 0 0 300 100 0 0 20 0 1 0 5000 1000 25 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n";
+
+export const PID_STATUS_DAEMON = `Name:\tPaseo Daemon
+Umask:\t0022
+State:\tS (sleeping)
+Tgid:\t1458488
+Pid:\t1458488
+PPid:\t1458477
+Uid:\t1000\t1000\t1000\t1000
+Gid:\t1000\t1000\t1000\t1000
+VmRSS:\t  496616 kB
+VmSwap:\t       0 kB
+Threads:\t11
+`;
+
+export const PID_STATUS_ROOT = `Name:\tsshd
+State:\tS (sleeping)
+PPid:\t1
+Uid:\t0\t0\t0\t0
+Gid:\t0\t0\t0\t0
+VmRSS:\t    5000 kB
+`;
+
+export const CMDLINE_NODE = Buffer.from("node\0/home/u/app/server.js\0--token\0abc123\0", "utf8");
+
+export const NET_TCP = `  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:A3C3 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 8233008 1 0000000000000000 100 0 0 10 0
+   1: 3500007F:0035 00000000:0000 0A 00000000:00000000 00:00000000 00000000   990        0 2871 1 0000000000000000 100 0 0 10 5
+   2: 00000000:0016 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 10082 1 0000000000000000 100 0 0 10 0
+   3: 0100007F:1F90 0100007F:C350 01 00000000:00000000 00:00000000 00000000  1000        0 999 1 0000000000000000 20 4 30 10 -1
+`;
+
+export const NET_TCP6 = `  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000000000000000000001000000:12F2 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1002        0 386431 1 0000000000000000 100 0 0 10 0
+   1: 00000000000000000000000000000000:0BB8 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 555 1 0000000000000000 100 0 0 10 0
+`;
