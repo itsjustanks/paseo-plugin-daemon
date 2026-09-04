@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Collector, HISTORY_MAX_POINTS, type ActionPolicy } from "../collector.server";
 import { SnapshotSchema } from "../contracts.shared";
 import { FakeAdapter, FakeClock, GB, MB, proc, system } from "./fake-adapter";
+import { SYNTHETIC_ANTHROPIC_KEY } from "./synthetic-secrets";
 
 const policy: ActionPolicy = {
   evaluate: (p) => (p.pid === 7 ? { actionable: false, reason: "protected in test" } : { actionable: true, reason: null }),
@@ -121,7 +122,7 @@ describe("Collector", () => {
   it("passes adapter warnings through and never leaks raw argv secrets", async () => {
     const { adapter, collector } = setup();
     adapter.portWarnings = ["Listening ports unavailable: test"];
-    const secret = "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const secret = SYNTHETIC_ANTHROPIC_KEY;
     adapter.processes = [proc({ pid: 100, argv: ["node", "app.js", "--api-key", secret, "--db", "postgres://u:pw@db/app"] })];
     const snap = await collector.snapshot({});
     const json = JSON.stringify(snap);

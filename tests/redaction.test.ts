@@ -1,19 +1,38 @@
 import { describe, expect, it } from "vitest";
 import { DISPLAY_COMMAND_MAX, displayCommand, displayName, hashArgv, homeRelative, redactArgv } from "../redaction.server";
+import {
+  SYNTHETIC_ANTHROPIC_KEY,
+  SYNTHETIC_AWS_ACCESS_KEY,
+  SYNTHETIC_BEARER_VALUE,
+  SYNTHETIC_GITHUB_TOKEN,
+  SYNTHETIC_JWT,
+  SYNTHETIC_NPM_TOKEN,
+  SYNTHETIC_PASSWORD,
+  SYNTHETIC_SHAPES,
+  SYNTHETIC_SLACK_TOKEN,
+} from "./synthetic-secrets";
 
 const HOME = "/home/alice";
 
 const SECRETS = [
-  "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
-  "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab",
-  "AKIAIOSFODNN7EXAMPLE",
-  "xoxb-1234567890-ABCDEFGHIJKL",
-  "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
-  "hunter2-super-secret",
-  "npm_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcd",
+  SYNTHETIC_ANTHROPIC_KEY,
+  SYNTHETIC_GITHUB_TOKEN,
+  SYNTHETIC_AWS_ACCESS_KEY,
+  SYNTHETIC_SLACK_TOKEN,
+  SYNTHETIC_JWT,
+  SYNTHETIC_PASSWORD,
+  SYNTHETIC_NPM_TOKEN,
 ];
 
 describe("redaction", () => {
+  it("synthetic secrets are assembled into the shapes the redactor targets", () => {
+    for (const { value, prefix, minLength } of SYNTHETIC_SHAPES) {
+      expect(value.startsWith(prefix)).toBe(true);
+      expect(value.length).toBeGreaterThanOrEqual(minLength);
+    }
+    expect(SYNTHETIC_JWT.split(".")).toHaveLength(3);
+  });
+
   it("redacts values of secret-looking flags in all shapes", () => {
     const argv = ["node", "server.js", "--token", SECRETS[5]!, "--api-key=" + SECRETS[0], "-p", "3000", "PASSWORD=" + SECRETS[5], "--auth-cookie", "session=abc"];
     const out = redactArgv(argv, HOME);
@@ -22,7 +41,7 @@ describe("redaction", () => {
 
   it("redacts URL credentials and bearer values", () => {
     expect(redactArgv(["curl", "https://user:pa55@example.com/x"], HOME)).toEqual(["curl", "https://[redacted]@example.com/x"]);
-    expect(redactArgv(["curl", "-H", "Authorization: Bearer abcdefgh12345678"], HOME)[2]).toBe("Authorization: [redacted]");
+    expect(redactArgv(["curl", "-H", `Authorization: Bearer ${SYNTHETIC_BEARER_VALUE}`], HOME)[2]).toBe("Authorization: [redacted]");
     expect(redactArgv(["psql", "postgres://admin:s3cret@db:5432/app"], HOME)[1]).toBe("postgres://[redacted]@db:5432/app");
   });
 
