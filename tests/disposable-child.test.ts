@@ -16,14 +16,21 @@ const supported = (platform === "linux" || platform === "darwin") && uid >= 0;
 
 const children: ChildProcess[] = [];
 
-function spawnChild(trapTerm: boolean): ChildProcess {
+function spawnChild(trapTerm: boolean): { child: ChildProcess; ready: Promise<void> } {
   const marker = `monitor-test-${process.pid}-${Date.now()}`;
   // No process.title here: on Linux it rewrites /proc/<pid>/cmdline, which the
   // guard would (correctly) treat as an identity change and deny.
-  const script = trapTerm ? "process.on('SIGTERM',()=>{});setInterval(()=>{},1000);" : "setInterval(()=>{},1000);";
-  const child = spawn(process.execPath, ["-e", script, "--", marker], { stdio: "ignore" });
+  const script = trapTerm
+    ? "process.on('SIGTERM',()=>{});setInterval(()=>{},1000);process.send?.('ready');"
+    : "setInterval(()=>{},1000);process.send?.('ready');";
+  const child = spawn(process.execPath, ["-e", script, "--", marker], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+  const ready = new Promise<void>((resolve, reject) => {
+    child.once("message", (message) => (message === "ready" ? resolve() : reject(new Error("child sent an unexpected readiness message"))));
+    child.once("error", reject);
+    child.once("exit", () => reject(new Error("child exited before signalling readiness")));
+  });
   children.push(child);
-  return child;
+  return { child, ready };
 }
 
 function exited(child: ChildProcess): Promise<number | null> {
@@ -56,9 +63,12 @@ afterEach(() => {
 describe.runIf(supported)("disposable child (real adapter)", () => {
   it("gracefully stops a real child and gates force stop", async () => {
     const adapter = createAdapter()!;
-    const gentle = spawnChild(false);
-    const stubborn = spawnChild(true);
-    await waitFor(async () => (await adapter.readIdentity(gentle.pid!)) !== null && (await adapter.readIdentity(stubborn.pid!)) !== null);
+    const gentleSpawn = spawnChild(false);
+    const stubbornSpawn = spawnChild(true);
+    const gentle = gentleSpawn.child;
+    const stubborn = stubbornSpawn.child;
+    await Promise.all([gentleSpawn.ready, stubbornSpawn.ready]);
+    expect(await waitFor(async () => (await adapter.readIdentity(gentle.pid!)) !== null && (await adapter.readIdentity(stubborn.pid!)) !== null)).toBe(true);
 
     const signalled: Array<[number, string]> = [];
     const guard = new ProcessGuard({
@@ -93,8 +103,7 @@ describe.runIf(supported)("disposable child (real adapter)", () => {
     expect(stubbornRow.actionToken).toBeTruthy();
     expect((await guard.forceStop(stubbornRow.actionToken!)).status).toBe("needs-graceful-first");
     expect((await guard.stop(stubbornRow.actionToken!)).status).toBe("signaled");
-    await new Promise((r) => setTimeout(r, 300));
-    expect(stubborn.exitCode).toBeNull();
+    expect(await waitFor(async () => stubborn.exitCode !== null || stubborn.signalCode !== null, 300)).toBe(false);
     expect((await guard.forceStop(stubbornRow.actionToken!)).status).toBe("signaled");
     await exited(stubborn);
     expect(stubborn.signalCode).toBe("SIGKILL");
