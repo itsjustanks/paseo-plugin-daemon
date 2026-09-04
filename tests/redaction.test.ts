@@ -142,6 +142,100 @@ describe("executable-aware credential flags", () => {
     // `docker run -p 8080:80` is a port mapping, not a password.
     expect(redactArgv(["docker", "run", "-p", "8080:80", "img"], HOME)).toEqual(["docker", "run", "-p", "8080:80", "img"]);
   });
+
+  /** Every executable-specific secret flag, in `flag=value` form. `pre` covers subcommands the rule is gated on. */
+  const EQUALS_FORMS: ReadonlyArray<{ exe: string; pre?: string[]; flags: string[] }> = [
+    { exe: "curl", flags: ["-u", "-U", "--user", "--proxy-user", "--oauth2-bearer", "--tlspassword", "--proxy-tlspassword"] },
+    { exe: "redis-cli", flags: ["-a", "--pass"] },
+    { exe: "mysql", flags: ["-p"] },
+    { exe: "mariadb-dump", flags: ["-p"] },
+    { exe: "mongosh", flags: ["-p"] },
+    { exe: "sshpass", flags: ["-p"] },
+    { exe: "openssl", flags: ["-pass", "-passin", "-passout", "-k", "-K", "-kfile"] },
+    { exe: "sqlcmd", flags: ["-P"] },
+    { exe: "ldapsearch", flags: ["-w"] },
+    { exe: "smbclient", flags: ["-U", "--user"] },
+    { exe: "docker", pre: ["login"], flags: ["-p"] },
+  ];
+
+  it.each(EQUALS_FORMS)("$exe: every secret flag glued with = renders flag=[redacted]", ({ exe, pre = [], flags }) => {
+    for (const flag of flags) {
+      const value = `admin:${PW}`;
+      expect(redactArgv([exe, ...pre, `${flag}=${value}`, "target"], HOME), `${exe} ${flag}=`).toEqual([exe, ...pre, `${flag}=${R}`, "target"]);
+      // Wrapped in sudo, and with a value that itself contains `=`.
+      expect(redactArgv(["sudo", exe, ...pre, `${flag}=${PW}=x`], HOME), `sudo ${exe} ${flag}=`).toEqual(["sudo", exe, ...pre, `${flag}=${R}`]);
+      expect(displayCommand([exe, ...pre, `${flag}=${value}`], HOME)).not.toContain(PW);
+    }
+  });
+
+  it("curl: the originally reported bypasses are closed exactly", () => {
+    const pw = "S3cr3tPassword";
+    expect(redactArgv(["curl", `--user=admin:${pw}`, "https://h/"], HOME)).toEqual(["curl", `--user=${R}`, "https://h/"]);
+    expect(redactArgv(["curl", `--proxy-user=admin:${pw}`, "https://h/"], HOME)).toEqual(["curl", `--proxy-user=${R}`, "https://h/"]);
+    expect(redactArgv(["curl", `-u=admin:${pw}`, "https://h/"], HOME)).toEqual(["curl", `-u=${R}`, "https://h/"]);
+    expect(redactArgv(["ldapsearch", `-w=${pw}`], HOME)).toEqual(["ldapsearch", `-w=${R}`]);
+    expect(redactArgv(["sqlcmd", `-P=${pw}`], HOME)).toEqual(["sqlcmd", `-P=${R}`]);
+    expect(redactArgv(["smbclient", `-U=bob%${pw}`], HOME)).toEqual(["smbclient", `-U=${R}`]);
+    // An attached secret containing `=` is redacted whole, not split at the `=`.
+    expect(redactArgv(["mysql", `-p${pw}=x`], HOME)).toEqual(["mysql", `-p${R}`]);
+    // An attached secret whose *value* looks like a secret name is not mistaken for a flag.
+    expect(redactArgv(["mysql", "-pMySecretPw", "app"], HOME)).toEqual(["mysql", `-p${R}`, "app"]);
+    expect(redactArgv(["curl", "-uadmin:token123", "https://h/"], HOME)).toEqual(["curl", `-u${R}`, "https://h/"]);
+    expect(redactArgv(["mysql", `-p=${pw}`], HOME)).toEqual(["mysql", `-p=${R}`]);
+  });
+
+  it("equals forms of secret flags swallow continuation tokens in lossy mode", () => {
+    expect(redactArgv(["curl", "--user=admin:my", "quoted", "pw", "-s", "https://h/"], HOME, { lossy: true })).toEqual(["curl", `--user=${R}`, "-s", "https://h/"]);
+    expect(redactArgv(["curl", "--user=admin:my", "quoted", "pw", "-s", "https://h/"], HOME)).toEqual(["curl", `--user=${R}`, "quoted", "pw", "-s", "https://h/"]);
+  });
+
+  it("ordinary equals arguments of the same tools stay visible", () => {
+    const sha = "3b18e512dba79e4c8300dd08aeb37f8e728b8dad";
+    const uuid = "123e4567-e89b-12d3-a456-426614174000";
+    const cases: string[][] = [
+      ["curl", "--url=https://h/?q=hello&page=1", "--max-time=5", "--retry=3", "-X=POST", `--data=commit=${sha}`, `--header=X-Request-Id: ${uuid}`, "--user-agent=monitor/1.0", "--unix-socket=/tmp/s.sock"],
+      ["mysql", "--user=root", "--port=3306", "--host=db", "-u=root", "--database=app"],
+      ["mariadb", "--protocol=tcp", "--default-character-set=utf8mb4"],
+      ["redis-cli", "-n=0", "--host=cache", "-p=6379", "-h=cache"],
+      ["mongosh", "--host=db", "--port=27017", "-u=app"],
+      ["openssl", "-in=file.pem", "-out=file.der", "-inform=PEM"],
+      ["sqlcmd", "-S=db", "-U=sa", "-d=app"],
+      ["ldapsearch", "-b=dc=x", "-H=ldap://h", "-D=cn=admin"],
+      ["smbclient", "//srv/share", "-W=CORP", "-m=SMB3"],
+      ["docker", "run", "-p=8080:80", "--name=web", "img"],
+      ["docker", "login", "-u=bob", "--username=bob", "ghcr.io"],
+      ["node", "server.js", `--commit=${sha}`, `--request-id=${uuid}`, "--port=3000", "-p=3000", "--user=bob"],
+    ];
+    for (const argv of cases) expect(redactArgv(argv, HOME), argv.join(" ")).toEqual(argv);
+  });
+
+  it("displayCommand never leaks a synthetic secret through an equals-glued executable flag", () => {
+    const forms: string[][] = [
+      ["curl", "--user=admin:%s"],
+      ["curl", "--proxy-user=admin:%s"],
+      ["curl", "-u=admin:%s"],
+      ["curl", "-U=admin:%s"],
+      ["curl", "--oauth2-bearer=%s"],
+      ["redis-cli", "-a=%s"],
+      ["mysql", "-p=%s"],
+      ["mysql", "-p%s"],
+      ["mongosh", "-p=%s"],
+      ["sshpass", "-p=%s"],
+      ["openssl", "-pass=pass:%s"],
+      ["sqlcmd", "-P=%s"],
+      ["ldapsearch", "-w=%s"],
+      ["smbclient", "-U=bob%%%s"],
+      ["docker", "login", "-p=%s"],
+    ];
+    for (const secret of [...SECRETS, SYNTHETIC_BEARER_VALUE, "S3cr3tPassword"]) {
+      for (const form of forms) {
+        const argv = form.map((part) => part.replace("%s", secret));
+        const out = displayCommand(argv, HOME);
+        expect(out, argv.join(" ")).not.toContain(secret);
+        expect(out, argv.join(" ")).toContain(R);
+      }
+    }
+  });
 });
 
 describe("environment-style names", () => {
