@@ -186,6 +186,13 @@ interface DevServerRule {
 
 const PACKAGE_RUNNERS = /^(npm|npx|pnpm|pnpx|yarn|bun|bunx|deno)$/;
 const DEV_SCRIPTS = /^(dev|start|serve|preview|storybook|watch)$/;
+/**
+ * Next.js's production server overwrites its own process title (and thus
+ * /proc/pid/cmdline) with exactly `next-server` or `next-server (vX.Y.Z)`.
+ * Anchored so a script merely containing the words ("my-next-server.sh",
+ * "next-server-mock") never matches.
+ */
+const NEXT_SERVER_PROCESS_TITLE = /^next-server(?: \(v\d+(?:\.\d+){0,2}\))?$/;
 
 function baseName(path: string | undefined): string {
   return (path ?? "").split("/").pop() ?? "";
@@ -197,7 +204,14 @@ function hasBinary(argv: readonly string[], names: RegExp): boolean {
 
 const DEV_SERVER_RULES: DevServerRule[] = [
   { label: "Vite", confidence: "high", test: (argv) => hasBinary(argv, /^vite$/) },
-  { label: "Next.js", confidence: "high", test: (argv) => hasBinary(argv, /^next$/) || argv.some((a) => /next[\\/](dist[\\/])?(bin[\\/]next|server)/.test(a)) },
+  {
+    label: "Next.js",
+    confidence: "high",
+    test: (argv) =>
+      hasBinary(argv, /^next$/) ||
+      hasBinary(argv, NEXT_SERVER_PROCESS_TITLE) ||
+      argv.some((a) => /next[\\/](dist[\\/])?(bin[\\/]next|server)/.test(a)),
+  },
   { label: "Nuxt", confidence: "high", test: (argv) => hasBinary(argv, /^nuxt$/) || argv.some((a) => /\.nuxt|nuxt[\\/]bin/.test(a)) },
   { label: "Astro", confidence: "high", test: (argv) => hasBinary(argv, /^astro$/) },
   { label: "Remix", confidence: "high", test: (argv) => hasBinary(argv, /^remix$/) },

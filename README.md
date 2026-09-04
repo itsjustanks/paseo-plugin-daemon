@@ -57,9 +57,12 @@ install it as a Paseo plugin either.
 
 Monitor is built to describe your machine, not leak it:
 
-- Raw command-line arguments are hashed and used only for identity checks; the version sent to the
-  UI has secret-shaped values (tokens, passwords, API keys, auth headers, credentials embedded in
-  URLs) stripped before it ever crosses the plugin boundary.
+- Raw command-line arguments never leave the server: they're hashed for identity checks, and the
+  version sent to the UI has secret-shaped values (tokens, passwords, API keys, auth headers,
+  credentials embedded in URLs) stripped before it ever crosses the plugin boundary. The raw argv
+  hash itself never crosses that boundary either — action tokens carry a keyed HMAC proof computed
+  over the hash, not the hash, so a client holding a token still can't learn or replay the
+  underlying argv.
 - Home directory paths are shown relative to `~`, never as an absolute path that might reveal your
   username or machine layout.
 - Nothing sensitive — raw argv, environment variables, action tokens, or secrets — is written to
@@ -90,6 +93,9 @@ What this means in practice:
 
 - **No cross-user process control.** Monitor cannot stop or signal a process owned by a different
   user, even if it's technically visible to the OS (e.g. via `ps`).
+- **Descendants are re-verified individually, not inherited.** When a stop/force-stop cascades to
+  child processes, each descendant is freshly re-matched by owning user and process start identity
+  right before it's signaled — a descendant is never trusted just because its parent matched.
 - **No container or namespace escape.** Monitor only ever signals processes visible to it through
   the normal process table — it does not reach into containers or other PID namespaces.
 - **Graceful first, always.** Stop always sends a graceful termination signal first. Force-stop is
