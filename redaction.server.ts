@@ -67,7 +67,8 @@ const HTTP_HEADER = /^([A-Za-z][A-Za-z0-9-]*):\s+(\S.*)$/s;
 /**
  * Executable-aware short flags whose meaning is only secret for that tool.
  * `flags` take their value as the next token; `attached` also accept it glued
- * on (`-pSECRET`). Wrappers such as `sudo`/`env` are skipped to find the tool.
+ * on (`-pSECRET`). Both also accept `flag=value`. Wrappers such as `sudo`/`env`
+ * are skipped to find the tool.
  */
 interface ExecutableRule {
   exe: RegExp;
@@ -100,6 +101,14 @@ function baseName(path: string): string {
  * a false match only ever redacts more, never less.
  */
 const EXECUTABLE_LOOKAHEAD = 6;
+
+/** `--user=x` / `-u=x` for a flag the tool treats as secret; the flag spelling is kept. */
+function equalsFlagFor(rule: ExecutableRule, arg: string): string | null {
+  const eq = arg.indexOf("=");
+  if (eq <= 0 || !arg.startsWith("-")) return null;
+  const flag = arg.slice(0, eq);
+  return rule.flags.includes(flag) || rule.attached.includes(flag) ? flag : null;
+}
 
 function ruleFor(argv: readonly string[]): ExecutableRule | null {
   for (const arg of argv.slice(0, EXECUTABLE_LOOKAHEAD)) {
@@ -190,16 +199,27 @@ export function redactArgv(argv: readonly string[], home: string, options: Redac
       if (!isFlag) continue;
       swallowing = false;
     }
+    // Executable context runs first. It must win over the generic checks below:
+    // `curl --user=a:x` would otherwise reach redactArg, where `user` is not a
+    // secret name, and `mysql -pMySecretPw` would be mistaken for a flag *named*
+    // "secret" and echoed verbatim.
+    const equalsFlag = rule ? equalsFlagFor(rule, arg) : null;
+    if (equalsFlag !== null) {
+      out.push(`${equalsFlag}=${REDACTED}`);
+      swallowing = options.lossy === true;
+      continue;
+    }
+    // An attached value may itself contain `=` (`mysql -pS3cr3t=x`); it is still the whole secret.
+    const attached = rule?.attached.find((prefix) => arg.startsWith(prefix) && arg.length > prefix.length);
+    if (attached !== undefined) {
+      out.push(`${attached}${REDACTED}`);
+      swallowing = options.lossy === true;
+      continue;
+    }
     const bare = arg.replace(/^-+/, "");
     if (isFlag && !arg.includes("=") && (isSecretName(bare) || rule?.flags.includes(arg))) {
       out.push(arg);
       redactNext = true;
-      continue;
-    }
-    const attached = rule?.attached.find((prefix) => arg.startsWith(prefix) && arg.length > prefix.length && !arg.includes("="));
-    if (attached !== undefined) {
-      out.push(`${attached}${REDACTED}`);
-      swallowing = options.lossy === true;
       continue;
     }
     const redacted = redactArg(arg);
