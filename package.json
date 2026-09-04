@@ -1,7 +1,20 @@
 {
-  "name": "monitor",
+  "name": "paseo-plugin-monitor",
+  "description": "Machine pressure, dev servers, and process control for Paseo — see CPU/memory pressure and safely stop what's causing it.",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/itsjustanks/paseo-plugin-monitor.git"
+  },
+  "homepage": "https://github.com/itsjustanks/paseo-plugin-monitor#readme",
+  "bugs": {
+    "url": "https://github.com/itsjustanks/paseo-plugin-monitor/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
