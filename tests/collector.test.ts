@@ -131,4 +131,20 @@ describe("Collector", () => {
     expect(snap.warnings).toContain("Listening ports unavailable: test");
     expect(snap.processes[0]!.command).toBe("node app.js --api-key [redacted] --db postgres://[redacted]@db/app");
   });
+
+  it("redacts lossy (space-split) argv through the next flag boundary", async () => {
+    const { adapter, collector } = setup();
+    adapter.processes = [proc({ pid: 100, argv: ["curl", "-u", "alice:my", "secret", "pw", "-s", "https://h/"], argvLossy: true })];
+    const snap = await collector.snapshot({});
+    expect(snap.processes[0]!.command).toBe("curl -u [redacted] -s https://h/");
+    expect(JSON.stringify(snap)).not.toContain("secret pw");
+  });
+
+  it("warns when the same-user process set is capped", async () => {
+    const { adapter, collector } = setup();
+    adapter.processes = Array.from({ length: 4097 }, (_, i) => proc({ pid: 100 + i }));
+    const snap = await collector.snapshot({ limit: 1 });
+    expect(snap.totalProcesses).toBe(4096);
+    expect(snap.warnings).toEqual(["You have more than 4096 processes; only the first 4096 are tracked."]);
+  });
 });

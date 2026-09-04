@@ -11,6 +11,7 @@ import {
   type ProcessIdentity,
   type RawProcess,
   type RawSystemSample,
+  type TreeRow,
 } from "./platform.server";
 
 const execFileAsync = promisify(execFile);
@@ -20,6 +21,8 @@ export const MAX_PROCESSES = 4096;
 export const MAX_FDS_PER_PROCESS = 2048;
 export const FD_SCAN_CONCURRENCY = 8;
 export const PROC_READ_CONCURRENCY = 16;
+/** PIDs examined per batch while looking for same-user processes. */
+export const PROC_READ_BATCH = 256;
 
 // ------------------------------------------------------------------ parsers
 // All parsers are pure. They take file contents and return plain data.
@@ -195,6 +198,12 @@ async function optional<T>(promise: Promise<T>): Promise<T | null> {
   }
 }
 
+/** True when an error means "that process is gone", as opposed to "could not read". */
+function isGone(error: unknown): boolean {
+  const code = (error as { code?: unknown }).code;
+  return code === "ENOENT" || code === "ESRCH";
+}
+
 export interface LinuxAdapterOptions {
   fs?: LinuxFs;
   clockTicks?: number;
@@ -257,13 +266,15 @@ export class LinuxAdapter implements PlatformAdapter {
     };
   }
 
+  /**
+   * Every numeric entry in /proc. Deliberately uncapped: it is a list of
+   * integers, and truncating it here would hide same-user processes (and
+   * ancestors) behind whatever other users happen to run.
+   */
   private async listPids(): Promise<number[]> {
     const entries = await this.fs.readdir("/proc");
     const pids: number[] = [];
-    for (const entry of entries) {
-      if (/^\d+$/.test(entry)) pids.push(Number(entry));
-      if (pids.length >= MAX_PROCESSES) break;
-    }
+    for (const entry of entries) if (/^\d+$/.test(entry)) pids.push(Number(entry));
     return pids;
   }
 
@@ -294,17 +305,31 @@ export class LinuxAdapter implements PlatformAdapter {
     };
   }
 
+  /**
+   * Same-user processes. The whole PID list is walked in bounded batches so
+   * other users' processes never crowd ours out; only the *same-user* result
+   * is capped, and a capped result says so. Raw procfs contents are parsed
+   * per batch and dropped immediately.
+   */
   async sampleProcesses(uid: number): Promise<{ processes: RawProcess[]; warnings: string[] }> {
-    const [clockTicks, upText, pids] = await Promise.all([
-      this.ticks(),
-      optional(this.fs.readFile("/proc/uptime")),
-      this.listPids(),
-    ]);
+    const [clockTicks, upText, pids] = await Promise.all([this.ticks(), optional(this.fs.readFile("/proc/uptime")), this.listPids()]);
     const uptimeSeconds = upText ? parseUptime(upText) : uptime();
-    const rows = await mapLimit(pids, PROC_READ_CONCURRENCY, (pid) => this.readOne(pid, uid, clockTicks, uptimeSeconds));
-    const processes = rows.filter((row): row is RawProcess => row !== null);
+    const processes: RawProcess[] = [];
     const warnings: string[] = [];
-    if (pids.length >= MAX_PROCESSES) warnings.push(`Process table truncated at ${MAX_PROCESSES} entries.`);
+    let truncated = false;
+    for (let offset = 0; offset < pids.length && !truncated; offset += PROC_READ_BATCH) {
+      const batch = pids.slice(offset, offset + PROC_READ_BATCH);
+      const rows = await mapLimit(batch, PROC_READ_CONCURRENCY, (pid) => this.readOne(pid, uid, clockTicks, uptimeSeconds));
+      for (const row of rows) {
+        if (row === null) continue;
+        if (processes.length >= MAX_PROCESSES) {
+          truncated = true;
+          break;
+        }
+        processes.push(row);
+      }
+    }
+    if (truncated) warnings.push(`You have more than ${MAX_PROCESSES} processes; only the first ${MAX_PROCESSES} are tracked.`);
     return { processes, warnings };
   }
 
@@ -321,52 +346,84 @@ export class LinuxAdapter implements PlatformAdapter {
     const ports = new Map<number, number[]>();
     if (byInode.size === 0) return { ports, warnings };
     let denied = 0;
+    let fdTruncated = 0;
     await mapLimit(pids, FD_SCAN_CONCURRENCY, async (pid) => {
       const fds = await optional(this.fs.readdir(`/proc/${pid}/fd`));
       if (!fds) {
         denied += 1;
         return;
       }
+      if (fds.length > MAX_FDS_PER_PROCESS) fdTruncated += 1;
       const found = new Set<number>();
+      const matchedInodes = new Set<number>();
       for (const fd of fds.slice(0, MAX_FDS_PER_PROCESS)) {
+        // Every listening socket has been attributed to this process already;
+        // the remaining descriptors cannot add a port.
+        if (matchedInodes.size === byInode.size) break;
         const link = await optional(this.fs.readlink(`/proc/${pid}/fd/${fd}`));
         if (!link) continue;
         const inode = parseSocketInode(link);
-        if (inode === null) continue;
+        if (inode === null || matchedInodes.has(inode)) continue;
         const port = byInode.get(inode);
-        if (port !== undefined) found.add(port);
+        if (port === undefined) continue;
+        matchedInodes.add(inode);
+        found.add(port);
       }
       if (found.size > 0) ports.set(pid, [...found].sort((a, b) => a - b));
     });
     if (denied > 0 && denied === pids.length) warnings.push("Listening ports unavailable: file descriptor tables are not readable.");
+    if (fdTruncated > 0) {
+      warnings.push(
+        `${fdTruncated} process(es) have more than ${MAX_FDS_PER_PROCESS} open files; only the first ${MAX_FDS_PER_PROCESS} were checked, so some listening ports may be missing.`,
+      );
+    }
     return { ports, warnings };
   }
 
+  /**
+   * Null means the process is gone (ENOENT/ESRCH). Any other failure
+   * rejects so the guard can refuse rather than treat "unreadable" as
+   * "exited".
+   */
   async readIdentity(pid: number): Promise<ProcessIdentity | null> {
-    const status = await optional(this.fs.readFile(`/proc/${pid}/status`));
-    const stat = await optional(this.fs.readFile(`/proc/${pid}/stat`));
-    if (!status || !stat) return null;
+    if (!Number.isInteger(pid) || pid <= 0) return null;
+    let status: string;
+    let stat: string;
+    try {
+      [status, stat] = await Promise.all([this.fs.readFile(`/proc/${pid}/status`), this.fs.readFile(`/proc/${pid}/stat`)]);
+    } catch (error) {
+      if (isGone(error)) return null;
+      throw new Error("process identity unreadable");
+    }
     const parsedStatus = parseProcStatus(status);
     const fields = parseProcPidStat(stat);
-    const cmdline = await optional(this.fs.readFileBuffer(`/proc/${pid}/cmdline`));
+    let cmdline: Buffer;
+    try {
+      cmdline = await this.fs.readFileBuffer(`/proc/${pid}/cmdline`);
+    } catch (error) {
+      if (isGone(error)) return null;
+      throw new Error("process identity unreadable");
+    }
     return {
       pid: fields.pid,
       ppid: fields.ppid,
       uid: parsedStatus.uid,
       startId: String(fields.startTicks),
-      argvHash: hashArgv(cmdline ? parseCmdline(cmdline) : []),
+      argvHash: hashArgv(parseCmdline(cmdline)),
       state: mapState(fields.state),
     };
   }
 
-  async readTree(): Promise<Array<{ pid: number; ppid: number; uid: number }>> {
+  /** Whole table, every user, uncapped: ancestor protection depends on it. */
+  async readTree(): Promise<TreeRow[]> {
     const pids = await this.listPids();
     const rows = await mapLimit(pids, PROC_READ_CONCURRENCY, async (pid) => {
       const [status, stat] = await Promise.all([optional(this.fs.readFile(`/proc/${pid}/status`)), optional(this.fs.readFile(`/proc/${pid}/stat`))]);
       if (!status || !stat) return null;
-      return { pid, ppid: parseProcPidStat(stat).ppid, uid: parseProcStatus(status).uid };
+      const fields = parseProcPidStat(stat);
+      return { pid, ppid: fields.ppid, uid: parseProcStatus(status).uid, startId: String(fields.startTicks) };
     });
-    return rows.filter((row): row is { pid: number; ppid: number; uid: number } => row !== null);
+    return rows.filter((row): row is TreeRow => row !== null);
   }
 }
 

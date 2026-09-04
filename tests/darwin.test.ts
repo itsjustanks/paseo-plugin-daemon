@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   DarwinAdapter,
+  PS_FORMAT,
+  PS_TREE_FORMAT,
   availableBytesFromVmStat,
   parseLsofCwd,
   parseLsofListen,
   parsePressureLevel,
   parsePsOutput,
   parsePsTime,
+  parsePsTree,
   parseSwapUsage,
   parseVmStat,
   type Exec,
@@ -30,6 +33,18 @@ describe("darwin parsers", () => {
     expect(vite.command).toBe("node /Users/alice/app/node_modules/.bin/vite --port 5173");
     expect(vite.ageSeconds).toBe(300);
     expect(rows.find((r) => r.pid === 778)!.state).toBe("Z");
+  });
+
+  it("parses the tree format with lstart identity that matches readIdentity", () => {
+    const rows = parsePsTree(fx.PS_TREE_OUTPUT);
+    expect(rows).toEqual([
+      { pid: 1, ppid: 0, uid: 0, startId: "Mon Sep 1 08:00:00 2026" },
+      { pid: 501, ppid: 1, uid: 501, startId: "Thu Sep 4 09:00:00 2026" },
+      { pid: 777, ppid: 501, uid: 501, startId: "Thu Sep 4 09:55:00 2026" },
+      { pid: 778, ppid: 777, uid: 501, startId: "Thu Sep 4 09:59:59 2026" },
+    ]);
+    expect(rows.find((r) => r.pid === 777)!.startId).toBe(parsePsOutput(fx.PS_OUTPUT).find((r) => r.pid === 777)!.lstart);
+    expect(parsePsTree("garbage line\n1 2\n")).toEqual([]);
   });
 
   it("parses vm_stat and computes conservative available memory", () => {
@@ -60,8 +75,8 @@ describe("DarwinAdapter", () => {
   const calls: string[][] = [];
   const exec: Exec = async (file, args) => {
     calls.push([file, ...args]);
-    if (file === "ps" && args[0] === "-axo" && args[1]?.startsWith("pid=,ppid=,uid=,state")) return fx.PS_OUTPUT;
-    if (file === "ps" && args[0] === "-axo") return "1 0 0\n501 1 501\n777 501 501\n778 777 501\n";
+    if (file === "ps" && args[0] === "-axo" && args[1] === PS_FORMAT) return fx.PS_OUTPUT;
+    if (file === "ps" && args[0] === "-axo" && args[1] === PS_TREE_FORMAT) return fx.PS_TREE_OUTPUT;
     if (file === "ps" && args[0] === "-o") return fx.PS_OUTPUT.split("\n").filter((l) => l.trim().startsWith(`${args[3]} `)).join("\n");
     if (file === "vm_stat") return fx.VM_STAT;
     if (file === "sysctl" && args[1] === "vm.swapusage") return fx.SWAPUSAGE;
@@ -89,6 +104,7 @@ describe("DarwinAdapter", () => {
     const vite = processes.find((p) => p.pid === 777)!;
     expect(vite.cwd).toBe("/Users/alice/app");
     expect(vite.argv[0]).toBe("node");
+    expect(vite.argvLossy).toBe(true);
     expect(vite.state).toBe("running");
     expect(processes.find((p) => p.pid === 501)!.cwd).toBeNull();
     expect(processes.find((p) => p.pid === 778)!.state).toBe("zombie");
@@ -121,5 +137,49 @@ describe("DarwinAdapter", () => {
     const identity = await adapter.readIdentity(777);
     expect(identity).toMatchObject({ pid: 777, uid: 501, startId: "Thu Sep 4 09:55:00 2026", state: "running" });
     expect(await adapter.readIdentity(-1)).toBeNull();
+  });
+
+  it("reads the whole tree with start identity", async () => {
+    const tree = await adapter.readTree();
+    expect(tree).toHaveLength(4);
+    expect(tree.find((r) => r.pid === 778)).toEqual({ pid: 778, ppid: 777, uid: 501, startId: "Thu Sep 4 09:59:59 2026" });
+  });
+
+  it("degrades to an empty process list with a safe warning when ps fails", async () => {
+    const failure = Object.assign(new Error("Command failed: ps /Users/alice/private"), { code: null, killed: true, signal: "SIGTERM", stderr: "ps: /Users/alice/private" });
+    const broken: Exec = async (file, args) => {
+      if (file === "ps" && args[0] === "-axo" && args[1] === PS_FORMAT) throw failure;
+      return exec(file, args);
+    };
+    const degraded = new DarwinAdapter({ exec: broken, now: () => now });
+    const result = await degraded.sampleProcesses(501);
+    expect(result.processes).toEqual([]);
+    expect(result.warnings).toEqual(["Process list unavailable: `ps` failed or timed out."]);
+    expect(JSON.stringify(result)).not.toContain("/Users/alice");
+    // The system sample is unaffected.
+    expect((await degraded.sampleSystem()).memoryTotalBytes).toBeGreaterThan(0);
+  });
+
+  it("readIdentity and readTree distinguish a vanished process from a broken read", async () => {
+    const gone = Object.assign(new Error("Command failed: ps"), { code: 1, stderr: "" });
+    const timeout = Object.assign(new Error("timeout"), { code: null, killed: true, signal: "SIGTERM", stderr: "" });
+    const loud = Object.assign(new Error("Command failed: ps"), { code: 1, stderr: "ps: something went wrong" });
+    const failing = (error: Error): Exec => async (file, args) => {
+      if (file === "ps") throw error;
+      return exec(file, args);
+    };
+    expect(await new DarwinAdapter({ exec: failing(gone) }).readIdentity(777)).toBeNull();
+    await expect(new DarwinAdapter({ exec: failing(timeout) }).readIdentity(777)).rejects.toThrow("process identity unreadable");
+    await expect(new DarwinAdapter({ exec: failing(loud) }).readIdentity(777)).rejects.toThrow("process identity unreadable");
+    await expect(new DarwinAdapter({ exec: failing(timeout) }).readTree()).rejects.toThrow("process table unreadable");
+  });
+
+  it("never interpolates shell strings into ps/lsof arguments", async () => {
+    calls.length = 0;
+    await adapter.readIdentity(777);
+    await adapter.readTree();
+    for (const call of calls) expect(call.join(" ")).not.toMatch(/[|;&$`]/);
+    expect(calls).toContainEqual(["ps", "-o", PS_FORMAT, "-p", "777"]);
+    expect(calls).toContainEqual(["ps", "-axo", PS_TREE_FORMAT]);
   });
 });

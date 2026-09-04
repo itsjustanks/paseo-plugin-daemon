@@ -34,6 +34,12 @@ export interface RawProcess {
   comm: string;
   /** Raw argv. Never leaves the daemon unredacted. */
   argv: string[];
+  /**
+   * True when argv was recovered by splitting a space-joined command line
+   * (macOS `ps`), so a quoted secret may span several tokens. Redaction
+   * treats such argv more aggressively.
+   */
+  argvLossy?: boolean;
   state: ProcessState;
   /** Cumulative CPU time in seconds (user + system). */
   cpuSeconds: number;
@@ -54,6 +60,15 @@ export interface ProcessIdentity {
   state: ProcessState;
 }
 
+/** One row of the whole process table, carrying enough identity to re-verify a descendant. */
+export interface TreeRow {
+  pid: number;
+  ppid: number;
+  uid: number;
+  /** Same start identity as `RawProcess.startId` / `ProcessIdentity.startId`. */
+  startId: string;
+}
+
 export interface PortScanResult {
   /** pid → sorted, de-duplicated listening TCP ports. */
   ports: Map<number, number[]>;
@@ -67,10 +82,18 @@ export interface PlatformAdapter {
   sampleProcesses(uid: number): Promise<{ processes: RawProcess[]; warnings: string[] }>;
   /** Listening TCP ports for the given same-user PIDs. */
   listeningPorts(pids: readonly number[]): Promise<PortScanResult>;
-  /** Fresh identity for one PID, or null when it no longer exists. */
+  /**
+   * Fresh identity for one PID. Resolves null only when the process
+   * demonstrably no longer exists; rejects when the read itself failed, so
+   * callers can fail closed instead of mistaking an error for an exit.
+   */
   readIdentity(pid: number): Promise<ProcessIdentity | null>;
-  /** Fresh (pid, ppid, uid) triples for the whole table, for descendant resolution. */
-  readTree(): Promise<Array<{ pid: number; ppid: number; uid: number }>>;
+  /**
+   * Fresh rows for the whole table (every user), for ancestor protection and
+   * descendant resolution. Never truncated: a missing ancestor would silently
+   * lose its protection. Rejects when the table cannot be read.
+   */
+  readTree(): Promise<TreeRow[]>;
 }
 
 export interface Clock {

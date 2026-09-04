@@ -5,6 +5,13 @@ export const PS_OUTPUT = `    1     0     0 Ss   12345   1:23.45  10-02:03:04 Mo
   778   777   501 Z        0   0:00.00        00:01 Thu Sep  4 09:59:59 2026 (node)
 `;
 
+/** `ps -axo pid=,ppid=,uid=,lstart=` */
+export const PS_TREE_OUTPUT = `    1     0     0 Mon Sep  1 08:00:00 2026
+  501     1   501 Thu Sep  4 09:00:00 2026
+  777   501   501 Thu Sep  4 09:55:00 2026
+  778   777   501 Thu Sep  4 09:59:59 2026
+`;
+
 export const VM_STAT = `Mach Virtual Memory Statistics: (page size of 16384 bytes)
 Pages free:                               12345.
 Pages active:                            200000.

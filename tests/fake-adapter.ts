@@ -1,4 +1,4 @@
-import type { PlatformAdapter, PortScanResult, ProcessIdentity, RawProcess, RawSystemSample } from "../platform.server";
+import type { PlatformAdapter, PortScanResult, ProcessIdentity, RawProcess, RawSystemSample, TreeRow } from "../platform.server";
 import { hashArgv } from "../redaction.server";
 
 export const GB = 1024 ** 3;
@@ -52,6 +52,11 @@ export class FakeAdapter implements PlatformAdapter {
   portWarnings: string[] = [];
   portScans = 0;
   identityReads: number[] = [];
+  /** Test seams: make identity or tree reads fail like a broken procfs/ps. */
+  identityReadError: Error | null = null;
+  treeReadError: Error | null = null;
+  /** Optional hook run before each identity read, to mutate state mid-action. */
+  beforeIdentityRead: ((pid: number) => void) | null = null;
 
   async sampleSystem(): Promise<RawSystemSample> {
     return { ...this.sample };
@@ -73,13 +78,16 @@ export class FakeAdapter implements PlatformAdapter {
 
   async readIdentity(pid: number): Promise<ProcessIdentity | null> {
     this.identityReads.push(pid);
+    if (this.identityReadError) throw this.identityReadError;
+    this.beforeIdentityRead?.(pid);
     const found = this.processes.find((p) => p.pid === pid);
     if (!found) return null;
     return { pid: found.pid, ppid: found.ppid, uid: found.uid, startId: found.startId, argvHash: hashArgv(found.argv), state: found.state };
   }
 
-  async readTree(): Promise<Array<{ pid: number; ppid: number; uid: number }>> {
-    return this.processes.map((p) => ({ pid: p.pid, ppid: p.ppid, uid: p.uid }));
+  async readTree(): Promise<TreeRow[]> {
+    if (this.treeReadError) throw this.treeReadError;
+    return this.processes.map((p) => ({ pid: p.pid, ppid: p.ppid, uid: p.uid, startId: p.startId }));
   }
 }
 
