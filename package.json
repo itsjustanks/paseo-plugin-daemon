@@ -2,6 +2,7 @@
   "name": "paseo-plugin-monitor",
   "description": "Machine pressure, dev servers, and process control for Paseo — see CPU/memory pressure and safely stop what's causing it.",
   "private": true,
+  "type": "module",
   "version": "0.1.0",
   "license": "MIT",
   "repository": {
