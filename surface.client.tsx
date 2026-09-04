@@ -200,7 +200,9 @@ function MonitorBody() {
       return rpc.stop({ token: process.actionToken });
     },
     onSuccess: (result, process) => {
-      if (result.ok) {
+      if (result.status === "already-exited") {
+        toast.show(`${process.name} (PID ${process.pid}) had already exited`, { variant: "success" });
+      } else if (result.ok) {
         mark(process);
         toast.show(`Asked ${process.name} (PID ${process.pid}) to stop`, { variant: "info" });
       } else {
@@ -218,9 +220,11 @@ function MonitorBody() {
     },
     onSuccess: (result, process) => {
       setForceTarget(null);
-      if (result.ok) {
+      if (result.ok || result.status === "already-exited") {
         clear(processKey(process));
-        toast.show(`Force stopped ${process.name} (PID ${process.pid})`, { variant: "success" });
+        toast.show(result.status === "already-exited" ? `${process.name} (PID ${process.pid}) had already exited` : `Force stopped ${process.name} (PID ${process.pid})`, { variant: "success" });
+      } else if (result.status === "needs-graceful-first") {
+        toast.show(result.message || `Try a graceful stop of ${process.name} first`, { variant: "warning" });
       } else {
         toast.error(result.message || `Could not force stop ${process.name}`);
       }
