@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { Collector, HISTORY_MAX_POINTS, type ActionPolicy } from "../collector.server";
-import { SnapshotSchema } from "../contracts.shared";
+import { Collector, HISTORY_MAX_POINTS, type ActionPolicy } from "../server/collector";
+import { SnapshotSchema } from "../shared/contracts";
 import { FakeAdapter, FakeClock, GB, MB, proc, system } from "./fake-adapter";
 import { SYNTHETIC_ANTHROPIC_KEY } from "./synthetic-secrets";
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DISPLAY_COMMAND_MAX, displayCommand, displayName, hashArgv, homeRelative, isSecretName, redactArgv } from "../redaction.server";
+import { DISPLAY_COMMAND_MAX, displayCommand, displayName, hashArgv, homeRelative, isSecretName, redactArgv } from "../server/redaction";
 import {
   SYNTHETIC_ANTHROPIC_KEY,
   SYNTHETIC_AWS_ACCESS_KEY,

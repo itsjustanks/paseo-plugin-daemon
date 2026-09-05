@@ -1,4 +1,4 @@
-import type { PressureState, ProcessImpact, ServiceConfidence, ServiceKind } from "./contracts.shared";
+import type { PressureState, ProcessImpact, ServiceConfidence, ServiceKind } from "../shared/contracts";
 
 /**
  * Pure classification rules. No magic composite score: each label comes with

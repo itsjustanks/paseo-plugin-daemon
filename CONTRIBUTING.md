@@ -1,4 +1,4 @@
-# Contributing to Monitor
+# Contributing to Daemon Link
 
 Thanks for looking at Monitor's code. This is a **trusted, unsandboxed** Paseo plugin that reads
 process information and can send stop/kill signals — so the bar for changes that touch process
@@ -7,8 +7,8 @@ control or data collection is higher than a typical UI PR.
 ## Setup
 
 ```sh
-git clone https://github.com/itsjustanks/paseo-plugin-monitor.git
-cd paseo-plugin-monitor
+git clone https://github.com/itsjustanks/paseo-plugin-daemon.git
+cd paseo-plugin-daemon
 npm install
 npm run typecheck
 npm test
@@ -48,7 +48,7 @@ one of these. A PR that weakens one of these will not be merged, no matter how i
 
 - Keep collection code free of shell string interpolation — use Node built-ins, direct procfs
   reads, or fixed-argv `execFile` calls only. No `exec` with a composed shell string.
-- If you touch `safety.server.ts`, `handlers.server.ts`, `redaction.server.ts`, or the platform
+- If you touch `server/safety.ts`, `server/handlers.ts`, `server/redaction.ts`, or the platform
   collectors, add or update tests that exercise the specific invariant you touched
   (tampered/expired tokens, reused PIDs, uid mismatches, protected ancestors, force-without-graceful
   denial, etc.) — not just the happy path.
@@ -61,6 +61,14 @@ one of these. A PR that weakens one of these will not be merged, no matter how i
   path — automated tests alone aren't enough sign-off for that code.
 
 ## Reporting a security issue
+
+Connection work must include tests for authentication, revocation, bounded buffering, port conflicts,
+and shutdown. Tests must use loopback fixtures and synthetic credentials. Do not open real developer
+services through a public relay or tunnel as part of the default test suite. Keep Node imports in
+`server/`, UI imports in `client/`, and contracts in `shared/`. See `types/README.md` for the v0.8
+preview declaration boundary and its validation limits. Run `npm run test:compatibility` for both
+entry formats. The small `index.ts` adapter is intentional: only 0.7 loads it. Keep its registrations
+aligned with the runtime entries, and never import it from a 0.8 runtime module.
 
 Please don't open a public issue for a security vulnerability. See [SECURITY.md](SECURITY.md) for
 how to report one privately.

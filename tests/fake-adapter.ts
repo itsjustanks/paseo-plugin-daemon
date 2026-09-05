@@ -1,5 +1,5 @@
-import type { PlatformAdapter, PortScanResult, ProcessIdentity, RawProcess, RawSystemSample, TreeRow } from "../platform.server";
-import { hashArgv } from "../redaction.server";
+import type { PlatformAdapter, PortScanResult, ProcessIdentity, RawProcess, RawSystemSample, TreeRow } from "../server/platform";
+import { hashArgv } from "../server/redaction";
 
 export const GB = 1024 ** 3;
 export const MB = 1024 ** 2;

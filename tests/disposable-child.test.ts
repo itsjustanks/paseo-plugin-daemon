@@ -1,8 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
-import { createAdapter } from "../adapter.server";
-import { Collector } from "../collector.server";
-import { ProcessGuard } from "../safety.server";
+import { createAdapter } from "../server/adapter";
+import { Collector } from "../server/collector";
+import { ProcessGuard } from "../server/safety";
 
 /**
  * Real-process test. It spawns *its own* child with a unique marker, only

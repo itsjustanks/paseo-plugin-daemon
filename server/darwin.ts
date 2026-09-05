@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { cpus, loadavg, totalmem, uptime } from "node:os";
 import { promisify } from "node:util";
-import { hashArgv } from "./redaction.server";
+import { hashArgv } from "./redaction";
 import {
   mapLimit,
   mapState,
@@ -11,7 +11,7 @@ import {
   type RawProcess,
   type RawSystemSample,
   type TreeRow,
-} from "./platform.server";
+} from "./platform";
 
 const execFileAsync = promisify(execFile);
 

@@ -28,6 +28,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Check both Paseo entry formats
+        run: npm run test:compatibility
+
       - name: Test with coverage thresholds
         run: npm run test:coverage
 

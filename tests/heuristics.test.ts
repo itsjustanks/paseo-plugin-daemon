@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classifyCpuPressure, classifyMemoryPressure, classifyProcessImpact, detectService, formatBytes } from "../heuristics.server";
+import { classifyCpuPressure, classifyMemoryPressure, classifyProcessImpact, detectService, formatBytes } from "../server/heuristics";
 
 describe("system pressure", () => {
   it("is normal on an idle box", () => {

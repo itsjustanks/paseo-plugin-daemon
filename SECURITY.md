@@ -1,11 +1,37 @@
 # Security Policy
 
+## Daemon Link connections
+
+Pairing codes are credentials. The authenticated Paseo RPC returns a code only after the user
+selects Create pairing code. The receiving daemon stores the credential with mode 0600; the
+serving daemon stores its digest. Private E2EE keys also stay in the mode-0600 peer store.
+Pairings authorize discovery and TCP access to the serving OS user's unprotected services, not
+Paseo agent or process-management actions. Revoke access closes existing relay sessions.
+
+Each connection uses a fresh Paseo encrypted channel. Service identity and ownership are checked
+before connecting and checked again while a connection is alive. Loopback port ownership checks
+are best effort: an OS process can change the listener between a check and a TCP connect.
+This is not an isolation boundary between hostile processes under one OS account.
+
+The optional Cloudflare gate exposes only its authentication bootstrap without a session. Its
+bearer credential is in a URL fragment, then exchanged for a Secure, HttpOnly cookie. The gate
+rejects foreign Host/Origin values, strips its own cookie before proxying, and disconnects both
+HTTP and WebSocket sockets at expiry or stop. Cloudflare terminates TLS for this fallback and
+can see its application traffic; use private E2EE forwarding when that distinction matters.
+
+Opening a web link is an explicit fallback action. Pairings and open URLs must never appear in
+logs, screenshots committed to Git, generic status RPCs, or process command lines. The pairing
+RPC and explicit Open RPC intentionally return credentials to the authenticated plugin client.
+
+Optional helper installation verifies the pinned official release checksum and installs only
+within the current user's Daemon Link state directory. It never uses sudo or starts a system service.
+
 ## Reporting a vulnerability
 
 Please **do not** open a public GitHub issue for a security vulnerability.
 
 Report it privately through
-[GitHub Security Advisories](https://github.com/itsjustanks/paseo-plugin-monitor/security/advisories/new)
+[GitHub Security Advisories](https://github.com/itsjustanks/paseo-plugin-daemon/security/advisories/new)
 for this repository. Include:
 
 - What the issue is and why it matters (what can an attacker do, and under what conditions).

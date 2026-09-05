@@ -13,7 +13,7 @@ import {
   parseSwapUsage,
   parseVmStat,
   type Exec,
-} from "../darwin.server";
+} from "../server/darwin";
 import * as fx from "./fixtures/darwin";
 
 describe("darwin parsers", () => {

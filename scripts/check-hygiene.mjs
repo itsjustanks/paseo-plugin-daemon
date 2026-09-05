@@ -4,7 +4,7 @@
  * dependencies beyond git.
  *
  *  1. No credential-shaped literals in tracked files. The only allowed home
- *     for such shapes is `redaction.server.ts`, which intentionally contains
+ *     for such shapes is `server/redaction.ts`, which intentionally contains
  *     the regex *sources* that detect them. Test fixtures must assemble
  *     synthetic secrets at runtime (see `tests/synthetic-secrets.ts`).
  *  2. No trailing whitespace and no CRLF line endings in tracked text files.
@@ -12,13 +12,13 @@
  *     links are exempt).
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { extname } from "node:path";
 
 const MARKDOWN_MAX_WIDTH = 120;
 
 /** Files whose whole purpose is to name secret shapes. */
-const SECRET_SHAPE_ALLOWLIST = new Set(["redaction.server.ts", "scripts/check-hygiene.mjs"]);
+const SECRET_SHAPE_ALLOWLIST = new Set(["server/redaction.ts", "scripts/check-hygiene.mjs"]);
 
 /** Binary-ish or generated files we do not lint for whitespace. */
 const WHITESPACE_SKIP = new Set(["package-lock.json"]);
@@ -41,7 +41,7 @@ const SECRET_SHAPES = [
 ];
 
 function trackedFiles() {
-  const out = execFileSync("git", ["ls-files", "-z"], { encoding: "utf8" });
+  const out = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard", "-z"], { encoding: "utf8" });
   return out.split("\0").filter(Boolean);
 }
 
@@ -85,7 +85,7 @@ function checkMarkdownWidth(file, text, problems) {
 const problems = [];
 let scanned = 0;
 for (const file of trackedFiles()) {
-  if (!isTextFile(file)) continue;
+  if (!isTextFile(file) || !existsSync(file)) continue;
   const text = readFileSync(file, "utf8");
   scanned += 1;
   checkSecretShapes(file, text, problems);

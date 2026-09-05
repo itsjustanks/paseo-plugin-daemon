@@ -1,4 +1,4 @@
-import type { ProcessState } from "./contracts.shared";
+import type { ProcessState } from "../shared/contracts";
 
 /**
  * The adapter boundary. Adapters read raw operating-system facts and nothing

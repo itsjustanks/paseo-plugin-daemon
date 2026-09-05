@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { Snapshot } from "./rpc.client";
+import type { Snapshot } from "./rpc";
 
 /**
  * Bounded ring buffers for the two sparklines.

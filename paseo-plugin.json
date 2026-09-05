@@ -1,3 +1,1 @@
-{
-  "id": "monitor"
-}
+{ "id": "daemon-link", "build": [["npm", "ci", "--ignore-scripts"]] }

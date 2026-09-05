@@ -1,8 +1,8 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import type { ActionResult } from "./contracts.shared";
-import type { Clock, PlatformAdapter, ProcessIdentity, RawProcess, TreeRow } from "./platform.server";
-import { systemClock } from "./platform.server";
-import { hashArgv } from "./redaction.server";
+import type { ActionResult } from "../shared/contracts";
+import type { Clock, PlatformAdapter, ProcessIdentity, RawProcess, TreeRow } from "./platform";
+import { systemClock } from "./platform";
+import { hashArgv } from "./redaction";
 
 /**
  * Everything that can signal a process lives here and fails closed.

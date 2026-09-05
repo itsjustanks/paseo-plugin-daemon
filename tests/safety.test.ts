@@ -1,7 +1,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { ProcessGuard, descendants, identityOf, protectedSet } from "../safety.server";
-import { hashArgv } from "../redaction.server";
+import { ProcessGuard, descendants, identityOf, protectedSet } from "../server/safety";
+import { hashArgv } from "../server/redaction";
 import { FakeAdapter, FakeClock, proc } from "./fake-adapter";
 
 const SELF = 500;

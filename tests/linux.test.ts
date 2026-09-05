@@ -14,7 +14,7 @@ import {
   parseSocketInode,
   parseUptime,
   type LinuxFs,
-} from "../linux.server";
+} from "../server/linux";
 import * as fx from "./fixtures/linux";
 
 describe("linux parsers", () => {

@@ -1,10 +1,10 @@
 import { homedir } from "node:os";
-import { createAdapter } from "./adapter.server";
-import type { ActionResult, Snapshot, SnapshotInput } from "./contracts.shared";
-import { Collector, unsupportedSnapshot } from "./collector.server";
-import type { Clock, PlatformAdapter } from "./platform.server";
-import { systemClock } from "./platform.server";
-import { ProcessGuard } from "./safety.server";
+import { createAdapter } from "./adapter";
+import type { ActionResult, Snapshot, SnapshotInput } from "../shared/contracts";
+import { Collector, unsupportedSnapshot } from "./collector";
+import type { Clock, PlatformAdapter } from "./platform";
+import { systemClock } from "./platform";
+import { ProcessGuard } from "./safety";
 
 /**
  * RPC entry points. Handlers are the only callers of the guard, and they
@@ -73,8 +73,7 @@ export function createMonitorHandlers(options: MonitorRuntimeOptions = {}): Moni
   };
 }
 
-// These direct handler exports keep index.ts safe for Paseo's split compiler:
-// the client target removes both this server import and each plugin.handle call.
+// Runtime-scoped handler exports registered by index.server.ts.
 const monitorHandlers = createMonitorHandlers();
 export const handleMonitorSnapshot = monitorHandlers.snapshot;
 export const handleMonitorStop = monitorHandlers.stop;

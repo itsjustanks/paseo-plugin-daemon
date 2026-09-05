@@ -3,8 +3,8 @@ import { Icon, Modal, useToast } from "@getpaseo/plugin/react-native";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { HISTORY_LENGTH, POLL_INTERVAL_MS, series, useAge, useDebounced, useHistory } from "./history.client";
-import { PROCESS_LIMIT, SORTS, processKey, useMonitorRpc, type Impact, type PressureState, type Process, type Snapshot, type Sort } from "./rpc.client";
+import { HISTORY_LENGTH, POLL_INTERVAL_MS, series, useAge, useDebounced, useHistory } from "./history";
+import { PROCESS_LIMIT, SORTS, processKey, useMonitorRpc, type Impact, type PressureState, type Process, type Snapshot, type Sort } from "./rpc";
 import {
   Button,
   Card,
@@ -29,7 +29,7 @@ import {
   useTokens,
   useUi,
   type Tone,
-} from "./ui.client";
+} from "./ui";
 
 // ------------------------------------------------------------------ config
 

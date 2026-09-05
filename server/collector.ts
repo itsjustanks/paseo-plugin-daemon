@@ -1,9 +1,9 @@
-import type { ProcessView, Snapshot, SnapshotInput } from "./contracts.shared";
-import { SnapshotInputSchema } from "./contracts.shared";
-import { classifyCpuPressure, classifyMemoryPressure, classifyProcessImpact, detectService } from "./heuristics.server";
-import type { Clock, PlatformAdapter, RawProcess, RawSystemSample } from "./platform.server";
-import { systemClock } from "./platform.server";
-import { displayCommand, displayName, hashArgv, homeRelative } from "./redaction.server";
+import type { ProcessView, Snapshot, SnapshotInput } from "../shared/contracts";
+import { SnapshotInputSchema } from "../shared/contracts";
+import { classifyCpuPressure, classifyMemoryPressure, classifyProcessImpact, detectService } from "./heuristics";
+import type { Clock, PlatformAdapter, RawProcess, RawSystemSample } from "./platform";
+import { systemClock } from "./platform";
+import { displayCommand, displayName, hashArgv, homeRelative } from "./redaction";
 
 /**
  * Turns raw adapter samples into one synchronized snapshot. Keeps just enough

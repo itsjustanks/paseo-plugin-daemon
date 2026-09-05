@@ -19,7 +19,7 @@ import {
   type ProcessSort,
   type ProcessView,
   type Snapshot as WireSnapshot,
-} from "./contracts.shared";
+} from "../shared/contracts";
 
 export type { ActionResult, PressureState };
 export type Impact = ProcessImpact;

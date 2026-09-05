@@ -1,38 +1,51 @@
 {
-  "name": "paseo-plugin-monitor",
-  "description": "Machine pressure, dev servers, and process control for Paseo — see CPU/memory pressure and safely stop what's causing it.",
+  "name": "paseo-plugin-daemon",
+  "description": "Daemon Link for Paseo: encrypted daemon-to-daemon localhost forwarding, monitoring, and optional tunnel fallbacks.",
   "private": true,
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/itsjustanks/paseo-plugin-monitor.git"
+    "url": "git+https://github.com/itsjustanks/paseo-plugin-daemon.git"
   },
-  "homepage": "https://github.com/itsjustanks/paseo-plugin-monitor#readme",
+  "homepage": "https://github.com/itsjustanks/paseo-plugin-daemon#readme",
   "bugs": {
-    "url": "https://github.com/itsjustanks/paseo-plugin-monitor/issues"
+    "url": "https://github.com/itsjustanks/paseo-plugin-daemon/issues"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.19.4"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
-    "check:hygiene": "node scripts/check-hygiene.mjs"
+    "check:hygiene": "node scripts/check-hygiene.mjs",
+    "preview:ui": "vite --config tests/ui/vite.config.mts",
+    "test:compatibility": "node scripts/verify-compatibility.mjs"
   },
   "devDependencies": {
+    "@babel/parser": "7.29.8",
     "@getpaseo/plugin": "0.7.2",
     "@tanstack/react-query": "^5.90.11",
     "@types/node": "^20.19.43",
     "@types/react": "~19.2.0",
+    "@types/react-dom": "19.1.11",
+    "@types/ws": "8.18.1",
     "@vitest/coverage-v8": "4.1.11",
+    "esbuild": "0.28.2",
     "react": "19.1.0",
+    "react-dom": "19.1.0",
     "react-native": "0.81.5",
+    "react-native-web": "0.21.2",
     "typescript": "^5.9.3",
+    "vite": "8.2.2",
     "vitest": "4.1.11",
     "zod": "^4.4.3"
+  },
+  "dependencies": {
+    "@getpaseo/relay": "0.7.2",
+    "ws": "8.21.3"
   }
 }

@@ -1,6 +1,6 @@
-import { DarwinAdapter } from "./darwin.server";
-import { LinuxAdapter } from "./linux.server";
-import type { PlatformAdapter } from "./platform.server";
+import { DarwinAdapter } from "./darwin";
+import { LinuxAdapter } from "./linux";
+import type { PlatformAdapter } from "./platform";
 
 export type SupportedPlatform = "linux" | "darwin";
 
