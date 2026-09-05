@@ -37,6 +37,7 @@ export interface Classification {
 }
 
 export interface Process {
+  project?: ProcessView["project"];
   pid: number;
   ppid: number;
   name: string;
@@ -57,6 +58,8 @@ export interface Process {
 }
 
 export interface Snapshot {
+  scope?: WireSnapshot["scope"];
+  hiddenProcesses?: number;
   /** ISO timestamp; also the history/ring-buffer key. */
   timestamp: string;
   sampling: boolean;
@@ -87,7 +90,7 @@ export const SORTS: ReadonlyArray<{ id: Sort; label: string }> = [
 ];
 
 /** Processes page size. The server bounds this too; the client just asks for one screenful. */
-export const PROCESS_LIMIT = SNAPSHOT_LIMIT_DEFAULT;
+export const PROCESS_LIMIT = 15;
 
 function toProcess(process: ProcessView): Process {
   const service = process.service;
@@ -95,6 +98,7 @@ function toProcess(process: ProcessView): Process {
     ? { kind: service.kind === "dev-server" ? "dev-server" : "listening", label: service.label, reasons: service.reasons }
     : { kind: "process", label: "Process", reasons: [] };
   return {
+    project: process.project,
     pid: process.pid,
     ppid: process.ppid,
     name: process.name,
@@ -117,6 +121,8 @@ function toProcess(process: ProcessView): Process {
 
 export function toSnapshotView(wire: WireSnapshot): Snapshot {
   return {
+    scope: wire.scope,
+    hiddenProcesses: wire.hiddenProcesses,
     timestamp: new Date(wire.timestamp).toISOString(),
     sampling: wire.sampling === "sampling",
     platform: wire.platform,
@@ -149,7 +155,7 @@ export function useMonitorRpc() {
   const stop = useRpc(monitorStop);
   const forceStop = useRpc(monitorForceStop);
   const snapshot = useCallback(
-    async (input: { query: string; sort: Sort; limit: number }) => toSnapshotView(await callSnapshot(input)),
+    async (input: { query: string; sort: Sort; limit: number; direction?: "asc" | "desc"; offset?: number }) => toSnapshotView(await callSnapshot(input)),
     [callSnapshot],
   );
   return { snapshot, stop, forceStop };

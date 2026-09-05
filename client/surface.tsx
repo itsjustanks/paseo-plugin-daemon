@@ -160,6 +160,12 @@ function MonitorBody() {
   const [tab, setTab] = useState<Tab>("overview");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<Sort>("cpu");
+  const [direction, setDirection] = useState<"asc" | "desc">("desc");
+  const [offset, setOffset] = useState(0);
+  const chooseSort = (next: Sort) => {
+    setDirection(next === sort ? direction === "asc" ? "desc" : "asc" : ["name", "pid"].includes(next) ? "asc" : "desc");
+    setSort(next); setOffset(0);
+  };
   const [expanded, setExpanded] = useState<string | null>(null);
   const [forceTarget, setForceTarget] = useState<Process | null>(null);
   const query = useDebounced(search.trim(), 250);
@@ -168,8 +174,8 @@ function MonitorBody() {
   // The Processes tab asks with the user's query and sort. One query key per
   // shape keeps the cache honest and last-good data survives a refetch.
   const input = useMemo(
-    () => (tab === "processes" ? { query, sort, limit: PROCESS_LIMIT } : { query: "", sort: "cpu" as Sort, limit: PROCESS_LIMIT }),
-    [tab, query, sort],
+    () => (tab === "processes" ? { query, sort, direction, offset, limit: PROCESS_LIMIT } : { query: "", sort: "cpu" as Sort, limit: PROCESS_LIMIT }),
+    [tab, query, sort, direction, offset],
   );
   const snapshotQuery = useQuery({
     queryKey: [...QUERY_KEY, input],
@@ -183,6 +189,7 @@ function MonitorBody() {
   });
 
   const snapshot = snapshotQuery.data;
+  useEffect(() => { if (snapshot && offset >= snapshot.processes.total && offset > 0) setOffset(0); }, [snapshot, offset]);
   const history = useHistory(snapshot);
   const age = useAge(snapshotQuery.dataUpdatedAt || undefined);
   const stale = snapshotQuery.isError || (age !== null && age > STALE_AFTER_SECONDS);
@@ -261,11 +268,13 @@ function MonitorBody() {
       <View style={{ width: "100%", maxWidth: t.maxWidth, alignSelf: "center", gap: t.space.lg }}>
         <Header snapshot={snapshot} age={age} stale={stale} fetching={snapshotQuery.isFetching} onRefresh={refresh} />
 
+        <Notice icon="ShieldCheck">CPU and memory cover the whole machine. The process table only includes verified Paseo project/workspace processes. Agent tools are read-only; stop controls are limited to project dev servers.</Notice>
+        {snapshot?.scope?.status === "unavailable" && <Notice icon="ShieldAlert" tone="warning">{snapshot.scope.message}</Notice>}
         <Segmented
-          label="Monitor views"
+          label="Daemon Health views"
           options={[
-            { id: "overview", label: "Overview", badge: serviceCount > 0 ? String(serviceCount) : undefined },
-            { id: "processes", label: "Processes", badge: processCount > 0 ? String(processCount) : undefined },
+            { id: "overview", label: "System overview", badge: serviceCount > 0 ? String(serviceCount) : undefined },
+            { id: "processes", label: "Project processes", badge: processCount > 0 ? String(processCount) : undefined },
           ]}
           value={tab}
           onChange={(next) => {
@@ -308,9 +317,12 @@ function MonitorBody() {
             <Processes
               snapshot={snapshot}
               search={search}
-              setSearch={setSearch}
+              setSearch={(value) => { setSearch(value); setOffset(0); }}
               sort={sort}
-              setSort={setSort}
+              setSort={chooseSort}
+              direction={direction}
+              offset={offset}
+              setOffset={setOffset}
               settling={query !== search.trim() || (snapshotQuery.isFetching && snapshotQuery.isPlaceholderData)}
               expanded={expanded}
               setExpanded={setExpanded}
@@ -342,7 +354,7 @@ function Header({ snapshot, age, stale, fetching, onRefresh }: { snapshot: Snaps
   return (
     <View style={{ flexDirection: t.compact ? "column" : "row", alignItems: t.compact ? "stretch" : "center", justifyContent: "space-between", gap: t.space.md }}>
       <View style={{ gap: 2, flexShrink: 1 }}>
-        <Text style={t.text.title}>Monitor</Text>
+        <Text style={t.text.title}>Daemon Health</Text>
         <Text style={t.text.caption}>{subtitle}</Text>
       </View>
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: t.compact ? "space-between" : "flex-end", gap: t.space.md }}>
@@ -422,9 +434,9 @@ function Overview({
         />
       </Grid>
 
-      <Section title="Pressure drivers" trailing={<Text style={t.text.caption}>{drivers.length > 0 ? `${drivers.length} flagged` : ""}</Text>}>
+      <Section title="Project processes with high resource use" trailing={<Text style={t.text.caption}>{drivers.length > 0 ? `${drivers.length} flagged` : ""}</Text>}>
         {drivers.length === 0 ? (
-          <Notice icon="Activity">Nothing is driving pressure right now.</Notice>
+          <Notice icon="Activity">No high-impact project processes are visible in this sample. Other activity on the machine can still contribute to CPU or memory pressure.</Notice>
         ) : (
           <Card padded={false}>
             {drivers.map((process, index) => (
@@ -434,9 +446,9 @@ function Overview({
         )}
       </Section>
 
-      <Section title="Dev servers & listening services" trailing={<Text style={t.text.caption}>{snapshot.services.length > 0 ? `${snapshot.services.length} found` : ""}</Text>}>
+      <Section title="Verified project dev servers" trailing={<Text style={t.text.caption}>{snapshot.services.length > 0 ? `${snapshot.services.length} found` : ""}</Text>}>
         {snapshot.services.length === 0 ? (
-          <Notice icon="Server">No dev servers or listening services detected for your user.</Notice>
+          <Notice icon="Server">No verified project dev servers are running. Start one inside a project registered in Paseo.</Notice>
         ) : (
           <Grid min={300}>
             {snapshot.services.map((process) => (
@@ -528,7 +540,7 @@ function ServiceCard({ process, actions }: { process: Process; actions: RowActio
           { value: `PID ${process.pid}` },
         ]}
       />
-      <ProcessActions process={process} actions={actions} />
+      <Text style={t.text.caption}>{process.project?.name} · Manage this server from Project processes.</Text>
     </Card>
   );
 }
@@ -542,6 +554,7 @@ function Processes({
   sort,
   setSort,
   settling,
+  direction, offset, setOffset,
   expanded,
   setExpanded,
   actions,
@@ -552,13 +565,14 @@ function Processes({
   sort: Sort;
   setSort: (value: Sort) => void;
   settling: boolean;
+  direction: "asc" | "desc"; offset: number; setOffset(value: number): void;
   expanded: string | null;
   setExpanded: (key: string | null) => void;
   actions: RowActions;
 }) {
   const t = useTokens();
   const { items, total, truncated } = snapshot.processes;
-  const summary = settling ? "Updating…" : items.length === total ? `${total} processes` : `${items.length} of ${total} processes`;
+  const summary = settling ? "Updating…" : total ? `${offset + 1}–${offset + items.length} of ${total} project processes` : "No project processes";
   return (
     <View style={{ gap: t.space.md }}>
       <View style={{ flexDirection: t.compact ? "column" : "row", alignItems: t.compact ? "stretch" : "center", gap: t.space.sm }}>
@@ -595,25 +609,42 @@ function Processes({
             </Pressable>
           ) : null}
         </View>
-        <Segmented label="Sort processes" options={SORTS} value={sort} onChange={setSort} />
+        {t.compact && <><Text style={t.text.caption}>Sort by · {direction === "desc" ? "highest first" : "lowest first"}</Text><Segmented label="Sort processes" options={SORTS} value={sort} onChange={setSort} /><Button label="Reverse sort order" onPress={() => setSort(sort)} /></>}
       </View>
 
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: t.space.sm }}>
         <Text style={t.text.caption}>{summary}</Text>
-        {truncated ? <Text style={t.text.caption}>Showing the top {items.length} by {SORTS.find((option) => option.id === sort)?.label.toLowerCase() ?? sort}. Narrow the search to see more.</Text> : null}
+        <Text style={t.text.caption}>Select a row for details</Text>
       </View>
 
       {items.length === 0 ? (
-        <Notice icon="Search">{search ? `No processes match "${search}".` : "No processes to show for your user."}</Notice>
+        <Notice icon="Search">{search ? `No processes match "${search}".` : "No processes in verified Paseo projects."}</Notice>
       ) : (
         <Card padded={false}>
-          {items.map((process, index) => (
-            <ProcessRow key={processKey(process)} process={process} first={index === 0} expanded={expanded === processKey(process)} onToggle={() => setExpanded(expanded === processKey(process) ? null : processKey(process))} actions={actions} />
-          ))}
+          {!t.compact && <ProcessHead sort={sort} direction={direction} onSort={setSort} />}
+          <ScrollView nestedScrollEnabled scrollEnabled={!t.compact} style={{ maxHeight: t.compact ? undefined : 520 }}>
+            {items.map((process, index) => (
+              <ProcessRow key={processKey(process)} process={process} first={index === 0} expanded={expanded === processKey(process)} onToggle={() => setExpanded(expanded === processKey(process) ? null : processKey(process))} actions={actions} />
+            ))}
+          </ScrollView>
         </Card>
       )}
+      {total > PROCESS_LIMIT && <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <Button label="Previous page" disabled={offset === 0 || settling} onPress={() => setOffset(Math.max(0, offset - PROCESS_LIMIT))} />
+        <Text style={t.text.caption}>Page {Math.floor(offset / PROCESS_LIMIT) + 1} of {Math.ceil(total / PROCESS_LIMIT)}</Text>
+        <Button label="Next page" disabled={offset + items.length >= total || settling} onPress={() => setOffset(offset + PROCESS_LIMIT)} />
+      </View>}
     </View>
   );
+}
+
+function ProcessHead({ sort, direction, onSort }: { sort: Sort; direction: "asc" | "desc"; onSort(sort: Sort): void }) {
+  const t = useTokens();
+  return <View style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: t.space.md, paddingVertical: 11, backgroundColor: t.color.surface2 }}>
+    {([{ id: "name", label: "Process", width: undefined }, { id: "pid", label: "PID", width: 65 }, { id: "cpu", label: "CPU", width: 70 }, { id: "memory", label: "Memory", width: 85 }] as const).map((column) => <Pressable key={column.id} accessibilityRole="button" accessibilityLabel={`Sort by ${column.label}${sort === column.id ? `, ${direction === "asc" ? "ascending" : "descending"}` : ""}`} onPress={() => onSort(column.id)} style={{ width: column.width, flex: column.width ? undefined : 1, minHeight: 26, justifyContent: "center", alignItems: column.width ? "flex-end" : "flex-start" }}><Text style={[t.text.label, { color: sort === column.id ? t.color.accent : t.color.muted }]}>{column.label}{sort === column.id ? direction === "asc" ? " ↑" : " ↓" : ""}</Text></Pressable>)}
+    <Text style={[t.text.label, { width: 65, textAlign: "right" }]}>Uptime</Text>
+    <Text style={[t.text.label, { width: 132, textAlign: "right" }]}>Impact</Text>
+  </View>;
 }
 
 function ProcessRow({ process, first, expanded, onToggle, actions }: { process: Process; first: boolean; expanded: boolean; onToggle: () => void; actions: RowActions }) {
@@ -648,16 +679,15 @@ function ProcessRow({ process, first, expanded, onToggle, actions }: { process: 
             {process.ports.length > 0 ? <Tag label={process.ports.map((port) => `:${port}`).join(" ")} /> : null}
           </View>
           <Text style={[t.text.caption, { marginLeft: 20 }]} numberOfLines={1}>
-            {process.impactReasons.length > 0 ? process.impactReasons.join(" · ") : process.classification.label}
+            {process.project ? `${process.project.name} · ${process.project.kind === "agent" ? "Agent tool" : process.project.kind === "dev-server" ? "Dev server" : "Project tool"}` : process.classification.label}
           </Text>
         </View>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.md, marginLeft: t.compact ? 20 : 0, flexShrink: 0 }}>
-          <Figure label="CPU" value={formatPercent(process.cpuPercent, 1)} />
-          <Figure label="RSS" value={formatBytes(process.rssBytes)} />
-          {!t.compact ? <Figure label="Age" value={formatDuration(process.ageSeconds)} /> : null}
-          <View style={{ minWidth: t.compact ? undefined : 132, alignItems: "flex-end" }}>
-            <StatusPill tone={tone} label={impactLabel(process.impact)} />
-          </View>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: t.compact ? 10 : 12, marginLeft: t.compact ? 20 : 0, flexShrink: 0, flexWrap: t.compact ? "wrap" : "nowrap" }}>
+          <TableFigure label="PID" value={String(process.pid)} width={65} />
+          <TableFigure label="CPU" value={formatPercent(process.cpuPercent, 1)} width={70} />
+          <TableFigure label="Memory" value={formatBytes(process.rssBytes)} width={85} />
+          {!t.compact && <TableFigure label="Uptime" value={formatDuration(process.ageSeconds)} width={65} />}
+          <View style={{ width: t.compact ? undefined : 132, alignItems: "flex-end" }}><StatusPill tone={tone} label={impactLabel(process.impact)} /></View>
         </View>
       </Pressable>
       {expanded ? (
@@ -683,12 +713,12 @@ function ProcessRow({ process, first, expanded, onToggle, actions }: { process: 
   );
 }
 
-function Figure({ label, value }: { label: string; value: string }) {
+function TableFigure({ label, value, width }: { label: string; value: string; width: number }) {
   const t = useTokens();
   return (
-    <View style={{ alignItems: "flex-end", minWidth: 52 }}>
+    <View style={{ alignItems: "flex-end", width: t.compact ? undefined : width, minWidth: t.compact ? 44 : undefined }}>
       <Text style={t.text.figure}>{value}</Text>
-      <Text style={[t.text.caption, { fontSize: 10, lineHeight: 12 }]}>{label}</Text>
+      {t.compact && <Text style={[t.text.caption, { fontSize: 10, lineHeight: 12 }]}>{label}</Text>}
     </View>
   );
 }
@@ -720,7 +750,7 @@ function ProcessActions({ process, actions }: { process: Process; actions: RowAc
   }
   return (
     <View style={{ flexDirection: "row", alignItems: "center" }}>
-      <ConfirmButton label="Stop" confirmLabel="Confirm stop" target={target} loading={busy} onConfirm={() => actions.onStop(process)} />
+      <ConfirmButton label="Stop dev server…" confirmLabel="Confirm stop server" target={`${process.project?.name || "Project"}: ${target}`} loading={busy} onConfirm={() => actions.onStop(process)} />
     </View>
   );
 }

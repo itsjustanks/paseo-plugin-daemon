@@ -11,7 +11,7 @@ import { executableAvailable } from "./binaries";
 const Profiles = z.array(ProfileSchema).max(16);
 
 export class LinkManager {
-  readonly tunnels = new TunnelManager();
+  readonly tunnels: TunnelManager;
   private profiles: Profile[] = [];
   private links = new Map<string, SshLink>();
   private ready: Promise<void>;
@@ -19,7 +19,8 @@ export class LinkManager {
   private closing = false;
   private capabilities?: Promise<{ ssh: boolean; cloudflared: boolean }>;
 
-  constructor(private readonly file = join(process.env.PASEO_HOME || join(homedir(), ".paseo"), "daemon-link", "profiles.json")) {
+  constructor(private readonly file = join(process.env.PASEO_HOME || join(homedir(), ".paseo"), "daemon-link", "profiles.json"), tunnels = new TunnelManager()) {
+    this.tunnels = tunnels;
     this.ready = this.load();
     // A malformed store should be visible via RPC, without an unhandled rejection on startup.
     void this.ready.catch(() => {});

@@ -36,4 +36,24 @@ describe("service ownership lease", () => {
     adapter.readIdentity.mockRejectedValueOnce(new Error("read failed"));
     expect(await verify()).toBe(false);
   });
+  it("denies unverified project ports and closes a lease when project access changes", async () => {
+    const uid = process.getuid!();
+    const owner = { pid: 987654, ppid: 987653, uid, comm: "node", argv: ["node", "next", "dev"], state: "sleeping", startId: "start", cpuSeconds: 0, rssBytes: 0, ageSeconds: 1, cwd: "/project" };
+    const adapter = {
+      sampleProcesses: vi.fn(async () => ({ processes: [owner], warnings: [] })),
+      listeningPorts: vi.fn(async () => ({ ports: new Map([[owner.pid, [3000]]]), warnings: [] })),
+      readIdentity: vi.fn(async () => ({ ...owner, argvHash: "hash" })),
+    };
+    vi.mocked(createAdapter).mockReturnValue(adapter as unknown as FakeAdapter);
+    await expect(createServiceLease(3000, async () => false)).rejects.toThrow("registered Paseo project");
+    const authorize = vi.fn(async () => true);
+    const verify = await createServiceLease(3000, authorize);
+    expect(await verify()).toBe(true);
+    authorize.mockResolvedValue(false);
+    expect(await verify()).toBe(false);
+    authorize.mockResolvedValue(true);
+    adapter.sampleProcesses.mockResolvedValueOnce({ processes: [], warnings: [] });
+    expect(await verify()).toBe(false);
+  });
+
 });

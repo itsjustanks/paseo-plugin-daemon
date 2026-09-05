@@ -1,14 +1,15 @@
 # Validation — 2026-09-05
 
 Daemon Link supports Paseo **0.7.2 and the 0.8 preview API** from the same checkout.
-Activation on a user daemon is a separate authenticated installation step.
+The 0.2 release was activated on Paseo 0.7.2 and its live status/monitor RPCs verified.
+The 0.3 update adds project scope and the guided interface described below.
 
 Verified locally:
 
 - TypeScript check, repository hygiene, and `git diff --check` pass.
-- 139 automated tests pass with the existing coverage thresholds unchanged. The optional network
+- 147 automated tests pass with the existing coverage thresholds unchanged. The optional network
   test is skipped in the default suite; it was run separately and passed.
-- Coverage: statements 88.73%, branches 80.59%, functions 86.78%, lines 95.72%.
+- Coverage: statements 88.68%, branches 82.22%, functions 86.69%, lines 95.32%.
 - Full dependency audit reports no known vulnerabilities.
 - The installed 0.7.2 compiler and pinned upstream 0.8 compiler both build this exact checkout.
   Both server bundles register the same 20 RPCs, return schema-valid status, reject an invalid
@@ -23,8 +24,13 @@ Verified locally:
   TCP half-close, an occupied local port, reconnect, persistent pairing, and live revocation.
 - Temporary-gate tests cover authentication, Host/Origin rejection, cookie filtering, HMR-style
   WebSocket upgrades, expiry, and shutdown. Helper lifecycle tests use a fake executable.
-- Browser previews were checked at desktop and 390-pixel mobile widths, in dark and light themes,
-  including paired hosts, first-time setup, connection errors, and the retained Monitor view.
+- Browser previews were checked at desktop and 390-pixel mobile widths, in dark and light themes.
+  Checks include project grouping, the guided setup, connection methods, both sort directions,
+  pagination, search, and an expanded agent row with no stop action.
+- New tests verify project/worktree membership, path-boundary lookalikes, broad-root exclusions,
+  custom managed-service ports, registry failures, filtered pagination, revoked scope with old action
+  tokens, and exclusion of an agent's descendant subtree. Service leases reject unverified ports
+  and close when project authorization changes.
 
 The UI preview uses deterministic fixtures and React Native Web. It is not proof of activation in
 the Paseo app. The temporary Cloudflare gate was tested locally; a live Quick Tunnel was not opened.
@@ -51,8 +57,8 @@ DAEMON_LINK_TEST_RELAY=wss://relay.paseo.sh npx vitest run tests/hosted-relay.te
 
 ## Remaining release checks
 
-Complete authenticated installation and app verification, including native mobile rendering and
-two physical machines. Exercise the final 0.8 release when it becomes available. The current
+Complete native mobile and two-physical-machine verification. Exercise the final 0.8 release when
+it becomes available. The current
 published SDK remains 0.7.2; the source-derived development augmentation is explained in
 [types/README.md](types/README.md). Remove it after the v0.8 SDK ships.
 

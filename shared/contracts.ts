@@ -57,8 +57,19 @@ export const MemorySnapshotSchema = z.object({
 });
 export type MemorySnapshot = z.infer<typeof MemorySnapshotSchema>;
 
+export const ProjectMatchSchema = z.object({
+  id: z.string(), name: z.string(), path: z.string(), workspace: z.string().nullable(),
+  shareablePorts: z.array(z.number().int()).optional(),
+  kind: z.enum(["dev-server", "agent", "project-tool"]), shareable: z.boolean(), canStop: z.boolean(),
+});
+export const ProjectScopeSchema = z.object({
+  status: z.enum(["ready", "unavailable"]), message: z.string(),
+  projects: z.array(z.object({ id: z.string(), name: z.string(), path: z.string() })),
+});
+
 export const ProcessSchema = z.object({
   pid: z.number().int().positive(),
+  project: ProjectMatchSchema.nullable().optional(),
   ppid: z.number().int().min(0),
   name: z.string(),
   /** Redacted, length-bounded command line for display only. */
@@ -84,6 +95,8 @@ export const ProcessSchema = z.object({
 export type ProcessView = z.infer<typeof ProcessSchema>;
 
 export const SnapshotSchema = z.object({
+  scope: ProjectScopeSchema.optional(),
+  hiddenProcesses: z.number().optional(),
   timestamp: z.number(),
   sampling: SamplingStateSchema,
   platform: z.enum(["linux", "darwin", "unsupported"]),
@@ -101,6 +114,8 @@ export const SnapshotSchema = z.object({
 export type Snapshot = z.infer<typeof SnapshotSchema>;
 
 export const SnapshotInputSchema = z.object({
+  direction: z.enum(["asc", "desc"]).optional(),
+  offset: z.number().int().min(0).max(4096).optional(),
   query: z.string().max(QUERY_MAX_LENGTH).default(""),
   sort: ProcessSortSchema.default("cpu"),
   limit: z.number().int().min(1).max(SNAPSHOT_LIMIT_MAX).default(SNAPSHOT_LIMIT_DEFAULT),

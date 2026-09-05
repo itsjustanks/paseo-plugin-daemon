@@ -59,6 +59,7 @@ export interface GuardOptions {
   key?: Buffer;
   tokenTtlMs?: number;
   gracefulWindowMs?: number;
+  authorizeProcess?: (pid: number, descendant: boolean) => Promise<boolean>;
 }
 
 type SignalOutcome = "delivered" | "exited" | "denied" | "failed";
@@ -130,6 +131,7 @@ export function descendants(tree: readonly TreeRow[], root: number, uid: number,
 }
 
 export class ProcessGuard {
+  private readonly authorizeProcess?: GuardOptions["authorizeProcess"];
   private readonly adapter: PlatformAdapter;
   private readonly uid: number;
   private readonly selfPid: number;
@@ -142,6 +144,7 @@ export class ProcessGuard {
   private readonly graceful = new Map<string, number>();
 
   constructor(options: GuardOptions) {
+    this.authorizeProcess = options.authorizeProcess;
     this.adapter = options.adapter;
     this.uid = options.uid;
     this.selfPid = options.selfPid ?? process.pid;
@@ -240,6 +243,9 @@ export class ProcessGuard {
     });
     const payload = this.verify(token);
     if (!payload) return deny("Action token is invalid or expired. Refresh and try again.");
+    if (this.authorizeProcess && !await this.authorizeProcess(payload.pid, false).catch(() => false)) {
+      return deny("Only a verified Paseo project dev server can be stopped here.", payload.pid);
+    }
     let identity: ProcessIdentity | null;
     try {
       identity = await this.adapter.readIdentity(payload.pid);
@@ -284,7 +290,12 @@ export class ProcessGuard {
    */
   private async signalDescendants(candidates: readonly TreeRow[], protectedPids: ReadonlySet<number>, signal: Signal): Promise<DescendantOutcome> {
     const outcome: DescendantOutcome = { delivered: 0, skipped: 0, failed: 0 };
+    const excluded = new Set<number>();
     for (const candidate of candidates) {
+      if (excluded.has(candidate.ppid)) { excluded.add(candidate.pid); outcome.skipped += 1; continue; }
+      if (this.authorizeProcess && !await this.authorizeProcess(candidate.pid, true).catch(() => false)) {
+        excluded.add(candidate.pid); outcome.skipped += 1; continue;
+      }
       let fresh: ProcessIdentity | null;
       try {
         fresh = await this.adapter.readIdentity(candidate.pid);

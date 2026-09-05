@@ -3,7 +3,7 @@ import { monitorForceStop, monitorSnapshot, monitorStop } from "./shared/contrac
 import * as rpc from "./shared/link";
 import * as peer from "./shared/peers";
 import {
-  createRuntime, handleMonitorForceStop, handleMonitorSnapshot, handleMonitorStop, installCloudflared,
+  createRuntime, installCloudflared,
 } from "./server/legacy.server";
 import { DaemonSurface } from "./client/legacy.client";
 
@@ -12,26 +12,26 @@ import { DaemonSurface } from "./client/legacy.client";
 // client bundle. typeof keeps initialization and cleanup safe after that removal.
 export default function contribute(plugin: PluginContext) {
   const runtime = typeof createRuntime === "function" ? createRuntime() : null;
-  plugin.handle(monitorSnapshot, handleMonitorSnapshot);
-  plugin.handle(monitorStop, handleMonitorStop);
-  plugin.handle(monitorForceStop, handleMonitorForceStop);
-  plugin.handle(rpc.linkStatus, () => runtime!.links.status());
-  plugin.handle(rpc.linkSave, (profile) => runtime!.links.save(profile));
-  plugin.handle(rpc.linkRemove, ({ id }) => runtime!.links.remove(id));
-  plugin.handle(rpc.linkConnect, ({ id }) => runtime!.links.connect(id));
-  plugin.handle(rpc.linkDisconnect, ({ id }) => runtime!.links.disconnect(id));
-  plugin.handle(rpc.tunnelStart, (input) => runtime!.links.tunnels.start(input));
-  plugin.handle(rpc.tunnelStop, ({ id }) => runtime!.links.tunnels.stop(id));
-  plugin.handle(rpc.tunnelOpen, ({ id }) => runtime!.links.tunnels.open(id));
-  plugin.handle(rpc.tunnelInstall, () => installCloudflared());
-  plugin.handle(peer.peerStatus, () => runtime!.peers.status());
-  plugin.handle(peer.peerOffer, (input) => runtime!.peers.offer(input));
-  plugin.handle(peer.peerPair, ({ invitation }) => runtime!.peers.pair(invitation));
-  plugin.handle(peer.peerRevoke, ({ id }) => runtime!.peers.revoke(id));
-  plugin.handle(peer.peerRemove, ({ id }) => runtime!.peers.remove(id));
-  plugin.handle(peer.peerServices, ({ id }) => runtime!.peers.services(id));
-  plugin.handle(peer.peerForward, ({ id, port }) => runtime!.peers.forward(id, port));
-  plugin.handle(peer.peerDisconnect, ({ id }) => runtime!.peers.disconnect(id));
+  plugin.handle(monitorSnapshot, runtime!.monitor.snapshot);
+  plugin.handle(monitorStop, runtime!.monitor.stop);
+  plugin.handle(monitorForceStop, runtime!.monitor.forceStop);
+  plugin.handle(rpc.linkStatus, (_input, context) => runtime!.withContext(context, () => runtime!.links.status()));
+  plugin.handle(rpc.linkSave, (profile, context) => runtime!.withContext(context, () => runtime!.links.save(profile)));
+  plugin.handle(rpc.linkRemove, ({ id }, context) => runtime!.withContext(context, () => runtime!.links.remove(id)));
+  plugin.handle(rpc.linkConnect, ({ id }, context) => runtime!.withContext(context, () => runtime!.links.connect(id)));
+  plugin.handle(rpc.linkDisconnect, ({ id }, context) => runtime!.withContext(context, () => runtime!.links.disconnect(id)));
+  plugin.handle(rpc.tunnelStart, (input, context) => runtime!.withContext(context, () => runtime!.links.tunnels.start(input)));
+  plugin.handle(rpc.tunnelStop, ({ id }, context) => runtime!.withContext(context, () => runtime!.links.tunnels.stop(id)));
+  plugin.handle(rpc.tunnelOpen, ({ id }, context) => runtime!.withContext(context, () => runtime!.links.tunnels.open(id)));
+  plugin.handle(rpc.tunnelInstall, (_input, context) => runtime!.withContext(context, () => installCloudflared()));
+  plugin.handle(peer.peerStatus, (_input, context) => runtime!.withContext(context, () => runtime!.peers.status()));
+  plugin.handle(peer.peerOffer, (input, context) => runtime!.withContext(context, () => runtime!.peers.offer(input)));
+  plugin.handle(peer.peerPair, ({ invitation }, context) => runtime!.withContext(context, () => runtime!.peers.pair(invitation)));
+  plugin.handle(peer.peerRevoke, ({ id }, context) => runtime!.withContext(context, () => runtime!.peers.revoke(id)));
+  plugin.handle(peer.peerRemove, ({ id }, context) => runtime!.withContext(context, () => runtime!.peers.remove(id)));
+  plugin.handle(peer.peerServices, ({ id }, context) => runtime!.withContext(context, () => runtime!.peers.services(id)));
+  plugin.handle(peer.peerForward, ({ id, port }, context) => runtime!.withContext(context, () => runtime!.peers.forward(id, port)));
+  plugin.handle(peer.peerDisconnect, ({ id }, context) => runtime!.withContext(context, () => runtime!.peers.disconnect(id)));
   plugin.addSurface("daemon-link", DaemonSurface);
   plugin.addSidebarItem({ id: "daemon-link", title: "Daemon Link", icon: "Network", surface: "daemon-link" });
   plugin.addWorkspacePanel({

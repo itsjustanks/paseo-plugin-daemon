@@ -19,6 +19,7 @@ export const cloudflaredArgs = (port: number, config: string) => [
 ];
 
 export class TunnelManager {
+  constructor(private lease = createServiceLease) {}
   private records = new Map<string, Running>();
   private closed = false;
   private pending = new Set<Promise<unknown>>();
@@ -44,7 +45,7 @@ export class TunnelManager {
   }
 
   private async launch(record: Running) {
-    const verify = await createServiceLease(record.view.port);
+    const verify = await this.lease(record.view.port);
     if (record.stopping || this.closed) return;
     const gate = record.gate = await createGate({ port: record.view.port, id: record.view.id, expiresAt: record.view.expiresAt, verify });
     if (record.stopping || this.closed) { await gate.close(); return; }

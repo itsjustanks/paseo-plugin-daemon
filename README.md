@@ -7,20 +7,40 @@ forwarding, service discovery, fallback tunnels, and monitoring. Hosts with the 
 also get a `/daemon-link` shortcut; it appears only when that capability is available.
 The package is `paseo-plugin-daemon`; the runtime ID and sidebar surface are `daemon-link`.
 
-## Features
+## What each tab does
 
-- **Private localhost links** — pair your daemons once, discover remote services, and open them locally.
-- **Fallback access** — temporary authenticated HTTPS links and saved SSH forwards.
+| Tab | Use it for |
+| --- | --- |
+| **Local Projects** | Find verified dev servers grouped by the selected host's Paseo projects. |
+| **Dev Relay** | Pair hosts for private localhost access, create temporary browser links, or save SSH forwards. |
+| **Daemon Health** | Read whole-machine CPU/memory and a sortable, paginated table of project processes. |
+| **Guide & Setup** | Follow the start → pair → open walkthrough, check setup, and troubleshoot missing apps. |
 
-- **System pressure at a glance** — current CPU and memory usage, load averages, swap, and a plain
-  `normal / high / critical` pressure state with the reasons behind it (not a mystery score).
-- **Dev servers and listening processes** — anything with an open port gets surfaced, with a
-  best-effort label (`vite`, `next`, `uvicorn`, …) when the command pattern is recognizable, and an
-  honest **Listening Process** label when it isn't.
-- **Process attribution** — a searchable, sortable table of your own processes (CPU, memory, age,
-  state) so you can see exactly what's driving the number at the top.
-- **Safe stop** — send a graceful stop to a process you own, with an explicit, separately-confirmed
-  force path if it doesn't exit.
+“Local” always means the selected Paseo host, which may be a remote server. To open a remote app on
+your computer's localhost, select your computer's daemon in Dev Relay first. Closing a forward or
+browser link only closes access; the dev server keeps running.
+
+## Project scope and process controls
+
+The backend verifies directories against Paseo's project/workspace registry through the plugin SDK.
+It matches directory boundaries, resolves registered roots, and includes managed worktrees. Home and
+filesystem-root projects are too broad and are excluded. Unrelated processes and infrastructure
+listeners are hidden. If registry verification fails, project sharing and process controls fail closed.
+
+- Recognized web dev servers and running Paseo service scripts are eligible for sharing.
+- Unknown project listeners remain read-only and cannot be shared. Register a custom server as a
+  Paseo service script with its port so the plugin can verify its purpose.
+- Agent tools and other project processes are read-only. Manage agents from their Paseo agent tabs.
+- Stop controls appear in Daemon Health only, for verified project dev servers, after confirmation.
+  Stop/force-stop rechecks current project membership and the process identity; excluded descendants
+  and their children are skipped. Existing same-user and daemon-protection rules still apply.
+- Process headings sort by name, PID, CPU, or memory in either direction. Pages contain 15 rows;
+  desktop column headings remain above the scrolling rows.
+
+The project registry refreshes while the plugin is used, including during service lease checks.
+After a plugin/daemon restart, open Daemon Link on that host once to initialize the borrowed SDK
+session. Incoming project access remains unavailable until then. This is a current plugin API
+lifecycle limitation; daemon credentials are never stored to work around it.
 
 ## Platform support
 
@@ -36,9 +56,10 @@ your machine. That means:
 
 - Only install plugins you trust, from sources you trust. Read the source before installing,
   especially anything that touches processes.
-- Monitor can read process information (command lines, working directories, resource usage) for
-  processes owned by the same OS user running Paseo. It cannot see or touch other users' processes.
-- Monitor can send stop/kill signals — see [Safe stop](#safe-stop-and-its-limits) below for
+- Daemon Link samples same-user process information to attribute work to verified Paseo projects.
+  Only project-associated rows reach its UI. It cannot see or touch other users' processes.
+- Daemon Link can send stop/kill signals to verified project dev servers — see [Safe
+stop](#safe-stop-and-its-limits) below for
   exactly what that can and can't do.
 
 If you wouldn't run a piece of code directly on your machine with your own user privileges, don't
@@ -130,19 +151,21 @@ that same pattern instead of relying solely on a version string.
 
 ## Everyday use
 
-1. On the remote daemon, open **Links → Create pairing code**.
+1. Start the dev server inside a Paseo project. On that host, open
+   **Dev Relay → Private localhost → Create pairing code**.
 2. Use Paseo's host picker to select the daemon running on your computer. Paste that code under
    **Pair host**. This is one-time pairing; no SSH password, key setup, or Cloudflare account is needed.
 3. Choose the paired host and press **Open localhost** beside its detected service. The plugin binds
    `127.0.0.1:<port>` on your computer and opens `http://localhost:<port>` in your browser.
-4. Leave both plugins running. **Disconnect** closes the local port. **Revoke access** on the remote
+4. Leave both plugins running. **Close forward** closes the local port. **Revoke access** on the remote
    daemon closes active connections and invalidates that pairing.
 
 If the requested local port is occupied, a free port is allocated and the actual URL is displayed.
 A local port belongs to the **selected daemon's machine**. Select your own computer's daemon to
-use localhost in that computer's browser. Phones and browser-only devices can use Fallback instead.
+use localhost in that computer's browser. Phones and browser-only devices can use **Dev Relay → Temporary
+browser link** instead.
 
-A pairing lets a trusted peer discover and connect to this OS user's unprotected listening services.
+A pairing lets a trusted peer discover and connect to this OS user's verified Paseo project dev servers.
 It does not grant agent, file, process-control, or daemon-management access. Pair separately in the
 other direction if both machines should offer services. Pairings persist; active local listeners
 close when the plugin stops. After restart, Open localhost recreates them.
@@ -154,15 +177,16 @@ a separate plugin pairing is currently required. A future host-selection API cou
 
 ### Fallback routes
 
-- **Fallback** discovers this host's services and creates an authenticated temporary HTTPS link.
+- **Temporary browser link** in Dev Relay lists verified project apps and creates an authenticated HTTPS link.
   One-time setup downloads a pinned, checksum-verified `cloudflared` binary into this user's plugin
   state directory. Nothing is installed system-wide. Links expire after 30 minutes in the UI;
   the RPC supports 15, 30, or 60 minutes. Disconnect, expiry, and plugin shutdown revoke access.
-- **SSH** is optional. Save a hostname or SSH config alias and a port mapping on your local daemon.
+- **Saved SSH forward** in Dev Relay is optional. Save a hostname or SSH config alias and a port mapping on
+  your local daemon.
   It uses existing keys or an SSH agent, strict known-host verification, loopback binding, keepalives,
   and reconnects. It never stores an SSH password or launches an invisible password prompt.
-- **Monitor** retains the CPU/memory overview, service list, and guarded process controls.
-- **Setup** explains the selected host, pairing, optional dependencies, and connection checks.
+- **Daemon Health** contains whole-machine metrics and verified project processes.
+- **Guide & Setup** explains the selected host, pairing, optional routes, and actionable setup checks.
 
 The private relay uses outbound WebSockets over TLS (normally port 443). Set
 `PASEO_DAEMON_LINK_RELAY=wss://your-relay.example` on both plugin hosts before creating pairings to
@@ -171,7 +195,7 @@ embedded in forwarding. The default is Paseo's hosted relay; its availability an
 
 The Cloudflare fallback uses HTTP/2 over outbound TCP port 7844, including when UDP is blocked.
 It is a separate provider path, not guaranteed access through every firewall. It is never started
-silently after a private connection fails: select Fallback explicitly to create a browser link.
+silently after a private connection fails: select Temporary browser link explicitly to create a browser link.
 Quick Tunnels have provider limits, including no Server-Sent Events support; use private forwarding
 for SSE applications. The fallback is for temporary development access, not production hosting.
 

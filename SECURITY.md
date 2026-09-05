@@ -71,3 +71,15 @@ users or tenants on the same host. Concretely:
 We still want to hear about anything that breaks Monitor's stated invariants (cross-user action,
 privilege escalation, protected-process bypass, secret leakage) — those are real bugs, even within
 a trusted-operator model.
+
+## Project scope
+
+Daemon Link 0.3 limits service sharing and process controls to verified Paseo project/workspace
+processes. A listening port alone is insufficient. Agent tools and unknown project listeners are
+read-only; database and infrastructure processes are excluded. Stop authorization rechecks the live
+registry and process identity, and skips excluded descendant subtrees. Scope initialization or
+refresh failure denies sharing and stopping. CPU/memory totals still describe the whole machine.
+
+Project membership is directory attribution, not proof that Paseo launched the process. A manually
+started dev server inside a registered project qualifies. Update both paired hosts to apply the new
+scope on both ends; older plugin versions apply their own service-discovery policy.

@@ -3,7 +3,7 @@
   "description": "Daemon Link for Paseo: encrypted daemon-to-daemon localhost forwarding, monitoring, and optional tunnel fallbacks.",
   "private": true,
   "type": "module",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "license": "MIT",
   "repository": {
     "type": "git",

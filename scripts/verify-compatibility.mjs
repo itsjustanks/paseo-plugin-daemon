@@ -52,6 +52,12 @@ function evaluate(bundle, target) {
 
 async function checkServer(bundle, version) {
   const handlers = new Map();
+  const projectPath = join(process.env.PASEO_HOME, "project");
+  await mkdir(projectPath, { recursive: true });
+  const context = { paseo: {
+    projects: { list: async () => ({ projects: [{ projectId: "fixture", projectDisplayName: "Fixture", projectRootPath: projectPath }] }) },
+    workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false, nextCursor: null } }) },
+  } };
   const contribute = evaluate(bundle, "server");
   const cleanup = contribute({ handle(contract, handler) {
     assert(!handlers.has(contract.name), `Duplicate RPC: ${contract.name}`);
@@ -62,11 +68,16 @@ async function checkServer(bundle, version) {
     assert.equal(handlers.size, 20);
     for (const name of ["daemon-link.status", "daemon-link.peers.status"]) {
       const { contract, handler } = handlers.get(name);
-      const result = await handler(contract.input.parse({}), {});
+      const result = await handler(contract.input.parse({}), context);
       contract.output.parse(result);
     }
+    const monitor = handlers.get("monitor.snapshot");
+    const snapshot = monitor.contract.output.parse(await monitor.handler({}, context));
+    assert.equal(snapshot.scope.status, "ready");
+    assert.equal(snapshot.scope.projects.length, 1);
+    assert(snapshot.processes.every((process) => process.project?.id === "fixture"));
     const { contract, handler } = handlers.get("daemon-link.peers.pair");
-    await assert.rejects(() => handler(contract.input.parse({ invitation: "invalid" }), {}), /valid Daemon Link pairing code/);
+    await assert.rejects(() => handler(contract.input.parse({ invitation: "invalid" }), context), /valid Daemon Link pairing code/);
     serverContracts.push([...handlers.keys()].sort());
     console.log(`${version}: 20 server RPCs registered; status, validation, and cleanup verified`);
   } finally { await cleanup(); await cleanup(); }

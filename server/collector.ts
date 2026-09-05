@@ -1,6 +1,7 @@
 import type { ProcessView, Snapshot, SnapshotInput } from "../shared/contracts";
 import { SnapshotInputSchema } from "../shared/contracts";
 import { classifyCpuPressure, classifyMemoryPressure, classifyProcessImpact, detectService } from "./heuristics";
+import type { ProjectScope } from "./scope";
 import type { Clock, PlatformAdapter, RawProcess, RawSystemSample } from "./platform";
 import { systemClock } from "./platform";
 import { displayCommand, displayName, hashArgv, homeRelative } from "./redaction";
@@ -61,6 +62,7 @@ export interface CollectorOptions {
   clock?: Clock;
   cacheMs?: number;
   portCacheMs?: number;
+  scope?: ProjectScope;
 }
 
 interface ClassifiedBase {
@@ -86,6 +88,7 @@ function growth(points: Point[]): { delta: number | null; seconds: number } {
 }
 
 export class Collector {
+  private readonly scope?: ProjectScope;
   private readonly adapter: PlatformAdapter;
   private readonly policy: ActionPolicy;
   private readonly uid: number;
@@ -100,6 +103,7 @@ export class Collector {
   private portCache: { at: number; ports: Map<number, number[]>; warnings: string[] } | null = null;
 
   constructor(options: CollectorOptions) {
+    this.scope = options.scope;
     this.adapter = options.adapter;
     this.policy = options.policy;
     this.uid = options.uid;
@@ -114,14 +118,19 @@ export class Collector {
     const input = SnapshotInputSchema.parse(rawInput);
     const base = await this.collect();
     const query = input.query.trim().toLowerCase();
-    const matched = query ? base.processes.filter((p) => matches(p, query)) : base.processes;
+    const visible = this.scope ? base.processes.filter((p) => p.project) : base.processes;
+    const matched = query ? visible.filter((p) => matches(p, query) || p.project?.name.toLowerCase().includes(query)) : visible;
     const sorted = [...matched].sort(comparator(input.sort));
-    const page = sorted.slice(0, input.limit);
-    const services = base.processes
-      .filter((p) => p.service !== null)
+    const defaultDirection = ["name", "pid"].includes(input.sort) ? "asc" : "desc";
+    if (input.direction && input.direction !== defaultDirection) sorted.reverse();
+    const offset = input.offset || 0;
+    const page = sorted.slice(offset, offset + input.limit);
+    const services = visible
+      .filter((p) => p.service !== null && (!this.scope || p.project?.shareable))
       .sort((a, b) => (a.ports[0] ?? 1 << 20) - (b.ports[0] ?? 1 << 20) || a.pid - b.pid)
       .slice(0, MAX_SERVICES);
     return {
+      ...(this.scope ? { scope: this.scope.status(), hiddenProcesses: base.processes.length - visible.length } : {}),
       timestamp: base.at,
       sampling: base.sampling,
       platform: this.adapter.platform,
@@ -132,11 +141,13 @@ export class Collector {
       memory: base.memory,
       services,
       processes: page,
-      totalProcesses: base.processes.length,
+      totalProcesses: visible.length,
       matchedProcesses: matched.length,
       truncated: page.length < matched.length,
     };
   }
+
+  invalidate() { this.base = null; }
 
   /** One collection at a time; concurrent callers share it. */
   collect(): Promise<ClassifiedBase> {
@@ -210,9 +221,14 @@ export class Collector {
       });
       const ports = portScan.ports.get(raw.pid) ?? [];
       const service = detectService(raw.argv, ports);
-      const decision = this.policy.evaluate(raw, byPid);
+      const project = this.scope?.match(raw, ports) ?? null;
+      const baseDecision = this.policy.evaluate(raw, byPid);
+      const decision = this.scope && baseDecision.actionable && !project?.canStop
+        ? { actionable: false, reason: project?.kind === "agent" ? "Manage this agent in its Paseo agent tab." : "Only verified project dev servers can be stopped here." }
+        : baseDecision;
       const argvHash = hashArgv(raw.argv);
       return {
+        ...(this.scope ? { project } : {}),
         pid: raw.pid,
         ppid: raw.ppid,
         name: displayName(raw.argv, raw.comm),
@@ -223,7 +239,7 @@ export class Collector {
         rssBytes: raw.rssBytes,
         memoryPercent: round1(memoryPercent),
         ageSeconds: Math.round(raw.ageSeconds),
-        ports,
+        ports: project?.shareable ? project.shareablePorts : ports,
         impact: impact.impact,
         reasons: impact.reasons,
         service,

@@ -177,9 +177,9 @@ export function Section({ title, trailing, children }: { title: string; trailing
 export function Grid({ children, min = 240 }: { children: React.ReactNode; min?: number }) {
   const t = useTokens();
   return (
-    <View style={{ flexDirection: t.compact ? "column" : "row", flexWrap: "wrap", gap: t.space.md }}>
+    <View style={{ flexDirection: t.compact ? "column" : "row", flexWrap: t.compact ? "nowrap" : "wrap", alignItems: "stretch", gap: t.space.md }}>
       {React.Children.map(children, (child) =>
-        child ? <View style={{ flexGrow: 1, flexBasis: t.compact ? undefined : min, minWidth: t.compact ? undefined : min }}>{child}</View> : null,
+        child ? <View style={{ width: t.compact ? "100%" : undefined, flexGrow: 1, flexBasis: t.compact ? undefined : min, minWidth: t.compact ? undefined : min }}>{child}</View> : null,
       )}
     </View>
   );

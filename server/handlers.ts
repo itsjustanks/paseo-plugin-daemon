@@ -1,10 +1,12 @@
+import type { PluginHandlerContext } from "@getpaseo/plugin";
+import type { ProjectScope } from "./scope";
 import { homedir } from "node:os";
 import { createAdapter } from "./adapter";
 import type { ActionResult, Snapshot, SnapshotInput } from "../shared/contracts";
 import { Collector, unsupportedSnapshot } from "./collector";
 import type { Clock, PlatformAdapter } from "./platform";
 import { systemClock } from "./platform";
-import { ProcessGuard } from "./safety";
+import { ProcessGuard, type KillFn } from "./safety";
 
 /**
  * RPC entry points. Handlers are the only callers of the guard, and they
@@ -12,12 +14,14 @@ import { ProcessGuard } from "./safety";
  */
 
 export interface MonitorHandlers {
-  snapshot(input: SnapshotInput): Promise<Snapshot>;
+  snapshot(input: SnapshotInput, context?: PluginHandlerContext): Promise<Snapshot>;
   stop(input: { token: string }): Promise<ActionResult>;
   forceStop(input: { token: string }): Promise<ActionResult>;
 }
 
 export interface MonitorRuntimeOptions {
+  kill?: KillFn;
+  scope?: ProjectScope;
   adapter?: PlatformAdapter | null;
   uid?: number;
   home?: string;
@@ -48,11 +52,26 @@ export function createMonitorHandlers(options: MonitorRuntimeOptions = {}): Moni
   const parentPid = options.parentPid ?? process.ppid;
   const guard =
     options.guard ??
-    new ProcessGuard({ adapter, uid, selfPid, alwaysProtected: parentPid > 1 ? [parentPid] : [], clock });
-  const collector = options.collector ?? new Collector({ adapter, policy: guard, uid, home: options.home ?? homedir(), clock });
+    new ProcessGuard({ adapter, uid, selfPid, kill: options.kill, alwaysProtected: parentPid > 1 ? [parentPid] : [], clock,
+      authorizeProcess: options.scope ? async (pid, descendant) => {
+        await options.scope!.refresh(true);
+        const sample = await adapter.sampleProcesses(uid);
+        const raw = sample.processes.find((p) => p.pid === pid);
+        if (!raw) return false;
+        const ports = await adapter.listeningPorts([pid]);
+        const project = options.scope!.match(raw, ports.ports.get(pid) || []);
+        return !!project && (descendant ? project.kind !== "agent" : project.canStop);
+      } : undefined,
+    });
+  const collector = options.collector ?? new Collector({ adapter, policy: guard, uid, home: options.home ?? homedir(), clock, scope: options.scope });
 
   return {
-    async snapshot(input) {
+    async snapshot(input, context) {
+      if (context) options.scope?.bind(context.paseo);
+      if (options.scope) {
+        try { await options.scope.refresh(); } catch { /* Global health is still readable; project rows fail closed. */ }
+        collector.invalidate();
+      }
       if (uid < 0) return { ...unsupportedSnapshot(clock.now()), warnings: ["Monitor cannot determine the current user."] };
       try {
         return await collector.snapshot(input);
