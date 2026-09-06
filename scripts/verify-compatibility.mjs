@@ -65,8 +65,8 @@ async function checkServer(bundle, version) {
   } });
   assert.equal(typeof cleanup, "function");
   try {
-    assert.equal(handlers.size, 20);
-    for (const name of ["daemon-link.status", "daemon-link.peers.status"]) {
+    assert.equal(handlers.size, 25);
+    for (const name of ["daemon-link.status", "daemon-link.peers.status", "daemon-link.sync.status"]) {
       const { contract, handler } = handlers.get(name);
       const result = await handler(contract.input.parse({}), context);
       contract.output.parse(result);
@@ -79,7 +79,7 @@ async function checkServer(bundle, version) {
     const { contract, handler } = handlers.get("daemon-link.peers.pair");
     await assert.rejects(() => handler(contract.input.parse({ invitation: "invalid" }), context), /valid Daemon Link pairing code/);
     serverContracts.push([...handlers.keys()].sort());
-    console.log(`${version}: 20 server RPCs registered; status, validation, and cleanup verified`);
+    console.log(`${version}: 25 server RPCs registered; status, validation, and cleanup verified`);
   } finally { await cleanup(); await cleanup(); }
 }
 
@@ -97,6 +97,7 @@ async function checkClient(bundle, version, supportsShortcuts) {
   try {
     assert.equal(registrations.get("addSurface")[0], "daemon-link");
     assert.equal(registrations.get("addSidebarItem")[0].surface, "daemon-link");
+    assert.equal(registrations.get("addSidebarItem")[0].title, "Hosts");
     assert.equal(registrations.get("addWorkspacePanel")[0].id, "daemon-link");
     assert.equal(registrations.has("addSlashCommand"), supportsShortcuts);
     if (version === "0.8-preview") {

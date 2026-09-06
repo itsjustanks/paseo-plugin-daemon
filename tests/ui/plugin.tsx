@@ -6,6 +6,10 @@ let forwards: { id: string; peerId: string; remotePort: number; localPort: numbe
 const params = new URLSearchParams(location.search);
 const empty = params.has("empty"), failed = params.has("error"), unverified = params.has("unverified");
 const projects = [{ id: "website", name: "Website", path: "~/projects/website" }, { id: "api", name: "API service", path: "~/projects/api" }];
+const grant = { id: "00000000-0000-4000-8000-000000000001", label: "My laptop", projectIds: [] as string[] };
+const preview = { token: "00000000-0000-4000-8000-000000000002", project: projects[0], head: "a1b2c3d4".repeat(5), commits: 24, bytes: 245760, sha256: "a".repeat(64), expiresAt: Date.now() + 600000 };
+let history: any[] = [];
+(window as any).__fixtureCalls = [];
 const processes = Array.from({ length: 64 }, (_, index) => {
   const app = index < 2, agent = index === 2;
   const project = projects[index % 2];
@@ -18,6 +22,16 @@ const processes = Array.from({ length: 64 }, (_, index) => {
   };
 });
 const stub = async (name: string, input: any) => {
+  (window as any).__fixtureCalls.push({ name, input });
+  if (name.startsWith("daemon-link.sync.") && failed) throw new Error("Source host is unavailable. Keep both plugins running and retry.");
+  if (name === "daemon-link.sync.status") return { projects, grants: empty ? [] : [grant], history };
+  if (name === "daemon-link.sync.projects") return { projects: empty ? [] : projects };
+  if (name === "daemon-link.sync.preview") return { ...preview, project: projects.find((p) => p.id === input.projectId), expiresAt: Date.now() + 600000 };
+  if (name === "daemon-link.sync.share") { grant.projectIds = input.projectIds; return { ok: true }; }
+  if (name === "daemon-link.sync.receive") {
+    const entry = { id: "00000000-0000-4000-8000-000000000003", peerId: peer.id, projectName: "Website", head: preview.head, startedAt: Date.now(), finishedAt: Date.now(), state: "done", bytes: preview.bytes, directory: "~/.paseo/daemon-link/transfers/received/example/repository", message: "Received into a separate checkout. Add this directory as a Paseo project when you are ready." };
+    history = [entry]; return entry;
+  }
   if (name === "daemon-link.status") return { ssh: true, cloudflared: !empty, profiles: [], connections: [], tunnels: [] };
   if (name === "daemon-link.peers.status") return { relayState: "off", grants: [], peers: empty ? [] : [peer], forwards };
   if (name === "daemon-link.peers.services") {

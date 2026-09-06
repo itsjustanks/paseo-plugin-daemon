@@ -90,6 +90,13 @@ export class ProjectScope {
       kind: agent ? "agent" : service ? "dev-server" : "project-tool", shareable: service, canStop: service, shareablePorts };
   }
 
+  async root(id: string): Promise<{ id: string; name: string; path: string }> {
+    await this.refresh();
+    const root = this.roots.find((item) => item.id === id && item.workspace === null) || this.roots.find((item) => item.id === id);
+    if (!root) throw new Error("This project is no longer registered on this host.");
+    return { id: root.id, name: root.name, path: root.path };
+  }
+
   status() {
     const projects = [...new Map(this.roots.map((root) => [root.id, { id: root.id, name: root.name, path: homeRelative(root.path, this.home) }])).values()];
     return { status: this.failure ? "unavailable" as const : "ready" as const, projects,

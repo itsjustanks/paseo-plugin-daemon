@@ -8,14 +8,16 @@ only; it does not read daemon settings, credentials, processes, or project direc
 
 1. Run `npm ci`, then `npm run preview:ui` from the repository root.
 2. Open `http://127.0.0.1:43197` in a fresh browser session without saved authentication.
-3. Use a 1280 × 960 viewport for Local Projects, Dev Relay, and Daemon Health → Project processes.
+3. Use a 1280 × 1060 viewport for Overview, Local Projects, Dev Relay, Project Sync, and Daemon Health.
 4. Use a 390 × 844 viewport with `?light` for Guide & Setup.
 5. Capture the viewport directly, inspect every image, then commit the reviewed PNGs.
 
 | File | View |
 | --- | --- |
+| `overview.png` | Overview and next steps, dark theme |
 | `local-projects.png` | Local Projects, dark theme |
 | `dev-relay.png` | Dev Relay → Private localhost, dark theme |
+| `project-sync.png` | Project Sync → Receive a project → Development server → Preview Website |
 | `daemon-health.png` | Daemon Health → Project processes, dark theme |
 | `guide-mobile.png` | Guide & Setup, light theme and narrow viewport |
 

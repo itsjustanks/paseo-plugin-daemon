@@ -1,3 +1,4 @@
+import { ProjectTransfers } from "./transfers";
 import type { PluginHandlerContext } from "@getpaseo/plugin";
 import { createMonitorHandlers } from "./handlers";
 import { createServiceLease } from "./lease";
@@ -8,6 +9,7 @@ import { TunnelManager } from "./tunnels";
 
 export function createRuntime() {
   const scope = new ProjectScope();
+  const transfers = new ProjectTransfers(scope);
   const monitor = createMonitorHandlers({ scope });
   const lease = (port: number) => createServiceLease(port, async (owner, servicePort) => {
     await scope.refresh();
@@ -26,9 +28,9 @@ export function createRuntime() {
       });
     }
     return [...ports.values()];
-  });
+  }, transfers);
   return {
-    links, peers, monitor,
+    links, peers, monitor, transfers, scope,
     withContext<T>(context: PluginHandlerContext, action: () => T): T { scope.bind(context.paseo); return action(); },
   };
 }

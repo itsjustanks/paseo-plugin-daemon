@@ -1,3 +1,5 @@
+import { Preview, Project } from "../shared/sync";
+import type { ProjectSource } from "./transfers";
 import { generateKeyPair, exportPublicKey, exportSecretKey, importPublicKey, importSecretKey, type EncryptedChannel } from "@getpaseo/relay/e2ee";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
@@ -17,7 +19,7 @@ const Offer = z.object({ version: z.literal(1), relay: z.string().max(1024), ser
 type Offer = z.infer<typeof Offer>;
 const Store = z.object({
   version: z.literal(1), serverId: z.string().uuid(), publicKey: Key, secretKey: Key, relay: z.string(),
-  grants: z.array(z.object({ id: z.string().uuid(), label: z.string(), digest: z.string().length(64) })).max(16),
+  grants: z.array(z.object({ id: z.string().uuid(), label: z.string(), digest: z.string().length(64), projectIds: z.array(z.string()).max(100).default([]) })).max(16),
   peers: z.array(z.object({ id: z.string().uuid(), offer: Offer })).max(16),
 });
 type State = z.infer<typeof Store>;
@@ -49,7 +51,7 @@ export class PeerManager {
       const ports = new Map<number, z.infer<typeof ServiceSchema>>();
       for (const process of snapshot.services) if (!process.protectedReason) for (const port of process.ports) ports.set(port, { port, label: process.service?.label || process.name, project: process.cwd });
       return [...ports.values()];
-    }) {
+    }, private projects?: ProjectSource) {
     this.ready = this.load(); void this.ready.catch(() => {});
   }
 
@@ -80,12 +82,38 @@ export class PeerManager {
   }
 
   private async accept(channel: EncryptedChannel, ws: WebSocket, first: string) {
-    const auth = z.object({ grantId: z.string(), token: z.string().max(128), action: z.enum(["services", "connect"]), port: Port.optional() }).parse(JSON.parse(first));
+    const auth = z.object({ grantId: z.string(), token: z.string().max(128), action: z.enum(["services", "connect", "projects", "project-preview", "project-download"]), port: Port.optional(), projectId: z.string().max(256).optional(), tokenId: z.string().uuid().optional() }).parse(JSON.parse(first));
     const grant = this.data.grants.find((g) => g.id === auth.grantId);
     if (!grant || !timingSafeEqual(Buffer.from(grant.digest), Buffer.from(hash(auth.token)))) throw new Error("Pairing rejected.");
     const connections = this.grantedChannels.get(grant.id) || new Set<WebSocket>();
     connections.add(ws); this.grantedChannels.set(grant.id, connections);
     ws.once("close", () => connections.delete(ws));
+    if (["projects", "project-preview", "project-download"].includes(auth.action)) {
+      if (!this.projects) throw new Error("Project transfers are not supported by this host.");
+      if (auth.action === "projects") {
+        const listed = await this.projects.list(grant.projectIds);
+        if (!this.data.grants.includes(grant)) throw new Error("Sharing revoked.");
+        await channel.send(JSON.stringify({ projects: listed.projects.filter((project) => grant.projectIds.includes(project.id)) }));
+      } else if (auth.action === "project-preview") {
+        if (!auth.projectId || !grant.projectIds.includes(auth.projectId)) throw new Error("Project sharing is not permitted.");
+        const preview = await this.projects.preview(auth.projectId, grant.id);
+        if (!this.data.grants.includes(grant) || !grant.projectIds.includes(auth.projectId)) throw new Error("Sharing revoked.");
+        await channel.send(JSON.stringify(preview));
+      } else {
+        if (!auth.tokenId) throw new Error("A project preview is required.");
+        const exported = await this.projects.download(auth.tokenId, grant.id);
+        if (!this.data.grants.includes(grant) || !grant.projectIds.includes(exported.preview.project.id)) throw new Error("Project sharing was revoked.");
+        await channel.send(JSON.stringify(exported.preview));
+        void (async () => {
+          for (let offset = 0; offset < exported.bytes.length; offset += 32 * 1024) {
+            if (!this.data.grants.includes(grant) || !grant.projectIds.includes(exported.preview.project.id) || this.stopped) throw new Error("Sharing revoked.");
+            await channel.send(Uint8Array.from(exported.bytes.subarray(offset, offset + 32 * 1024)).buffer);
+          }
+          await channel.send(new ArrayBuffer(0)); ws.close();
+        })().catch(() => ws.terminate());
+      }
+      return () => ws.terminate();
+    }
     if (auth.action === "services") {
       const services = await this.discover();
       if (!this.data.grants.includes(grant)) throw new Error("Pairing revoked.");
@@ -127,7 +155,7 @@ export class PeerManager {
       }
       const token = randomBytes(32).toString("base64url"), grantId = randomUUID();
       const offer: Offer = { version: 1, relay: this.data.relay, serverId: this.data.serverId, publicKey: this.data.publicKey, grantId, token, label };
-      this.data.grants.push({ id: grantId, label, digest: hash(token) });
+      this.data.grants.push({ id: grantId, label, digest: hash(token), projectIds: [] });
       try { await this.persist(); } catch { this.data.grants.pop(); throw new Error("Could not save pairing."); }
       this.ensureHost();
       return { invitation: `daemon-link:${Buffer.from(JSON.stringify(offer)).toString("base64url")}` };
@@ -221,6 +249,70 @@ export class PeerManager {
       this.data.peers = this.data.peers.filter((p) => p.id !== id); await this.persist();
       for (const forward of this.forwards.values()) if (forward.peerId === id) await this.disconnect(forward.id);
       return { ok: true as const };
+    });
+  }
+
+  async projectGrants() {
+    await this.ready;
+    return this.data.grants.map(({ id, label, projectIds }) => ({ id, label, projectIds: [...projectIds] }));
+  }
+
+  shareProjects(grantId: string, projectIds: string[]) {
+    return this.serialize(async () => {
+      if (!this.projects) throw new Error("Project transfers unavailable.");
+      const grant = this.data.grants.find((entry) => entry.id === grantId);
+      if (!grant) throw new Error("Create a pairing on this host first.");
+      const ids = [...new Set(projectIds)];
+      if ((await this.projects.list(ids)).projects.length !== ids.length) throw new Error("Only registered Paseo projects can be shared.");
+      const previous = grant.projectIds; grant.projectIds = ids;
+      try { await this.persist(); } catch (error) { grant.projectIds = previous; throw error; }
+      return { ok: true as const };
+    });
+  }
+
+  private async projectRequest(id: string, action: string, input: object) {
+    await this.ready;
+    if (this.stopped) throw new Error("Host plugin is stopping.");
+    const { offer } = this.peer(id);
+    let result: unknown;
+    const { ws } = await openRelay({ ...offer, auth: { grantId: offer.grantId, token: offer.token, action, ...input } }, (data) => { result = JSON.parse(String(data)); });
+    ws.terminate(); return result;
+  }
+
+  async projectList(id: string) {
+    return z.object({ projects: z.array(Project).max(100) }).parse(await this.projectRequest(id, "projects", {}));
+  }
+  async projectPreview(id: string, projectId: string) {
+    return Preview.parse(await this.projectRequest(id, "project-preview", { projectId }));
+  }
+  async projectDownload(id: string, tokenId: string): Promise<{ preview: z.infer<typeof Preview>; bytes: Buffer }> {
+    await this.ready;
+    if (this.stopped) throw new Error("Host plugin is stopping.");
+    const { offer } = this.peer(id);
+    return new Promise((resolve, reject) => {
+      let preview: z.infer<typeof Preview> | undefined, received = 0, finished = false;
+      const chunks: Buffer[] = [];
+      let socket: WebSocket | undefined;
+      const fail = () => { if (!finished) { finished = true; clearTimeout(timer); socket?.terminate(); reject(new Error("Project transfer interrupted. Preview and retry.")); } };
+      const timer = setTimeout(fail, 120_000);
+      void openRelay({ ...offer, auth: { grantId: offer.grantId, token: offer.token, action: "project-download", tokenId } }, (data, _channel, ws) => {
+        socket = ws;
+        if (finished) { ws.terminate(); return; }
+        if (!preview) {
+          preview = Preview.parse(JSON.parse(String(data)));
+          if (preview.token !== tokenId) { fail(); return; }
+          this.channels.add(ws); ws.once("close", () => { this.channels.delete(ws); fail(); });
+          return;
+        }
+        if (typeof data === "string") { fail(); return; }
+        if (!data.byteLength) {
+          if (received !== preview.bytes) { fail(); return; }
+          finished = true; clearTimeout(timer); ws.close(); resolve({ preview, bytes: Buffer.concat(chunks, received) }); return;
+        }
+        received += data.byteLength;
+        if (received > preview.bytes || received > 32 * 1024 * 1024) { fail(); return; }
+        chunks.push(Buffer.from(data));
+      }).catch(fail);
     });
   }
 

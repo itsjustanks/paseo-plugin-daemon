@@ -2,13 +2,15 @@
 
 **Open a remote project's dev server on your computer's localhost, directly from Paseo.**
 
-Find running project apps, pair two Paseo hosts, and open a private local URL. Check daemon health
-and project processes in the same plugin, with guided setup and optional routes for other devices.
+Find running project apps, pair two Paseo hosts, and open a private local URL. Receive selected Git
+projects with a preview and history. Check host health from the same place.
+
+The plugin is **Daemon Link**; its sidebar entry is **Hosts**, matching Paseo's host terminology.
 
 [Install](#install) · [First connection](#your-first-connection) · [Screenshots](#inside-the-plugin) ·
 [Troubleshooting](#troubleshooting) · [Contributing](#development-and-contributing)
 
-![Local Projects groups fictional running apps by project.](docs/screenshots/local-projects.png)
+![Hosts overview with fictional projects and guided next steps.](docs/screenshots/overview.png)
 
 *Actual plugin components rendered with fictional data. Every screenshot in this repository uses
 an isolated preview: no real accounts, host addresses, project names, credentials, or conversations.*
@@ -19,6 +21,8 @@ an isolated preview: no real accounts, host addresses, project names, credential
 - **Private localhost access.** Pair hosts once, then open a remote app without typing an SSH command.
 - **A route for other devices.** Temporary browser links for a phone or guest device; saved SSH forwards
   when you already use SSH keys.
+- **Reviewed project transfers.** Separate sharing permissions, a commit preview, isolated checkouts,
+  and persistent transfer history. Nothing syncs automatically.
 - **Useful health information.** Whole-machine CPU and memory, alongside searchable project processes
   with sortable columns and 15 rows per page.
 - **Guidance where you need it.** Descriptive tabs, setup checks, clear empty states, and recovery steps.
@@ -34,7 +38,7 @@ paseo plugin add itsjustanks/paseo-plugin-daemon
 paseo plugin ls
 ```
 
-Enable plugins if needed, confirm **daemon-link** is `running`, and open **Daemon Link** from the
+Enable plugins if needed, confirm **daemon-link** is `running`, and open **Hosts** from the
 sidebar. Paseo installs dependencies in its managed checkout; no manual build or daemon restart
 is needed. The plugin also provides a workspace panel and a Command Center entry.
 
@@ -70,13 +74,13 @@ project's terminal. For example:
 npm run dev
 ```
 
-Keep that terminal running. Open **Daemon Link → Local Projects** with the server selected.
+Keep that terminal running. Open **Hosts → Local Projects** with the server selected.
 Recognized apps appear automatically with their project, framework, and listening port.
 The plugin discovers an existing server; opening the panel does not start your project for you.
 
 ### 2. Pair the two hosts
 
-On the development server, open **Dev Relay → Private localhost → Create pairing code**.
+On the development server, open **Hosts → Dev Relay → Private localhost → Pair hosts → Create pairing code**.
 Use Paseo's host picker to select your **laptop's daemon**, then paste the code under **Pair host**.
 
 Pairing establishes permission for one host to discover and access the other's eligible project
@@ -85,8 +89,9 @@ in the other direction if both computers will host apps.
 
 ### 3. Open the remote app
 
-Keep your laptop selected. Choose the paired development server and press **Open localhost**
-beside its app. Use the exact URL shown. If the preferred local port is occupied, Daemon Link
+Keep your laptop selected. Choose the paired development server and press **Create local link**
+beside its app. **Copy local URL** and open it on your laptop, or use **Open in this browser**
+when this browser runs on that same computer. If the preferred local port is occupied, Daemon Link
 chooses a free one instead.
 
 **A local port belongs to the selected daemon's computer.** Selecting the remote daemon does not
@@ -97,18 +102,24 @@ create a port on your laptop. The host label and in-app guide explain this throu
 **Close forward** removes local access while leaving the project server running. **Revoke access**
 on the hosting daemon removes a peer's permission and closes its active connections.
 
-Pairings persist. Active forwards close when the plugin stops; use **Open localhost** to recreate
-them. After a plugin or daemon restart, open Daemon Link on the hosting daemon once to initialize
+Pairings persist. Active forwards close when the plugin stops; use **Create local link** to recreate
+them. After a plugin or daemon restart, open Hosts on the hosting daemon once to initialize
 project access. Both plugins must remain running while you use a connection.
 
 ## Inside the plugin
 
 | Tab | What to do here |
 | --- | --- |
+| **Overview** | Start with a task, see host totals, and follow the next setup step. |
 | **Local Projects** | Find and search running apps on the selected host; choose one to access from another device. |
 | **Dev Relay** | Pair hosts, open localhost forwards, or choose a temporary browser link or saved SSH forward. |
+| **Project Sync** | Share selected Git projects, review a transfer, and inspect receive history. |
 | **Daemon Health** | Check CPU and memory; search, sort, and inspect processes associated with Paseo projects. |
 | **Guide & Setup** | Follow the walkthrough and check project discovery, pairing, relay state, and optional helpers. |
+
+### Local Projects: apps with a recognizable owner
+
+![Local Projects with fictional running apps.](docs/screenshots/local-projects.png)
 
 ### Dev Relay: choose an access method
 
@@ -119,6 +130,10 @@ project access. Both plugins must remain running while you use a connection.
 | **Private localhost** | Two Paseo computers; HMR, WebSockets, SSE | Daemon Link on both hosts and one-time pairing |
 | **Temporary browser link** | Phone or guest device; another network route | Explicit helper setup on the app host |
 | **Saved SSH forward** | Existing SSH workflow | SSH keys/agent and a trusted known host |
+
+**Remote apps**, **Pair hosts**, and **Manage access** keep everyday connections separate from
+pairing and revocation. Creating a link shows the receiving host and a copyable URL; it does not
+automatically open a browser on a potentially different computer.
 
 Private forwarding uses an encrypted channel over Paseo's relay with outbound TLS WebSockets,
 usually on port 443. Machines do not need to share a LAN or accept new inbound ports.
@@ -131,6 +146,35 @@ publishes an app. Cloudflare Quick Tunnels do not support SSE and cannot bypass 
 
 Saved SSH forwarding uses your existing keys and strict host verification. It does not store SSH
 passwords or wait on a hidden password prompt.
+
+### Project Sync: preview before receiving
+
+![A fictional project transfer preview.](docs/screenshots/project-sync.png)
+
+This brings the Sync plugin's selected-project, preview, and history workflow into Hosts using
+its existing encrypted relay. Install this version on both hosts; no SSH credentials are needed.
+
+1. Pair the hosts under **Dev Relay → Private localhost → Pair hosts**.
+2. Select the source in Paseo. Open **Project Sync → Share with a host** and allow a project for
+   the intended pairing code. Existing pairings start with **no project access**.
+3. Select the receiving host. Under **Receive a project**, choose the source and preview a project.
+4. Review its commit, history count, and size. Press **Receive into a new checkout** when ready.
+5. **Transfer history** shows the result and a copyable directory. Add that directory as a Paseo
+   project when you want to work on it.
+
+Each receive is a new checkout under the plugin's private state directory. Existing projects,
+branches, and working files stay in place. One receive runs at a time; the latest 50 results persist.
+Clearing project permission stops future downloads. It cannot remove a copy already received.
+
+The first version transfers the selected repository root's **committed HEAD and reachable history**,
+up to **32 MiB**, with a preview that expires in ten minutes. It verifies the received bytes against
+that preview. Projects must be registered in Paseo at their Git repository root.
+
+This is an explicit transfer workflow, not continuous folder mirroring, a mounted drive, or an
+automatic backup. It does not include uncommitted or untracked files, chat sessions, daemon settings,
+Git LFS objects, or submodule contents. **Files already committed to Git travel with its history**,
+including private data or secrets someone committed. Review the project before granting access.
+No project permission or transfer is enabled by installing or updating the plugin.
 
 ### Daemon Health: manageable process lists
 
@@ -179,6 +223,7 @@ framework handling, pressure thresholds, and known limitations.
 | Capability | Paseo 0.7.2 | Paseo 0.8 preview |
 | --- | --- | --- |
 | Project discovery, forwarding, monitoring, guides | Yes | Yes |
+| Reviewed Git transfers and history | Yes | Yes |
 | Sidebar, workspace panel, Command Center | Yes | Yes |
 | `/daemon-link` composer shortcut | Hidden | Shown when the host provides the API |
 
@@ -192,10 +237,13 @@ host's actual capabilities, so a newer host never lends its APIs to an older one
 | --- | --- |
 | No apps listed | Start the app in a registered project. Refresh Local Projects; check the selected host. |
 | Custom server is missing | Configure it as a Paseo service script with its listening port. |
-| Project access is unavailable | Open Daemon Link on that host after restart; refresh project access. |
+| Project access is unavailable | Open Hosts on that host after restart; refresh project access. |
 | Localhost opens the wrong app | Select your receiving daemon and use the exact URL beside its forward. |
 | Private connection fails | Keep both plugins running; check the peer and outbound relay access. |
 | Phone has no Paseo daemon | Create a temporary browser link on the app host. |
+| No shared projects | Grant project access on the source, separately from dev relay pairing. |
+| Preview cannot be prepared | Register the Git root; ensure it has a commit and history fits the size limit. |
+| Transfer failed | Check both hosts, preview again, and inspect Transfer history. Existing projects stay intact. |
 | SSH reports authentication failure | Check SSH keys/agent and known hosts; password prompts are unsupported. |
 | Next.js blocks a dev resource | Use the displayed localhost URL; custom hostnames need explicit `allowedDevOrigins`. |
 | Live updates fail on a browser link | Use private forwarding for SSE; check app URLs and cookie settings. |
@@ -231,6 +279,12 @@ See [screenshot instructions](docs/screenshots/README.md) before refreshing publ
 The runtime ID is `daemon-link`; the package name is `paseo-plugin-daemon`. Install a local checkout
 in a development daemon with `paseo plugin install /absolute/path/to/checkout --id daemon-link`.
 Use `paseo plugin reload daemon-link` after source changes; a daemon restart is unnecessary.
+
+## Acknowledgments
+
+The selected-project, preview, and history workflow draws on
+[itsjustanks/paseo-plugin-sync](https://github.com/itsjustanks/paseo-plugin-sync).
+The transfer implementation here uses Daemon Link's relay and separate per-project permissions.
 
 ## License
 

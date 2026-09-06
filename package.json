@@ -1,9 +1,9 @@
 {
   "name": "paseo-plugin-daemon",
-  "description": "Daemon Link for Paseo: encrypted daemon-to-daemon localhost forwarding, monitoring, and optional tunnel fallbacks.",
+  "description": "Daemon Link for Paseo: Hosts: private localhost links, reviewed Git project transfers, and project-scoped monitoring.",
   "private": true,
   "type": "module",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "license": "MIT",
   "repository": {
     "type": "git",

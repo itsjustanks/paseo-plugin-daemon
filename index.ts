@@ -1,3 +1,4 @@
+import * as sync from "./shared/sync";
 import type { PluginContext } from "@getpaseo/plugin";
 import { monitorForceStop, monitorSnapshot, monitorStop } from "./shared/contracts";
 import * as rpc from "./shared/link";
@@ -12,6 +13,13 @@ import { DaemonSurface } from "./client/legacy.client";
 // client bundle. typeof keeps initialization and cleanup safe after that removal.
 export default function contribute(plugin: PluginContext) {
   const runtime = typeof createRuntime === "function" ? createRuntime() : null;
+  plugin.handle(sync.syncStatus, (_input, context) => runtime!.withContext(context, async () => {
+    await runtime!.scope.refresh(); return { projects: runtime!.scope.status().projects.map((p) => ({ id: p.id, name: p.name })), history: await runtime!.transfers.history(), grants: await runtime!.peers.projectGrants() };
+  }));
+  plugin.handle(sync.syncShare, (input, context) => runtime!.withContext(context, () => runtime!.peers.shareProjects(input.grantId, input.projectIds)));
+  plugin.handle(sync.syncProjects, (input, context) => runtime!.withContext(context, () => runtime!.peers.projectList(input.peerId)));
+  plugin.handle(sync.syncPreview, (input, context) => runtime!.withContext(context, () => runtime!.transfers.inspect(runtime!.peers, input.peerId, input.projectId)));
+  plugin.handle(sync.syncReceive, (input, context) => runtime!.withContext(context, () => runtime!.transfers.receive(runtime!.peers, input.peerId, input.token)));
   plugin.handle(monitorSnapshot, runtime!.monitor.snapshot);
   plugin.handle(monitorStop, runtime!.monitor.stop);
   plugin.handle(monitorForceStop, runtime!.monitor.forceStop);
@@ -33,14 +41,14 @@ export default function contribute(plugin: PluginContext) {
   plugin.handle(peer.peerForward, ({ id, port }, context) => runtime!.withContext(context, () => runtime!.peers.forward(id, port)));
   plugin.handle(peer.peerDisconnect, ({ id }, context) => runtime!.withContext(context, () => runtime!.peers.disconnect(id)));
   plugin.addSurface("daemon-link", DaemonSurface);
-  plugin.addSidebarItem({ id: "daemon-link", title: "Daemon Link", icon: "Network", surface: "daemon-link" });
+  plugin.addSidebarItem({ id: "daemon-link", title: "Hosts", icon: "Network", surface: "daemon-link" });
   plugin.addWorkspacePanel({
-    id: "daemon-link", title: "Daemon Link", icon: "Network", context: "workspace", Component: DaemonSurface,
+    id: "daemon-link", title: "Hosts", icon: "Network", context: "workspace", Component: DaemonSurface,
   });
   plugin.addCommandCenterItem({
-    id: "open-daemon-link", title: "Open Daemon Link", icon: "Network", context: "global",
-    keywords: ["monitor", "ports", "dev server", "tunnel", "ssh", "cpu", "memory"],
+    id: "open-daemon-link", title: "Open Hosts", icon: "Network", context: "global",
+    keywords: ["hosts", "sync", "daemon link", "monitor", "ports", "dev server", "tunnel", "ssh", "cpu", "memory"],
     onSelect({ openSurface }) { openSurface("daemon-link"); },
   });
-  return async () => { if (runtime) await Promise.all([runtime.links.close(), runtime.peers.close()]); };
+  return async () => { if (runtime) await Promise.all([runtime.links.close(), runtime.peers.close(), runtime.transfers.close()]); };
 }

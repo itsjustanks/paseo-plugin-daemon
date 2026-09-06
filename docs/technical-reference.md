@@ -1,3 +1,6 @@
+> The sidebar is now **Hosts**. For the current navigation and Project Sync workflow,
+> see the [README](../README.md). Runtime identifiers below remain `daemon-link`.
+
 # Daemon Link technical reference
 
 Bring remote dev servers to your computer's localhost, and monitor each daemon from Paseo.

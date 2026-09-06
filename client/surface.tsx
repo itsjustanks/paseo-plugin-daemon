@@ -142,16 +142,16 @@ function usePendingStops(snapshot: Snapshot | undefined) {
 
 // ----------------------------------------------------------------- surface
 
-export function MonitorSurface({ theme, layout }: PluginSurfaceProps) {
+export function MonitorSurface({ theme, layout, host }: PluginSurfaceProps) {
   const t = useUi(theme, layout.compact);
   return (
     <TokensProvider value={t}>
-      <MonitorBody />
+      <MonitorBody key={host.id} hostId={host.id} />
     </TokensProvider>
   );
 }
 
-function MonitorBody() {
+function MonitorBody({ hostId }: { hostId: string }) {
   const t = useTokens();
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -178,7 +178,7 @@ function MonitorBody() {
     [tab, query, sort, direction, offset],
   );
   const snapshotQuery = useQuery({
-    queryKey: [...QUERY_KEY, input],
+    queryKey: [...QUERY_KEY, hostId, input],
     queryFn: () => rpc.snapshot(input),
     refetchInterval: POLL_INTERVAL_MS,
     refetchIntervalInBackground: false,

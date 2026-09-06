@@ -1,0 +1,12 @@
+import { defineRpc } from "@getpaseo/plugin";
+import { z } from "zod";
+const Empty = z.object({});
+const Id = z.string().uuid();
+export const Project = z.object({ id: z.string().min(1).max(256), name: z.string().max(200) });
+export const Preview = z.object({ token: Id, project: Project, head: z.string().regex(/^[a-f0-9]{40,64}$/), commits: z.number().int().positive(), bytes: z.number().int().positive().max(32 * 1024 * 1024), sha256: z.string().regex(/^[a-f0-9]{64}$/), expiresAt: z.number() });
+export const Transfer = z.object({ id: Id, peerId: Id, projectName: z.string(), head: z.string(), startedAt: z.number(), finishedAt: z.number().nullable(), state: z.enum(["receiving", "done", "failed", "interrupted"]), bytes: z.number(), directory: z.string().nullable(), message: z.string() });
+export const syncStatus = defineRpc({ name: "daemon-link.sync.status", input: Empty, output: z.object({ projects: z.array(Project), history: z.array(Transfer), grants: z.array(z.object({ id: Id, label: z.string(), projectIds: z.array(z.string()) })) }) });
+export const syncShare = defineRpc({ name: "daemon-link.sync.share", input: z.object({ grantId: Id, projectIds: z.array(z.string().min(1).max(256)).max(100) }), output: z.object({ ok: z.literal(true) }) });
+export const syncProjects = defineRpc({ name: "daemon-link.sync.projects", input: z.object({ peerId: Id }), output: z.object({ projects: z.array(Project).max(100) }) });
+export const syncPreview = defineRpc({ name: "daemon-link.sync.preview", input: z.object({ peerId: Id, projectId: z.string().min(1).max(256) }), output: Preview });
+export const syncReceive = defineRpc({ name: "daemon-link.sync.receive", input: z.object({ peerId: Id, token: Id }), output: Transfer });

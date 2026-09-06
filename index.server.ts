@@ -1,3 +1,4 @@
+import * as sync from "./shared/sync";
 import type { PluginServerContext } from "@getpaseo/plugin";
 import { monitorForceStop, monitorSnapshot, monitorStop } from "./shared/contracts";
 import * as rpc from "./shared/link";
@@ -7,6 +8,13 @@ import { installCloudflared } from "./server/binaries";
 
 export default function contribute(server: PluginServerContext) {
   const runtime = createRuntime();
+  server.handle(sync.syncStatus, (_input, context) => runtime!.withContext(context, async () => {
+    await runtime!.scope.refresh(); return { projects: runtime!.scope.status().projects.map((p) => ({ id: p.id, name: p.name })), history: await runtime!.transfers.history(), grants: await runtime!.peers.projectGrants() };
+  }));
+  server.handle(sync.syncShare, (input, context) => runtime!.withContext(context, () => runtime!.peers.shareProjects(input.grantId, input.projectIds)));
+  server.handle(sync.syncProjects, (input, context) => runtime!.withContext(context, () => runtime!.peers.projectList(input.peerId)));
+  server.handle(sync.syncPreview, (input, context) => runtime!.withContext(context, () => runtime!.transfers.inspect(runtime!.peers, input.peerId, input.projectId)));
+  server.handle(sync.syncReceive, (input, context) => runtime!.withContext(context, () => runtime!.transfers.receive(runtime!.peers, input.peerId, input.token)));
   server.handle(monitorSnapshot, runtime.monitor.snapshot);
   server.handle(monitorStop, runtime.monitor.stop);
   server.handle(monitorForceStop, runtime.monitor.forceStop);
@@ -27,5 +35,5 @@ export default function contribute(server: PluginServerContext) {
   server.handle(peer.peerServices, ({ id }, context) => runtime.withContext(context, () => runtime.peers.services(id)));
   server.handle(peer.peerForward, ({ id, port }, context) => runtime.withContext(context, () => runtime.peers.forward(id, port)));
   server.handle(peer.peerDisconnect, ({ id }, context) => runtime.withContext(context, () => runtime.peers.disconnect(id)));
-  return async () => { await Promise.all([runtime.links.close(), runtime.peers.close()]); };
+  return async () => { await Promise.all([runtime.links.close(), runtime.peers.close(), runtime.transfers.close()]); };
 }
