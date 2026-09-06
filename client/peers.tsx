@@ -38,7 +38,7 @@ export function Peers({ hostId, hostLabel, initialView = "apps", onBrowserLink, 
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>{([ ["apps", "Remote apps"], ["pair", "Pair hosts"], ["access", "Manage access"] ] as const).map(([id, label]) => <Button key={id} label={label} variant={view === id ? "primary" : "secondary"} onPress={() => setView(id)} />)}</View>
     {query.isError && <Notice icon="CircleAlert" tone="danger" action={<Button label="Retry paired hosts" onPress={() => { void query.refetch(); }} />}>{errorText(query.error)}</Notice>}
     {mutation.isError && <Notice icon="CircleAlert" tone="danger">{errorText(mutation.error)}</Notice>}
-    {connectionError && <Notice icon="WifiOff" tone="danger">{connectionError}</Notice>}
+    {!!connectionError && <Notice icon="WifiOff" tone="danger">{connectionError}</Notice>}
     {query.isPending && <Text style={t.text.body}>Loading paired hosts…</Text>}
     {view === "apps" && <>
       <Card><Text style={t.text.heading}>A local link on {hostLabel}</Text><Text style={t.text.body}>Choose where the app runs below. Its local link will belong to {hostLabel}. Open that link in a browser on the same computer.</Text><Text style={t.text.caption}>If you are browsing from a phone or a different computer, switch to the app's host and create a temporary browser link.</Text></Card>
