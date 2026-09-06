@@ -1,217 +1,210 @@
 # Daemon Link for Paseo
 
-Bring remote dev servers to your computer's localhost, and monitor each daemon from Paseo.
+**Open a remote project's dev server on your computer's localhost, directly from Paseo.**
 
-One plugin for **Paseo 0.7.2 and the upcoming 0.8 API**. Both versions provide private localhost
-forwarding, service discovery, fallback tunnels, and monitoring. Hosts with the 0.8 composer API
-also get a `/daemon-link` shortcut; it appears only when that capability is available.
-The package is `paseo-plugin-daemon`; the runtime ID and sidebar surface are `daemon-link`.
+Find running project apps, pair two Paseo hosts, and open a private local URL. Check daemon health
+and project processes in the same plugin, with guided setup and optional routes for other devices.
 
-## What each tab does
+[Install](#install) · [First connection](#your-first-connection) · [Screenshots](#inside-the-plugin) ·
+[Troubleshooting](#troubleshooting) · [Contributing](#development-and-contributing)
 
-| Tab | Use it for |
-| --- | --- |
-| **Local Projects** | Find verified dev servers grouped by the selected host's Paseo projects. |
-| **Dev Relay** | Pair hosts for private localhost access, create temporary browser links, or save SSH forwards. |
-| **Daemon Health** | Read whole-machine CPU/memory and a sortable, paginated table of project processes. |
-| **Guide & Setup** | Follow the start → pair → open walkthrough, check setup, and troubleshoot missing apps. |
+![Local Projects groups fictional running apps by project.](docs/screenshots/local-projects.png)
 
-“Local” always means the selected Paseo host, which may be a remote server. To open a remote app on
-your computer's localhost, select your computer's daemon in Dev Relay first. Closing a forward or
-browser link only closes access; the dev server keeps running.
+*Actual plugin components rendered with fictional data. Every screenshot in this repository uses
+an isolated preview: no real accounts, host addresses, project names, credentials, or conversations.*
 
-## Project scope and process controls
+## What you get
 
-The backend verifies directories against Paseo's project/workspace registry through the plugin SDK.
-It matches directory boundaries, resolves registered roots, and includes managed worktrees. Home and
-filesystem-root projects are too broad and are excluded. Unrelated processes and infrastructure
-listeners are hidden. If registry verification fails, project sharing and process controls fail closed.
+- **Project apps you can recognize.** Running servers grouped by registered Paseo projects and worktrees.
+- **Private localhost access.** Pair hosts once, then open a remote app without typing an SSH command.
+- **A route for other devices.** Temporary browser links for a phone or guest device; saved SSH forwards
+  when you already use SSH keys.
+- **Useful health information.** Whole-machine CPU and memory, alongside searchable project processes
+  with sortable columns and 15 rows per page.
+- **Guidance where you need it.** Descriptive tabs, setup checks, clear empty states, and recovery steps.
 
-- Recognized web dev servers and running Paseo service scripts are eligible for sharing.
-- Unknown project listeners remain read-only and cannot be shared. Register a custom server as a
-  Paseo service script with its port so the plugin can verify its purpose.
-- Agent tools and other project processes are read-only. Manage agents from their Paseo agent tabs.
-- Stop controls appear in Daemon Health only, for verified project dev servers, after confirmation.
-  Stop/force-stop rechecks current project membership and the process identity; excluded descendants
-  and their children are skipped. Existing same-user and daemon-protection rules still apply.
-- Process headings sort by name, PID, CPU, or memory in either direction. Pages contain 15 rows;
-  desktop column headings remain above the scrolling rows.
-
-The project registry refreshes while the plugin is used, including during service lease checks.
-After a plugin/daemon restart, open Daemon Link on that host once to initialize the borrowed SDK
-session. Incoming project access remains unavailable until then. This is a current plugin API
-lifecycle limitation; daemon credentials are never stored to work around it.
-
-## Platform support
-
-Remote service discovery supports **Linux and macOS**. Receiving relay forwards uses portable Node APIs;
-Windows receiving hosts are not yet verified. On an unsupported platform the
-plugin loads and says so, rather than showing broken or invented numbers.
-
-## Trust and security
-
-**Daemon Link is a trusted, unsandboxed plugin.** Paseo runs plugin server code with the same
-privileges as the Paseo daemon itself — there is no sandbox boundary between Monitor's code and
-your machine. That means:
-
-- Only install plugins you trust, from sources you trust. Read the source before installing,
-  especially anything that touches processes.
-- Daemon Link samples same-user process information to attribute work to verified Paseo projects.
-  Only project-associated rows reach its UI. It cannot see or touch other users' processes.
-- Daemon Link can send stop/kill signals to verified project dev servers — see [Safe
-stop](#safe-stop-and-its-limits) below for
-  exactly what that can and can't do.
-
-If you wouldn't run a piece of code directly on your machine with your own user privileges, don't
-install it as a Paseo plugin either.
-
-## Privacy and redaction
-
-Monitor is built to describe your machine, not leak it:
-
-- Raw command-line arguments never leave the server: they're hashed for identity checks, and the
-  version sent to the UI has secret-shaped values (tokens, passwords, API keys, auth headers,
-  credentials embedded in URLs) stripped before it ever crosses the plugin boundary. The raw argv
-  hash itself never crosses that boundary either — action tokens carry a keyed HMAC proof computed
-  over the hash, not the hash, so a client holding a token still can't learn or replay the
-  underlying argv.
-- Home directory paths are shown relative to `~`, never as an absolute path that might reveal your
-  username or machine layout.
-- Nothing sensitive — raw argv, environment variables, action tokens, or secrets — is written to
-  plugin logs.
-
-## Pressure and thresholds
-
-Monitor doesn't compute a single opaque "health score." Instead:
-
-- **System pressure** (`normal | high | critical`) reflects sustained CPU saturation and memory
-  availability — using OS pressure signals (Linux PSI, macOS memory-pressure) where the platform
-  provides them, plus swap activity.
-- **Per-process impact** (`idle | normal | high | pressure-driver`) is only escalated to "pressure
-  driver" when the machine is *actually* under matching system pressure and that process is a
-  sustained top contributor — not just because a number looks big for a moment.
-- Every label comes with a short, human reason (`CPU 96% for 14s`, `12% of memory`) so you can
-  check Monitor's homework. Sorting is always by a real column (CPU, memory, name, PID) — never by
-  the hidden score.
-
-## Safe stop and its limits
-
-Monitor's stop/force-stop actions are **same-user identity-bound**: they can only signal processes
-owned by the same OS user that Paseo is running as. Before sending a signal, Monitor re-verifies
-the process's identity (PID, start time, and owning user) so a reused PID or a process that
-already exited can't be hit by mistake.
-
-What this means in practice:
-
-- **No cross-user process control.** Monitor cannot stop or signal a process owned by a different
-  user, even if it's technically visible to the OS (e.g. via `ps`).
-- **Descendants are re-verified individually, not inherited.** When a stop/force-stop cascades to
-  child processes, each descendant is freshly re-matched by owning user and process start identity
-  right before it's signaled — a descendant is never trusted just because its parent matched.
-- **No container or namespace escape.** Monitor only ever signals processes visible to it through
-  the normal process table — it does not reach into containers or other PID namespaces.
-- **Graceful first, always.** Stop always sends a graceful termination signal first. Force-stop is
-  a separate, explicitly-confirmed action, and only becomes available after a graceful attempt has
-  been made and given a chance to work.
-- **Best-effort protection for important processes.** Monitor tries to protect its own process,
-  Paseo itself, and their ancestors from being targeted — but see
-  [Known limitations](#known-limitations) below for the honest edge cases.
+Agent Browser is not required. Daemon Link forwards traffic; your normal browser renders the app.
 
 ## Install
 
-In **Settings → Plugins**, add `itsjustanks/paseo-plugin-daemon`, or run:
+Add `itsjustanks/paseo-plugin-daemon` in **Paseo → Settings → Plugins**, or use the CLI:
 
 ```sh
 paseo plugin add itsjustanks/paseo-plugin-daemon
 paseo plugin ls
 ```
 
-Enable plugins in Settings if necessary. Require `running` with no error, then open **Daemon Link**
-in the sidebar or workspace panel. Install on both machines for localhost forwarding. Paseo runs
-`npm ci --ignore-scripts` in its managed checkout automatically; no manual build is needed.
-No daemon restart or SSH setup is required. If the CLI asks for a daemon password, use the already
-connected app's Settings to install, or authenticate the CLI with your normal daemon password.
+Enable plugins if needed, confirm **daemon-link** is `running`, and open **Daemon Link** from the
+sidebar. Paseo installs dependencies in its managed checkout; no manual build or daemon restart
+is needed. The plugin also provides a workspace panel and a Command Center entry.
 
-The same checkout contains an isolated 0.7 entry and the 0.8 runtime entries. Each loader selects its
-own entry, so users do not choose branches. Compatibility is checked against 0.7.2 and pinned 0.8
-preview compiler source; the final 0.8 release and native mobile rendering still need verification.
+Plugins run as trusted code with your daemon's privileges. Install from a source you trust.
+For private localhost access, install this plugin on **both** computers running Paseo.
+A browser-only device can use a temporary browser link instead.
 
-## Version-aware features
+Update a Git-managed installation with:
 
-| Feature | Paseo 0.7.2 | Paseo 0.8 preview |
+```sh
+paseo plugin update daemon-link
+```
+
+## Your first connection
+
+Imagine a development server running Paseo and a laptop also running Paseo. The server hosts the
+app; the laptop receives a local port. You can manage either through Paseo's host picker.
+
+```text
+Development server                         Your laptop
+Paseo + Daemon Link                         Paseo + Daemon Link
+Project app on port 3000  <── encrypted ──  Local forward on port 3000
+                             relay                   ↑
+                                           Browser: localhost:3000
+```
+
+### 1. Start a project app
+
+On the development server, open a project in Paseo, then start its normal dev command in that
+project's terminal. For example:
+
+```sh
+npm run dev
+```
+
+Keep that terminal running. Open **Daemon Link → Local Projects** with the server selected.
+Recognized apps appear automatically with their project, framework, and listening port.
+The plugin discovers an existing server; opening the panel does not start your project for you.
+
+### 2. Pair the two hosts
+
+On the development server, open **Dev Relay → Private localhost → Create pairing code**.
+Use Paseo's host picker to select your **laptop's daemon**, then paste the code under **Pair host**.
+
+Pairing establishes permission for one host to discover and access the other's eligible project
+apps. It does not grant agent, file, process-control, or daemon-management access. Pair separately
+in the other direction if both computers will host apps.
+
+### 3. Open the remote app
+
+Keep your laptop selected. Choose the paired development server and press **Open localhost**
+beside its app. Use the exact URL shown. If the preferred local port is occupied, Daemon Link
+chooses a free one instead.
+
+**A local port belongs to the selected daemon's computer.** Selecting the remote daemon does not
+create a port on your laptop. The host label and in-app guide explain this throughout the flow.
+
+### 4. Finish or reconnect
+
+**Close forward** removes local access while leaving the project server running. **Revoke access**
+on the hosting daemon removes a peer's permission and closes its active connections.
+
+Pairings persist. Active forwards close when the plugin stops; use **Open localhost** to recreate
+them. After a plugin or daemon restart, open Daemon Link on the hosting daemon once to initialize
+project access. Both plugins must remain running while you use a connection.
+
+## Inside the plugin
+
+| Tab | What to do here |
+| --- | --- |
+| **Local Projects** | Find and search running apps on the selected host; choose one to access from another device. |
+| **Dev Relay** | Pair hosts, open localhost forwards, or choose a temporary browser link or saved SSH forward. |
+| **Daemon Health** | Check CPU and memory; search, sort, and inspect processes associated with Paseo projects. |
+| **Guide & Setup** | Follow the walkthrough and check project discovery, pairing, relay state, and optional helpers. |
+
+### Dev Relay: choose an access method
+
+![Dev Relay explains private localhost access between fictional hosts.](docs/screenshots/dev-relay.png)
+
+| Method | Best fit | What it requires |
 | --- | --- | --- |
-| Pair hosts and open localhost services | Yes | Yes |
-| Monitor, temporary HTTPS links, saved SSH forwards | Yes | Yes |
+| **Private localhost** | Two Paseo computers; HMR, WebSockets, SSE | Daemon Link on both hosts and one-time pairing |
+| **Temporary browser link** | Phone or guest device; another network route | Explicit helper setup on the app host |
+| **Saved SSH forward** | Existing SSH workflow | SSH keys/agent and a trusted known host |
+
+Private forwarding uses an encrypted channel over Paseo's relay with outbound TLS WebSockets,
+usually on port 443. Machines do not need to share a LAN or accept new inbound ports.
+You may configure a compatible self-hosted relay using `PASEO_DAEMON_LINK_RELAY` on both hosts.
+
+Temporary browser links use an authenticated HTTPS gate and expire after 30 minutes in the UI.
+The optional Cloudflare helper is pinned and checksum-verified, and installed only in the plugin's
+user state directory. Links are created explicitly; a failed private connection never silently
+publishes an app. Cloudflare Quick Tunnels do not support SSE and cannot bypass every firewall.
+
+Saved SSH forwarding uses your existing keys and strict host verification. It does not store SSH
+passwords or wait on a hidden password prompt.
+
+### Daemon Health: manageable process lists
+
+![Daemon Health shows sortable, paginated fictional project processes.](docs/screenshots/daemon-health.png)
+
+Click **Process**, **PID**, **CPU**, or **Memory** to sort; click again to reverse the order.
+Search by process or project, and use the page controls to browse 15 rows at a time. Expand a row
+for details. Agents and unknown project tools are read-only; manage agents from their Paseo tabs.
+
+Stop controls appear only for recognized project servers and require confirmation. The backend
+rechecks project membership and process identity before acting. Force-stop is available only
+after a graceful stop attempt.
+
+### Guide & Setup: start with the next step
+
+![Guide and Setup on a narrow screen with a light theme.](docs/screenshots/guide-mobile.png)
+
+The guide explains which host to select, how to start a project server, how pairing works, and
+what to try when discovery or a connection fails. Setup checks report observed state rather than
+assuming that a saved pairing means the other machine is online.
+
+## Scope, privacy, and limits
+
+Daemon Link verifies project directories and workspaces through Paseo's SDK, then matches them
+against the server's process working directories. A dev server started manually inside a registered
+project can qualify too; the plugin does not claim every matching process was launched by Paseo.
+
+- Unrelated listeners and infrastructure processes are hidden. Broad home-directory or filesystem-root
+  projects are excluded; register each project directory separately.
+- Unknown project tools and agents are read-only. Custom web servers can be registered as running
+  Paseo service scripts with explicit ports.
+- If project verification fails, sharing and process controls pause. Global health stays readable.
+- Process commands are redacted before display, paths are home-relative, and secrets are not logged.
+- Pairing codes and temporary access links grant access. Share them only with the intended recipient.
+
+Discovery and process monitoring support **Linux and macOS**. Receiving forwards on Windows and
+native mobile rendering remain unverified. The plugin loads an explicit unsupported state where
+appropriate. macOS identity checks use the precision provided by that OS; process-stop race windows
+cannot be eliminated completely.
+
+See the [technical reference](docs/technical-reference.md) for process protections, relay behavior,
+framework handling, pressure thresholds, and known limitations.
+
+## Paseo compatibility
+
+| Capability | Paseo 0.7.2 | Paseo 0.8 preview |
+| --- | --- | --- |
+| Project discovery, forwarding, monitoring, guides | Yes | Yes |
 | Sidebar, workspace panel, Command Center | Yes | Yes |
-| `/daemon-link` workspace composer shortcut | Hidden | Shown when supported |
+| `/daemon-link` composer shortcut | Hidden | Shown when the host provides the API |
 
-The selected host's entry controls its features. Capability checks are local to that installation;
-switching hosts cannot borrow a newer host's APIs or credentials. Future additions should follow
-that same pattern instead of relying solely on a version string.
+One checkout supports both entry formats. Checks use the 0.7.2 compiler and pinned 0.8 preview
+source; final 0.8 release compatibility still needs verification. Features depend on the selected
+host's actual capabilities, so a newer host never lends its APIs to an older one.
 
-## Everyday use
+## Troubleshooting
 
-1. Start the dev server inside a Paseo project. On that host, open
-   **Dev Relay → Private localhost → Create pairing code**.
-2. Use Paseo's host picker to select the daemon running on your computer. Paste that code under
-   **Pair host**. This is one-time pairing; no SSH password, key setup, or Cloudflare account is needed.
-3. Choose the paired host and press **Open localhost** beside its detected service. The plugin binds
-   `127.0.0.1:<port>` on your computer and opens `http://localhost:<port>` in your browser.
-4. Leave both plugins running. **Close forward** closes the local port. **Revoke access** on the remote
-   daemon closes active connections and invalidates that pairing.
+| Symptom | What to check |
+| --- | --- |
+| No apps listed | Start the app in a registered project. Refresh Local Projects; check the selected host. |
+| Custom server is missing | Configure it as a Paseo service script with its listening port. |
+| Project access is unavailable | Open Daemon Link on that host after restart; refresh project access. |
+| Localhost opens the wrong app | Select your receiving daemon and use the exact URL beside its forward. |
+| Private connection fails | Keep both plugins running; check the peer and outbound relay access. |
+| Phone has no Paseo daemon | Create a temporary browser link on the app host. |
+| SSH reports authentication failure | Check SSH keys/agent and known hosts; password prompts are unsupported. |
+| Next.js blocks a dev resource | Use the displayed localhost URL; custom hostnames need explicit `allowedDevOrigins`. |
+| Live updates fail on a browser link | Use private forwarding for SSE; check app URLs and cookie settings. |
 
-If the requested local port is occupied, a free port is allocated and the actual URL is displayed.
-A local port belongs to the **selected daemon's machine**. Select your own computer's daemon to
-use localhost in that computer's browser. Phones and browser-only devices can use **Dev Relay → Temporary
-browser link** instead.
+Daemon Link does not patch project configuration. Applications with absolute URLs, OAuth callbacks,
+custom cookie domains, or HTTPS-only upstreams may need their own settings. Temporary browser links
+currently target HTTP services on IPv4 loopback.
 
-A pairing lets a trusted peer discover and connect to this OS user's verified Paseo project dev servers.
-It does not grant agent, file, process-control, or daemon-management access. Pair separately in the
-other direction if both machines should offer services. Pairings persist; active local listeners
-close when the plugin stops. After restart, Open localhost recreates them.
-
-The plugin uses its own identity and encrypted channel over Paseo's v2 relay protocol. It does not
-reuse, modify, or restart the native daemon's relay connection or any agent provider. The
-plugin API exposes only the selected host, so its saved app host credentials cannot be borrowed:
-a separate plugin pairing is currently required. A future host-selection API could remove that step.
-
-### Fallback routes
-
-- **Temporary browser link** in Dev Relay lists verified project apps and creates an authenticated HTTPS link.
-  One-time setup downloads a pinned, checksum-verified `cloudflared` binary into this user's plugin
-  state directory. Nothing is installed system-wide. Links expire after 30 minutes in the UI;
-  the RPC supports 15, 30, or 60 minutes. Disconnect, expiry, and plugin shutdown revoke access.
-- **Saved SSH forward** in Dev Relay is optional. Save a hostname or SSH config alias and a port mapping on
-  your local daemon.
-  It uses existing keys or an SSH agent, strict known-host verification, loopback binding, keepalives,
-  and reconnects. It never stores an SSH password or launches an invisible password prompt.
-- **Daemon Health** contains whole-machine metrics and verified project processes.
-- **Guide & Setup** explains the selected host, pairing, optional routes, and actionable setup checks.
-
-The private relay uses outbound WebSockets over TLS (normally port 443). Set
-`PASEO_DAEMON_LINK_RELAY=wss://your-relay.example` on both plugin hosts before creating pairings to
-use a compatible self-hosted relay. No particular machine IP, project hostname, or framework is
-embedded in forwarding. The default is Paseo's hosted relay; its availability and limits still apply.
-
-The Cloudflare fallback uses HTTP/2 over outbound TCP port 7844, including when UDP is blocked.
-It is a separate provider path, not guaranteed access through every firewall. It is never started
-silently after a private connection fails: select Temporary browser link explicitly to create a browser link.
-Quick Tunnels have provider limits, including no Server-Sent Events support; use private forwarding
-for SSE applications. The fallback is for temporary development access, not production hosting.
-
-### Framework behavior
-
-Private forwarding transports bytes, including HTTP, WebSockets/HMR, and SSE. It does not patch
-project files. Open the displayed `localhost` URL for Next.js's normal local-origin handling.
-A custom browser hostname may still require that framework's explicit development-origin setting.
-
-The temporary HTTPS gate validates the browser's origin and session before forwarding, then maps
-Host/Origin to the selected local service. It also forwards WebSocket upgrades. Unknown origins
-remain blocked; no wildcard internet origin is allowed. Frameworks that embed absolute URLs, OAuth
-callbacks, HTTPS-only upstreams, or custom cookie domains may need application-specific settings.
-The gate currently targets an HTTP upstream on IPv4 loopback.
-
-## Development
+## Development and contributing
 
 ```sh
 git clone https://github.com/itsjustanks/paseo-plugin-daemon.git
@@ -220,40 +213,25 @@ npm ci
 npm run typecheck
 npm test
 npm run test:compatibility
+npm run test:coverage
+npm run check:hygiene
 ```
 
-CI also runs `npm run test:coverage` (Vitest with V8 coverage and enforced thresholds) and
-`npm run check:hygiene` (no secret-shaped literals outside the redaction pattern source, no
-trailing whitespace or CRLF line endings, and Markdown wrapped to a readable width). Run both
-before opening a PR.
-
-Install the local checkout into a Paseo dev instance to iterate against the real app:
+For a safe UI preview:
 
 ```sh
-paseo plugin install /absolute/path/to/this-checkout --id daemon-link
-paseo plugin logs daemon-link
+npm run preview:ui
+# Open http://127.0.0.1:43197
 ```
 
-## Known limitations
+The preview substitutes plugin RPCs with fictional fixtures and does not connect to Paseo.
+Use `?light`, `?empty`, `?error`, or `?unverified` to inspect theme and recovery states.
+See [screenshot instructions](docs/screenshots/README.md) before refreshing public images.
 
-Monitor is honest about what it can't do in v1:
-
-- **Remote discovery requires Linux or macOS.** Receiving relay forwards on Windows is not yet verified.
-- **Same-user only.** No cross-user process visibility or control, by design — see
-  [Safe stop and its limits](#safe-stop-and-its-limits).
-- **No container/namespace escape.** Monitor cannot see or act on processes isolated in a
-  different container or PID namespace.
-- **macOS identity matching is second-precision.** Process start-time identity on macOS is only as
-  precise as the OS reports it, which is coarser than Linux; in rare cases this can make identity
-  re-verification slightly less exact.
-- **Orphan-process race.** Between reading a process snapshot and sending a signal, a process can
-  exit and its PID can be reused by an unrelated process. Monitor re-verifies identity immediately
-  before acting to minimize this window, but it cannot be closed to zero.
-- **Zombie processes.** A process that has exited but not yet been reaped by its parent will show
-  up as a zombie and cannot be meaningfully "stopped" — signaling it has no effect.
-- **Force-stop is never the first action.** Force-stop (`SIGKILL`) is only ever offered after a
-  graceful stop (`SIGTERM`) has already been attempted — there is no direct force-kill path.
+The runtime ID is `daemon-link`; the package name is `paseo-plugin-daemon`. Install a local checkout
+in a development daemon with `paseo plugin install /absolute/path/to/checkout --id daemon-link`.
+Use `paseo plugin reload daemon-link` after source changes; a daemon restart is unnecessary.
 
 ## License
 
-MIT
+[MIT](LICENSE)
