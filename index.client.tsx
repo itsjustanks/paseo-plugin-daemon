@@ -1,4 +1,4 @@
-import type { PluginClientContext, PluginSurfaceProps } from "@getpaseo/plugin";
+import type { PluginClientContext, PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { DaemonSurface } from "./client/daemon";
 
 export default function contribute(client: PluginClientContext) {

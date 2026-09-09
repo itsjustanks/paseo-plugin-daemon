@@ -1,5 +1,5 @@
 import { ProjectTransfers } from "./transfers";
-import type { PluginHandlerContext } from "@getpaseo/plugin";
+import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { createMonitorHandlers } from "./handlers";
 import { createServiceLease } from "./lease";
 import { LinkManager } from "./links";

@@ -1,5 +1,5 @@
 import * as sync from "./shared/sync";
-import type { PluginServerContext } from "@getpaseo/plugin";
+import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { monitorForceStop, monitorSnapshot, monitorStop } from "./shared/contracts";
 import * as rpc from "./shared/link";
 import * as peer from "./shared/peers";

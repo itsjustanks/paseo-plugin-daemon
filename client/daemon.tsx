@@ -1,7 +1,7 @@
 import { HostOverview } from "./overview";
 import { Transfers } from "./transfers";
-import { type PluginSurfaceProps, useRpc } from "@getpaseo/plugin";
-import { Icon, useToast } from "@getpaseo/plugin/react-native";
+import { type PluginSurfaceProps, useRpc } from "@getpaseo/plugin/client";
+import { Icon, useToast } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import React, { useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";

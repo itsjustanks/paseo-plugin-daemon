@@ -1,5 +1,5 @@
-import { useRpc } from "@getpaseo/plugin";
-import { useToast } from "@getpaseo/plugin/react-native";
+import { useRpc } from "@getpaseo/plugin/client";
+import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useMutation } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { Switch, Text, TextInput, View } from "react-native";

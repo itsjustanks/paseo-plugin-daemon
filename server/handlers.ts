@@ -1,4 +1,4 @@
-import type { PluginHandlerContext } from "@getpaseo/plugin";
+import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import type { ProjectScope } from "./scope";
 import { homedir } from "node:os";
 import { createAdapter } from "./adapter";

@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Clipboard, Text, View } from "react-native";
-import { useRpc } from "@getpaseo/plugin";
+import { useRpc } from "@getpaseo/plugin/client";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import * as rpc from "../shared/sync";
 import * as peer from "../shared/peers";

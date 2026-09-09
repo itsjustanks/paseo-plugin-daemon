@@ -1,1 +1,5 @@
-{ "id": "daemon-link", "build": [["npm", "ci", "--ignore-scripts"]] }
+{
+  "id": "daemon-link",
+  "requirements": { "paseo": ">=0.8.0" },
+  "build": [["npm", "ci", "--ignore-scripts"]]
+}

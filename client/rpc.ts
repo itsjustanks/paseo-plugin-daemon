@@ -6,7 +6,7 @@
  * `contracts.shared.ts` onto it, so contract drift is fixed here and nowhere
  * in the UI.
  */
-import { useRpc } from "@getpaseo/plugin";
+import { useRpc } from "@getpaseo/plugin/client";
 import { useCallback } from "react";
 import {
   monitorForceStop,
