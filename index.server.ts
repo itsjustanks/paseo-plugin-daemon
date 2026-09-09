@@ -5,9 +5,11 @@ import * as rpc from "./shared/link";
 import * as peer from "./shared/peers";
 import { createRuntime } from "./server/runtime";
 import { installCloudflared } from "./server/binaries";
+import { hostsSettings } from "./shared/settings";
 
 export default function contribute(server: PluginServerContext) {
   const runtime = createRuntime();
+  server.registerSettings(hostsSettings);
   server.handle(sync.syncStatus, (_input, context) => runtime!.withContext(context, async () => {
     await runtime!.scope.refresh(); return { projects: runtime!.scope.status().projects.map((p) => ({ id: p.id, name: p.name })), history: await runtime!.transfers.history(), grants: await runtime!.peers.projectGrants() };
   }));
