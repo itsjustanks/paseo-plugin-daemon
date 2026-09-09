@@ -220,16 +220,12 @@ framework handling, pressure thresholds, and known limitations.
 
 ## Paseo compatibility
 
-| Capability | Paseo 0.7.2 | Paseo 0.8 preview |
-| --- | --- | --- |
-| Project discovery, forwarding, monitoring, guides | Yes | Yes |
-| Reviewed Git transfers and history | Yes | Yes |
-| Sidebar, workspace panel, Command Center | Yes | Yes |
-| `/daemon-link` composer shortcut | Hidden | Shown when the host provides the API |
+Requires Paseo 0.8 or newer. Version 0.5.0 moved to the 0.8 runtime layout: `index.client.tsx`
+and `index.server.ts` entries with code under `client/`, `server/`, and `shared/`, and
+`requirements.paseo` set to `>=0.8.0`. Paseo 0.7 hosts should stay on 0.4.0.
 
-One checkout supports both entry formats. Checks use the 0.7.2 compiler and pinned 0.8 preview
-source; final 0.8 release compatibility still needs verification. Features depend on the selected
-host's actual capabilities, so a newer host never lends its APIs to an older one.
+Features depend on the selected host's actual capabilities, so a newer host never lends its APIs
+to an older one. The `/daemon-link` composer shortcut appears only when the host provides that API.
 
 ## Troubleshooting
 
