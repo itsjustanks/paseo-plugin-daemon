@@ -6,6 +6,11 @@
   options: close browser links when a workspace is archived (default on), what the workspace panel
   shows (this workspace only, or the whole host; default workspace), and the workspace panel refresh
   interval (5–120 seconds, default 20). The Command Center item **Configure Hosts** opens it.
+- The **Hosts** workspace tab is now workspace-aware. By default it lists only the dev servers,
+  processes, and browser links that belong to the open workspace's directory (or share one of its
+  ports), with the same stop and force-stop controls as Daemon Health, refreshed on the configured
+  interval. Set the panel scope to "Whole host" to get the full Hosts surface in the tab instead. The
+  sidebar surface is unchanged.
 
 ## 0.5.0 — 2026-09-09
 

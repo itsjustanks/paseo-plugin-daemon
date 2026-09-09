@@ -1,6 +1,7 @@
 import type { PluginClientContext, PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { DaemonSurface } from "./client/daemon";
 import { HostsSettings } from "./client/settings";
+import { WorkspacePanel } from "./client/workspace-panel";
 
 export default function contribute(client: PluginClientContext) {
   const shortcuts = typeof client.addSlashCommand === "function";
@@ -8,7 +9,7 @@ export default function contribute(client: PluginClientContext) {
   client.addSurface("daemon-link", Surface);
   client.addSidebarItem({ id: "daemon-link", title: "Hosts", icon: "Network", surface: "daemon-link" });
   client.addWorkspacePanel({
-    id: "daemon-link", title: "Hosts", icon: "Network", context: "workspace", Component: Surface,
+    id: "daemon-link", title: "Hosts", icon: "Network", context: "workspace", Component: WorkspacePanel,
   });
   client.addSettingsScreen({ id: "hosts", title: "Hosts", icon: "Network", Component: HostsSettings });
   client.addCommandCenterItem({

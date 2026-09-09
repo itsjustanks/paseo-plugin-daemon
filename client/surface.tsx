@@ -86,7 +86,7 @@ interface PendingStop {
  * control to Force Stop after the process outlives several polls. The server
  * gate is the real guard; this just decides when to show the option.
  */
-function usePendingStops(snapshot: Snapshot | undefined) {
+export function usePendingStops(snapshot: Snapshot | undefined) {
   const [pending, setPending] = useState<Record<string, PendingStop>>({});
   const lastAt = useRef<string | null>(null);
 
@@ -140,66 +140,21 @@ function usePendingStops(snapshot: Snapshot | undefined) {
   return { pending, mark, clear };
 }
 
-// ----------------------------------------------------------------- surface
+export const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-export function MonitorSurface({ theme, layout, host }: PluginSurfaceProps) {
-  const t = useUi(theme, layout.compact);
-  return (
-    <TokensProvider value={t}>
-      <MonitorBody key={host.id} hostId={host.id} />
-    </TokensProvider>
-  );
-}
-
-function MonitorBody({ hostId }: { hostId: string }) {
-  const t = useTokens();
+/**
+ * Stop / force-stop mutations plus the row action bag. Shared by the host
+ * surface and the workspace panel so both offer identical controls.
+ */
+export function useProcessActions({ rpc, snapshot, pendingStops, refresh }: {
+  rpc: ReturnType<typeof useMonitorRpc>;
+  snapshot: Snapshot | undefined;
+  pendingStops: ReturnType<typeof usePendingStops>;
+  refresh: () => void;
+}) {
   const toast = useToast();
-  const queryClient = useQueryClient();
-  const rpc = useMonitorRpc();
-
-  const [tab, setTab] = useState<Tab>("overview");
-  const [search, setSearch] = useState("");
-  const [sort, setSort] = useState<Sort>("cpu");
-  const [direction, setDirection] = useState<"asc" | "desc">("desc");
-  const [offset, setOffset] = useState(0);
-  const chooseSort = (next: Sort) => {
-    setDirection(next === sort ? direction === "asc" ? "desc" : "asc" : ["name", "pid"].includes(next) ? "asc" : "desc");
-    setSort(next); setOffset(0);
-  };
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const { pending, mark, clear } = pendingStops;
   const [forceTarget, setForceTarget] = useState<Process | null>(null);
-  const query = useDebounced(search.trim(), 250);
-
-  // The Overview never filters, so it always asks for the unfiltered top slice.
-  // The Processes tab asks with the user's query and sort. One query key per
-  // shape keeps the cache honest and last-good data survives a refetch.
-  const input = useMemo(
-    () => (tab === "processes" ? { query, sort, direction, offset, limit: PROCESS_LIMIT } : { query: "", sort: "cpu" as Sort, limit: PROCESS_LIMIT }),
-    [tab, query, sort, direction, offset],
-  );
-  const snapshotQuery = useQuery({
-    queryKey: [...QUERY_KEY, hostId, input],
-    queryFn: () => rpc.snapshot(input),
-    refetchInterval: POLL_INTERVAL_MS,
-    refetchIntervalInBackground: false,
-    placeholderData: keepPreviousData,
-    retry: 1,
-    staleTime: 0,
-    gcTime: 30_000,
-  });
-
-  const snapshot = snapshotQuery.data;
-  useEffect(() => { if (snapshot && offset >= snapshot.processes.total && offset > 0) setOffset(0); }, [snapshot, offset]);
-  const history = useHistory(snapshot);
-  const age = useAge(snapshotQuery.dataUpdatedAt || undefined);
-  const stale = snapshotQuery.isError || (age !== null && age > STALE_AFTER_SECONDS);
-  const { pending, mark, clear } = usePendingStops(snapshot);
-
-  const refresh = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: QUERY_KEY });
-  }, [queryClient]);
-
-  const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
   const stopMutation = useMutation({
     mutationFn: async (process: Process) => {
@@ -250,12 +205,73 @@ function MonitorBody({ hostId }: { hostId: string }) {
     return [...snapshot.processes.items, ...snapshot.services].find((process) => processKey(process) === key) ?? forceTarget;
   }, [forceTarget, snapshot]);
 
-  const actions = {
+  const actions: RowActions = {
     pending,
     onStop: (process: Process) => stopMutation.mutate(process),
     onForce: (process: Process) => setForceTarget(process),
     stopping: stopMutation.isPending ? stopMutation.variables : undefined,
   };
+  return { actions, liveForceTarget, forceMutation, setForceTarget };
+}
+
+// ----------------------------------------------------------------- surface
+
+export function MonitorSurface({ theme, layout, host }: PluginSurfaceProps) {
+  const t = useUi(theme, layout.compact);
+  return (
+    <TokensProvider value={t}>
+      <MonitorBody key={host.id} hostId={host.id} />
+    </TokensProvider>
+  );
+}
+
+function MonitorBody({ hostId }: { hostId: string }) {
+  const t = useTokens();
+  const queryClient = useQueryClient();
+  const rpc = useMonitorRpc();
+
+  const [tab, setTab] = useState<Tab>("overview");
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<Sort>("cpu");
+  const [direction, setDirection] = useState<"asc" | "desc">("desc");
+  const [offset, setOffset] = useState(0);
+  const chooseSort = (next: Sort) => {
+    setDirection(next === sort ? direction === "asc" ? "desc" : "asc" : ["name", "pid"].includes(next) ? "asc" : "desc");
+    setSort(next); setOffset(0);
+  };
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const query = useDebounced(search.trim(), 250);
+
+  // The Overview never filters, so it always asks for the unfiltered top slice.
+  // The Processes tab asks with the user's query and sort. One query key per
+  // shape keeps the cache honest and last-good data survives a refetch.
+  const input = useMemo(
+    () => (tab === "processes" ? { query, sort, direction, offset, limit: PROCESS_LIMIT } : { query: "", sort: "cpu" as Sort, limit: PROCESS_LIMIT }),
+    [tab, query, sort, direction, offset],
+  );
+  const snapshotQuery = useQuery({
+    queryKey: [...QUERY_KEY, hostId, input],
+    queryFn: () => rpc.snapshot(input),
+    refetchInterval: POLL_INTERVAL_MS,
+    refetchIntervalInBackground: false,
+    placeholderData: keepPreviousData,
+    retry: 1,
+    staleTime: 0,
+    gcTime: 30_000,
+  });
+
+  const snapshot = snapshotQuery.data;
+  useEffect(() => { if (snapshot && offset >= snapshot.processes.total && offset > 0) setOffset(0); }, [snapshot, offset]);
+  const history = useHistory(snapshot);
+  const age = useAge(snapshotQuery.dataUpdatedAt || undefined);
+  const stale = snapshotQuery.isError || (age !== null && age > STALE_AFTER_SECONDS);
+  const { pending, mark, clear } = usePendingStops(snapshot);
+
+  const refresh = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+  }, [queryClient]);
+
+  const { actions, liveForceTarget, forceMutation, setForceTarget } = useProcessActions({ rpc, snapshot, pendingStops: { pending, mark, clear }, refresh });
 
   const serviceCount = snapshot?.services.length ?? 0;
   const processCount = snapshot?.processes.total ?? 0;
@@ -367,7 +383,7 @@ function Header({ snapshot, age, stale, fetching, onRefresh }: { snapshot: Snaps
 
 // ---------------------------------------------------------------- overview
 
-interface RowActions {
+export interface RowActions {
   pending: Record<string, PendingStop>;
   onStop: (process: Process) => void;
   onForce: (process: Process) => void;
@@ -505,7 +521,7 @@ function StatCard({
   );
 }
 
-function ServiceCard({ process, actions }: { process: Process; actions: RowActions }) {
+export function ServiceCard({ process, actions }: { process: Process; actions: RowActions }) {
   const t = useTokens();
   const isServer = process.classification.kind === "dev-server";
   return (
@@ -647,7 +663,7 @@ function ProcessHead({ sort, direction, onSort }: { sort: Sort; direction: "asc"
   </View>;
 }
 
-function ProcessRow({ process, first, expanded, onToggle, actions }: { process: Process; first: boolean; expanded: boolean; onToggle: () => void; actions: RowActions }) {
+export function ProcessRow({ process, first, expanded, onToggle, actions }: { process: Process; first: boolean; expanded: boolean; onToggle: () => void; actions: RowActions }) {
   const t = useTokens();
   const tone = impactTone(process.impact);
   const flagged = process.impact === "pressure-driver" || process.impact === "high";
@@ -757,7 +773,7 @@ function ProcessActions({ process, actions }: { process: Process; actions: RowAc
 
 // ------------------------------------------------------------------- modal
 
-function ForceStopModal({ target, busy, onCancel, onConfirm }: { target: Process | null; busy: boolean; onCancel: () => void; onConfirm: (process: Process) => void }) {
+export function ForceStopModal({ target, busy, onCancel, onConfirm }: { target: Process | null; busy: boolean; onCancel: () => void; onConfirm: (process: Process) => void }) {
   const t = useTokens();
   return (
     <Modal
