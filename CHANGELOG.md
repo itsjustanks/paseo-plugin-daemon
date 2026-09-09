@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 — 2026-09-09
 
 - Added a **Hosts** settings screen (Settings → Plugins → Daemon Link) with three host-scoped
   options: close browser links when a workspace is archived (default on), what the workspace panel
