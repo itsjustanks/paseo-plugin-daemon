@@ -9,7 +9,10 @@ export default function contribute(client: PluginClientContext) {
   client.addSurface("daemon-link", Surface);
   client.addSidebarItem({ id: "daemon-link", title: "Hosts", icon: "Network", surface: "daemon-link" });
   client.addWorkspacePanel({
-    id: "daemon-link", title: "Hosts", icon: "Network", context: "workspace", Component: WorkspacePanel,
+    id: "daemon-link", title: "Hosts", icon: "Network", context: "workspace",
+    // `locations` defaults to ["workspace"] alone; without "explorer" the tab never shows in Projects.
+    locations: ["workspace", "explorer"],
+    Component: WorkspacePanel,
   });
   client.addSettingsScreen({ id: "hosts", title: "Hosts", icon: "Network", Component: HostsSettings });
   client.addCommandCenterItem({
