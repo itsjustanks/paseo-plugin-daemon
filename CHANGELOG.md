@@ -11,6 +11,12 @@
   ports), with the same stop and force-stop controls as Daemon Health, refreshed on the configured
   interval. Set the panel scope to "Whole host" to get the full Hosts surface in the tab instead. The
   sidebar surface is unchanged.
+- Lifecycle hooks: when a workspace is archived and "Close browser links on archive" is on, Daemon
+  Link stops every temporary browser link whose port belongs to a process running under that
+  workspace's directory, and logs what it stopped. Workspace creation is logged. Hooks never throw;
+  cleanup failures are logged and the archive proceeds. The server reads the saved setting from
+  `$PASEO_HOME/plugin-settings/daemon-link/hosts.json` and fails closed (no cleanup) if that file is
+  unreadable.
 
 ## 0.5.0 — 2026-09-09
 

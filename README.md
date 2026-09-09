@@ -117,6 +117,32 @@ project access. Both plugins must remain running while you use a connection.
 | **Daemon Health** | Check CPU and memory; search, sort, and inspect processes associated with Paseo projects. |
 | **Guide & Setup** | Follow the walkthrough and check project discovery, pairing, relay state, and optional helpers. |
 
+The same six tabs appear in the **Hosts** sidebar surface. Each workspace also gets a **Hosts** tab;
+what it shows depends on the panel scope setting described below.
+
+### Hosts workspace tab: only what belongs to this workspace
+
+By default the workspace tab narrows the host view to the open workspace: dev servers and other
+processes whose working directory sits inside the workspace directory (or that share one of its
+ports), plus any temporary browser links pointing at those ports. Stop and force-stop controls are
+the same as in Daemon Health and keep the same server-side checks. Switch the scope to **Whole
+host** to get the full Hosts surface inside the tab instead.
+
+### Settings: Hosts
+
+Open **Settings → Plugins → Daemon Link → Hosts**, or run **Configure Hosts** from the Command
+Center. Settings are saved per host and shared by every client of that host.
+
+| Setting | Default | Effect |
+| --- | --- | --- |
+| Panel shows | This workspace only | Workspace tab lists only the workspace's processes, or the whole host. |
+| Refresh interval | 20 seconds | How often the workspace tab re-reads the host (5–120 seconds). |
+| Close browser links on archive | On | Archiving a workspace stops browser links that point at its dev servers. |
+
+Archive cleanup runs on the daemon, so it works even when no app is connected. It only stops
+temporary browser links; the dev server itself keeps running. If the saved settings file cannot be
+read, cleanup is skipped rather than guessed.
+
 ### Local Projects: apps with a recognizable owner
 
 ![Local Projects with fictional running apps.](docs/screenshots/local-projects.png)
