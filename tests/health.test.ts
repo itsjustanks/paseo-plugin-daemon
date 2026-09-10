@@ -33,6 +33,20 @@ describe("evaluateHealth", () => {
     expect(verdict.issues.map((issue) => issue.code)).toEqual(["host-unsupported", "projects-unavailable", "cpu-pressure", "memory-pressure", "process-zombie"]);
     expect(verdict.issues[4]).toMatchObject({ scope: "process", cwd: "~/app", message: "dead (PID 9) is a zombie process." });
   });
+  it("attributes pressure to a workspace only through the collector's pressure-driver impact, once per process", () => {
+    const driver = row(3, "~/app/web", [3000], { name: "vite", impact: "pressure-driver", reasons: ["CPU 92%", "top CPU user during CPU pressure"] });
+    const hog = row(4, "~/app/api", [], { name: "worker", impact: "pressure-driver", reasons: ["34% of memory", "top memory user during memory pressure"] });
+    const busy = row(5, "~/app/web", [], { name: "tsc", impact: "high", reasons: ["CPU 80%"] });
+    const { verdict } = evaluateHealth(base({ snapshot: snapshot([driver], [driver, hog, busy], { cpu: pressure("critical") }) }));
+    expect(verdict.issues).toEqual([
+      expect.objectContaining({ code: "cpu-pressure", scope: "host" }),
+      { code: "pressure-driver", severity: "warning", scope: "process", message: "vite (PID 3) is a top CPU user while the host is under CPU pressure.", ports: [3000], cwd: "~/app/web" },
+      { code: "pressure-driver", severity: "warning", scope: "process", message: "worker (PID 4) is a top memory user while the host is under memory pressure.", ports: [], cwd: "~/app/api" },
+    ]);
+    // A merely busy process on a busy host is not blamed, and a quiet host never produces the code.
+    expect(evaluateHealth(base({ snapshot: snapshot([], [busy], { cpu: pressure("critical") }) })).verdict.issues.map((issue) => issue.code)).toEqual(["cpu-pressure"]);
+    expect(evaluateHealth(base({ snapshot: snapshot([], [busy]) })).verdict.issues).toEqual([]);
+  });
   it("remembers served dev-server ports and reports one that stops serving until the TTL passes", () => {
     const first = evaluateHealth(base({ snapshot: snapshot([row(1, "~/app/web", [3000], { name: "vite" })]) }));
     expect(first.memory.serving).toEqual({ 3000: { cwd: "~/app/web", name: "vite", seenAt: 1_000_000 } });
@@ -110,6 +124,9 @@ describe("workspaceHealth and pillText", () => {
     expect(pillText(workspaceHealth(verdict([issue("link-down", [9000], null, "process")]), target))).toBeNull();
     expect(pillText(workspaceHealth(verdict([issue("host-unreachable", [], null, "host", "critical")]), target))).toBe("Host unreachable");
     expect(pillText(workspaceHealth(verdict([issue("cpu-pressure", [], null, "host")]), target))).toBe("CPU pressure critical");
+    // The workspace's own driver outranks the host-wide code in the chip; both stay counted.
+    expect(pillText(workspaceHealth(verdict([issue("cpu-pressure", [], null, "host"), issue("pressure-driver", [3000], "~/app/.worktrees/feature")]), target))).toBe("Driving host pressure +1");
+    expect(pillText(workspaceHealth(verdict([issue("pressure-driver", [3001], "~/app/.worktrees/other")]), target))).toBeNull();
   });
 });
 

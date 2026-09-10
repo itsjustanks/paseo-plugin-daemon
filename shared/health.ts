@@ -17,6 +17,9 @@ import { cwdWithinDirectory, filterWorkspaceProcesses, workspacePorts, type Work
  *  - a saved SSH forward is retrying, or is set to auto-connect but not running
  *  - a project process is a zombie
  *  - CPU or memory pressure is critical
+ *  - a project process is a top CPU or memory user while the host is under
+ *    pressure (the collector's `pressure-driver` impact), which lets a
+ *    workspace see that it is the one loading the host rather than a bystander
  * Nothing here contains tokens, URLs, or raw command lines; issues carry only
  * ports, a home-relative cwd, and fixed copy.
  */
@@ -28,7 +31,7 @@ export const HealthStatusSchema = z.enum(["ok", "warning", "critical", "unknown"
 export type HealthStatus = z.infer<typeof HealthStatusSchema>;
 
 export const HealthIssueCodeSchema = z.enum([
-  "host-unreachable", "host-unsupported", "projects-unavailable", "port-gone", "tunnel-failed", "link-retrying", "link-down", "process-zombie", "cpu-pressure", "memory-pressure",
+  "host-unreachable", "host-unsupported", "projects-unavailable", "port-gone", "tunnel-failed", "link-retrying", "link-down", "process-zombie", "cpu-pressure", "memory-pressure", "pressure-driver",
 ]);
 export type HealthIssueCode = z.infer<typeof HealthIssueCodeSchema>;
 
@@ -104,8 +107,19 @@ export function evaluateHealth(input: HealthInput, memory: HealthMemory = EMPTY_
     if (snapshot.cpu.pressure === "critical") issues.push(host("cpu-pressure", "warning", "CPU pressure on the host is critical."));
     if (snapshot.memory.pressure === "critical") issues.push(host("memory-pressure", "warning", "Memory pressure on the host is critical."));
     services = snapshot.services.map((service) => ({ name: service.name, cwd: service.cwd, ports: service.ports, project: service.project ? { path: service.project.path, workspace: service.project.workspace } : null }));
+    // A dev server is in both lists; report each process once.
+    const seen = new Set<string>();
     for (const process of [...snapshot.services, ...snapshot.processes]) {
+      const key = `${process.pid}:${process.name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
       if (process.state === "zombie") issues.push(process_("process-zombie", "warning", `${process.name} (PID ${process.pid}) is a zombie process.`, process.ports, process.cwd));
+      // The collector only awards `pressure-driver` to a top-3 CPU or memory user while the host
+      // is under matching pressure, so this is attribution, not a busy host's echo.
+      if (process.impact === "pressure-driver") {
+        const kind = process.reasons.some((reason) => reason.startsWith("top memory")) ? "memory" : "CPU";
+        issues.push(process_("pressure-driver", "warning", `${process.name} (PID ${process.pid}) is a top ${kind} user while the host is under ${kind} pressure.`, process.ports, process.cwd));
+      }
     }
     if (snapshot.scope?.status !== "unavailable") next = trackPorts(snapshot, memory, now);
   }
@@ -182,13 +196,15 @@ export function workspaceHealth(verdict: HealthVerdict, target: WorkspaceTarget)
 export function pillText(health: WorkspaceHealth): string | null {
   const critical = health.issues.find((issue) => issue.severity === "critical");
   if (critical) return critical.code === "host-unreachable" ? "Host unreachable" : critical.message;
-  const first = health.issues[0];
+  // A problem inside the workspace is more actionable than a host-wide one, so it leads the chip.
+  const first = health.issues.find((issue) => issue.scope === "process") ?? health.issues[0];
   if (first) {
     const more = health.issues.length > 1 ? ` +${health.issues.length - 1}` : "";
     if (first.code === "port-gone") return `Dev server :${first.ports[0]} stopped${more}`;
     if (first.code === "tunnel-failed") return `Browser link :${first.ports[0]} failed${more}`;
     if (first.code === "link-retrying" || first.code === "link-down") return `SSH forward :${first.ports[0]} down${more}`;
     if (first.code === "process-zombie") return `Zombie process${more}`;
+    if (first.code === "pressure-driver") return `Driving host pressure${more}`;
     if (first.code === "cpu-pressure") return `CPU pressure critical${more}`;
     if (first.code === "memory-pressure") return `Memory pressure critical${more}`;
     if (first.code === "projects-unavailable") return `Projects unverified${more}`;
