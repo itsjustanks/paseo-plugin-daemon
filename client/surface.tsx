@@ -521,7 +521,8 @@ function StatCard({
   );
 }
 
-export function ServiceCard({ process, actions }: { process: Process; actions: RowActions }) {
+/** One verified dev server. `footer` is where the Hosts views put their Open / link controls. */
+export function ServiceCard({ process, actions, footer }: { process: Process; actions: RowActions; footer?: React.ReactNode }) {
   const t = useTokens();
   const isServer = process.classification.kind === "dev-server";
   return (
@@ -556,7 +557,8 @@ export function ServiceCard({ process, actions }: { process: Process; actions: R
           { value: `PID ${process.pid}` },
         ]}
       />
-      <Text style={t.text.caption}>{process.project?.name} · Manage this server from Project processes.</Text>
+      <Text style={t.text.caption}>{process.project?.name}{process.project?.workspace ? ` · ${process.project.workspace}` : ""} · Stop controls are under Project processes.</Text>
+      {footer}
     </Card>
   );
 }

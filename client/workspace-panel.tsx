@@ -1,16 +1,19 @@
 import { type PluginWorkspacePanelProps, useRpc, useSettings, useWorkspace } from "@getpaseo/plugin/client";
-import { useToast } from "@getpaseo/plugin/client/react-native";
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, ScrollView, Text, View } from "react-native";
 import { hostHealth, workspaceHealth, type HealthIssue, type HealthStatus } from "../shared/health";
 import * as link from "../shared/link";
 import { HOSTS_SETTINGS_DEFAULTS, hostsSettings } from "../shared/settings";
+import { formatMinutes, type TunnelMinutes } from "../shared/tunnel-lease";
 import { filterWorkspaceProcesses, workspacePorts } from "../shared/workspace-filter";
 import { rollupResources, type ResourceRollup } from "../shared/workspace-resources";
 import { DaemonSurface } from "./daemon";
+import { OpenRow } from "./open-row";
+import { useOpenService } from "./open-service";
 import { PROCESS_LIMIT, processKey, useMonitorRpc, type Process, type Snapshot } from "./rpc";
 import { ForceStopModal, ProcessRow, ServiceCard, errorText, usePendingStops, useProcessActions } from "./surface";
+import { TunnelCard } from "./tunnel-row";
 import { Button, Card, Facts, Grid, Meter, Notice, Section, StatusPill, Tag, TokensProvider, formatBytes, formatPercent, useTokens, useUi, type Tone } from "./ui";
 
 const QUERY_KEY = ["monitor", "workspace-snapshot"] as const;
@@ -22,8 +25,9 @@ const HEALTH_LABEL: Record<HealthStatus, string> = { ok: "Healthy", warning: "Ne
 
 /**
  * The workspace tab, also shown in the Projects explorer. In "workspace"
- * scope it leads with this workspace's health verdict, dev servers, and
- * browser links; in "host" scope it is the full Hosts surface.
+ * scope it leads with this workspace's dev servers, each with a one-press
+ * Open, then its health verdict, resources, processes, and browser links; in
+ * "host" scope it is the full Hosts surface.
  */
 export function WorkspacePanel(props: PluginWorkspacePanelProps) {
   const settings = useSettings(hostsSettings);
@@ -33,7 +37,7 @@ export function WorkspacePanel(props: PluginWorkspacePanelProps) {
   if (values.panelScope === "host") return <DaemonSurface {...props} />;
   return (
     <TokensProvider value={tokens}>
-      <WorkspaceBody key={`${props.host.id}:${props.workspaceId}`} hostId={props.host.id} workspaceId={props.workspaceId} intervalSeconds={values.snapshotIntervalSeconds} settingsLoading={settings.status === "loading"} />
+      <WorkspaceBody key={`${props.host.id}:${props.workspaceId}`} hostId={props.host.id} workspaceId={props.workspaceId} intervalSeconds={values.snapshotIntervalSeconds} minutes={values.tunnelMinutes} settingsLoading={settings.status === "loading"} />
     </TokensProvider>
   );
 }
@@ -134,13 +138,11 @@ function IssueRow({ issue }: { issue: HealthIssue }) {
   );
 }
 
-function WorkspaceBody({ hostId, workspaceId, intervalSeconds, settingsLoading }: { hostId: string; workspaceId: string; intervalSeconds: number; settingsLoading: boolean }) {
+function WorkspaceBody({ hostId, workspaceId, intervalSeconds, minutes, settingsLoading }: { hostId: string; workspaceId: string; intervalSeconds: number; minutes: TunnelMinutes; settingsLoading: boolean }) {
   const t = useTokens();
-  const toast = useToast();
   const queryClient = useQueryClient();
   const rpc = useMonitorRpc();
   const linkStatus = useRpc(link.linkStatus);
-  const tunnelStop = useRpc(link.tunnelStop);
   const workspace = useWorkspace(workspaceId, ({ directory, projectRootPath, name }) => ({ directory, projectRootPath, name }));
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -155,7 +157,9 @@ function WorkspaceBody({ hostId, workspaceId, intervalSeconds, settingsLoading }
     gcTime: 30_000,
     enabled: workspace !== null,
   });
-  const links = useQuery({ queryKey: ["daemon-link", hostId, "status"], queryFn: () => linkStatus({}), refetchInterval: intervalSeconds * 1000, retry: 1 });
+  // Links poll faster than the snapshot: a pressed Open waits on this query to learn the link is connected.
+  const links = useQuery({ queryKey: ["daemon-link", hostId, "status"], queryFn: () => linkStatus({}), refetchInterval: Math.min(intervalSeconds, 3) * 1000, retry: 1 });
+  const opener = useOpenService({ links, minutes });
   // The cached daemon verdict; the server re-checks on the same interval, so this never probes the host twice.
   const readHealth = useRpc(hostHealth);
   const healthQuery = useQuery({ queryKey: ["daemon-link", hostId, "health"], queryFn: () => readHealth({}), refetchInterval: intervalSeconds * 1000, retry: 1, enabled: workspace !== null });
@@ -180,7 +184,7 @@ function WorkspaceBody({ hostId, workspaceId, intervalSeconds, settingsLoading }
   }, [queryClient, links, healthQuery]);
   const pendingStops = usePendingStops(snapshot);
   const { actions, liveForceTarget, forceMutation, setForceTarget } = useProcessActions({ rpc, snapshot, pendingStops, refresh });
-  const closeTunnel = useMutation({ mutationFn: (id: string) => tunnelStop({ id }), onSuccess: () => { void links.refetch(); }, onError: (error) => toast.error(errorText(error)) });
+  const available = links.data?.cloudflared === true;
 
   // Services already have their own card; the process list shows the rest.
   const rows = useMemo(() => {
@@ -201,10 +205,29 @@ function WorkspaceBody({ hostId, workspaceId, intervalSeconds, settingsLoading }
           </View>
           <StatusPill tone={status.tone} label={status.label} />
         </View>
-        <Notice icon="FolderCode" action={<Button label="Refresh" onPress={refresh} loading={snapshotQuery.isFetching} />}>
-          Only dev servers, processes, and links that belong to this workspace's directory are listed. Switch the panel to the whole host under Settings → Plugins → Daemon Link → Hosts.
-        </Notice>
         {settingsLoading ? <Text style={t.text.caption}>Loading Hosts settings; using defaults until they arrive.</Text> : null}
+        {snapshot ? (
+          <Section title="Dev servers in this workspace" trailing={<Text style={t.text.caption}>{snapshot.services.length > 0 ? `${snapshot.services.length} found · Open creates a ${formatMinutes(minutes)} browser link` : ""}</Text>}>
+            {snapshot.services.length === 0 ? (
+              <Notice icon="Server" action={<Button label="Refresh" onPress={refresh} loading={snapshotQuery.isFetching} />}>No verified dev server is running inside this workspace. Start its dev command in a terminal here and it appears automatically with an Open button.</Notice>
+            ) : (
+              <>
+                {!available && links.data ? (
+                  <Notice icon="Globe" tone="warning" action={<Button label={opener.installing ? "Setting up…" : "Set up browser links"} variant="primary" loading={opener.installing} disabled={opener.installing} onPress={() => opener.installLinks()} />}>
+                    Open needs the tunnel helper on this host once. No Cloudflare account, domain, or SSH password is needed. For a private route instead, use Hosts → Connect.
+                  </Notice>
+                ) : null}
+                <Grid min={300}>
+                  {snapshot.services.map((process) => (
+                    <ServiceCard key={processKey(process)} process={process} actions={actions} footer={
+                      <OpenRow ports={process.ports} tunnels={links.data?.tunnels ?? []} minutes={minutes} available={available} opener={opener} onSetup={() => opener.installLinks()} installing={opener.installing} />
+                    } />
+                  ))}
+                </Grid>
+              </>
+            )}
+          </Section>
+        ) : null}
         {health ? <HealthCard health={health} background={healthQuery.data?.background ?? true} /> : null}
         {snapshot && rollup ? <ResourceCard rollup={rollup} snapshot={snapshot} /> : null}
         {snapshotQuery.isError ? (
@@ -224,15 +247,6 @@ function WorkspaceBody({ hostId, workspaceId, intervalSeconds, settingsLoading }
 
         {snapshot ? (
           <>
-            <Section title="Dev servers in this workspace" trailing={<Text style={t.text.caption}>{snapshot.services.length > 0 ? `${snapshot.services.length} found` : ""}</Text>}>
-              {snapshot.services.length === 0 ? (
-                <Notice icon="Server">No verified dev server is running inside this workspace. Start its dev command in a terminal here and it appears automatically.</Notice>
-              ) : (
-                <Grid min={300}>
-                  {snapshot.services.map((process) => <ServiceCard key={processKey(process)} process={process} actions={actions} />)}
-                </Grid>
-              )}
-            </Section>
             <Section title="Other workspace processes" trailing={<Text style={t.text.caption}>{rows.length > 0 ? `${rows.length} running` : ""}</Text>}>
               {rows.length === 0 ? (
                 <Notice icon="Activity">No other processes are running in this workspace.{snapshot.processes.truncated ? " The host list was truncated; open the Hosts sidebar for the full table." : ""}</Notice>
@@ -246,17 +260,12 @@ function WorkspaceBody({ hostId, workspaceId, intervalSeconds, settingsLoading }
             </Section>
             <Section title="Browser links for this workspace" trailing={ports.length > 0 ? <View style={{ flexDirection: "row", gap: 6 }}>{ports.map((port) => <Tag key={port} label={`:${port}`} />)}</View> : undefined}>
               {tunnels.length === 0 ? (
-                <Notice icon="Globe">No temporary browser link points at this workspace. Create one from Hosts → Dev Relay when you need to open an app on another device.</Notice>
+                <Notice icon="Globe">No temporary browser link points at this workspace. Press Open beside a dev server above to create one.</Notice>
               ) : (
-                tunnels.map((tunnel) => (
-                  <Card key={tunnel.id}>
-                    <Text style={t.text.body}>Port {tunnel.port} · {tunnel.state}</Text>
-                    <Text style={t.text.caption}>Expires {new Date(tunnel.expiresAt).toLocaleTimeString()} · {tunnel.message}</Text>
-                    <Button label="Close browser link" disabled={closeTunnel.isPending} onPress={() => closeTunnel.mutate(tunnel.id)} />
-                  </Card>
-                ))
+                tunnels.map((tunnel) => <TunnelCard key={tunnel.id} tunnel={tunnel} minutes={minutes} onExtend={opener.extendLink} onClose={opener.closeLink} busy={opener.extending || opener.closing} />)
               )}
             </Section>
+            <Text style={t.text.caption}>Only dev servers, processes, and links that belong to this workspace's directory are listed. Switch the panel to the whole host under Settings → Plugins → Daemon Link → Hosts.</Text>
           </>
         ) : null}
       </View>
