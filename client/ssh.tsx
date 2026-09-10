@@ -13,17 +13,19 @@ function Field({ label, value, onChange, numeric = false }: { label: string; val
   return <View style={{ gap: 4 }}><Text style={t.text.label}>{label}</Text><TextInput accessibilityLabel={label} value={value} onChangeText={onChange} keyboardType={numeric ? "number-pad" : "default"} autoCapitalize="none" autoCorrect={false} style={{ ...t.text.body, backgroundColor: t.color.surface2, borderRadius: 6, padding: 10, borderColor: t.color.border, borderWidth: 1 }} /></View>;
 }
 
-export function Connections({ profiles, states, refresh }: { profiles: rpc.Profile[]; states: rpc.LinkState[]; refresh(): void }) {
+/** `initialRemotePort` comes from a dev-server card's "Private forward" press, so the form starts on the right port. */
+export function Connections({ profiles, states, refresh, initialRemotePort }: { profiles: rpc.Profile[]; states: rpc.LinkState[]; refresh(): void; initialRemotePort?: number }) {
   const t = useTokens();
   const toast = useToast();
   const save = useRpc(rpc.linkSave), connect = useRpc(rpc.linkConnect), disconnect = useRpc(rpc.linkDisconnect), remove = useRpc(rpc.linkRemove);
   const [editing, setEditing] = useState<string | undefined>();
   const [name, setName] = useState(""), [destination, setDestination] = useState("");
-  const [sshPort, setSshPort] = useState("22"), [remotePort, setRemotePort] = useState("3000"), [localPort, setLocalPort] = useState("3000");
+  const preset = String(initialRemotePort ?? 3000);
+  const [sshPort, setSshPort] = useState("22"), [remotePort, setRemotePort] = useState(preset), [localPort, setLocalPort] = useState(preset);
   const [autoConnect, setAutoConnect] = useState(false);
   const mutation = useMutation({ mutationFn: (fn: () => Promise<unknown>) => fn(), onSuccess: refresh, onError: (err) => toast.error(errorMessage(err)) });
   return <>
-    <Notice icon="Laptop">Select the daemon running on your own computer for SSH forwards. These local ports belong to that daemon's machine.</Notice>
+    <Notice icon="Laptop">Select the daemon running on your own computer for SSH forwards. These local ports belong to that daemon's machine.{initialRemotePort ? ` The form below is preset for remote port ${initialRemotePort}.` : ""}</Notice>
     {profiles.map((profile) => {
       const state = states.find((s) => s.id === profile.id);
       return <Card key={profile.id}>
