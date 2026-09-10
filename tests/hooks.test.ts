@@ -8,7 +8,7 @@ import type { Snapshot } from "../shared/contracts";
 import type { Tunnel } from "../shared/link";
 import { HOSTS_SETTINGS_DEFAULTS } from "../shared/settings";
 
-const tunnel = (id: string, port: number, state: Tunnel["state"] = "connected"): Tunnel => ({ id, port, state, message: "", expiresAt: Date.now() + 60_000, url: null });
+const tunnel = (id: string, port: number, state: Tunnel["state"] = "connected"): Tunnel => ({ id, port, state, message: "", createdAt: Date.now(), expiresAt: Date.now() + 60_000, url: null });
 const process_ = (pid: number, cwd: string | null, ports: number[]) => ({ pid, cwd, ports }) as unknown as Snapshot["processes"][number];
 const workspace: PluginHookWorkspace = { id: "ws-1", projectId: "p1", cwd: "/home/alice/app/.worktrees/feature", name: "feature", archivedAt: "2026-09-09T00:00:00Z" };
 
@@ -62,10 +62,13 @@ describe("readHostsSettings", () => {
     expect(await readHostsSettings(file)).toEqual(HOSTS_SETTINGS_DEFAULTS);
     await writeFile(file, JSON.stringify({ version: 1, values: { closeTunnelsOnArchive: false, panelScope: "host" } }));
     // A version 1 document is migrated in place: old values kept, new switches default on.
-    expect(await readHostsSettings(file)).toEqual({ closeTunnelsOnArchive: false, panelScope: "host", snapshotIntervalSeconds: 20, backgroundHealthChecks: true, showComposerPill: true });
-    await writeFile(file, JSON.stringify({ version: 2, values: { backgroundHealthChecks: false } }));
-    expect(await readHostsSettings(file)).toEqual({ ...HOSTS_SETTINGS_DEFAULTS, backgroundHealthChecks: false });
-    for (const raw of ["not json", JSON.stringify({ version: 3, values: {} }), JSON.stringify({ version: "1", values: {} }), JSON.stringify({ version: 1, values: { snapshotIntervalSeconds: 1 } })]) {
+    expect(await readHostsSettings(file)).toEqual({ closeTunnelsOnArchive: false, panelScope: "host", snapshotIntervalSeconds: 20, backgroundHealthChecks: true, showComposerPill: true, tunnelMinutes: 120 });
+    // A version 2 document (0.7.0 and 0.8.0) keeps every saved value and only gains the link duration.
+    await writeFile(file, JSON.stringify({ version: 2, values: { closeTunnelsOnArchive: false, panelScope: "host", backgroundHealthChecks: false, snapshotIntervalSeconds: 45 } }));
+    expect(await readHostsSettings(file)).toEqual({ closeTunnelsOnArchive: false, panelScope: "host", snapshotIntervalSeconds: 45, backgroundHealthChecks: false, showComposerPill: true, tunnelMinutes: 120 });
+    await writeFile(file, JSON.stringify({ version: 3, values: { tunnelMinutes: 480 } }));
+    expect(await readHostsSettings(file)).toEqual({ ...HOSTS_SETTINGS_DEFAULTS, tunnelMinutes: 480 });
+    for (const raw of ["not json", JSON.stringify({ version: 4, values: {} }), JSON.stringify({ version: "1", values: {} }), JSON.stringify({ version: 1, values: { snapshotIntervalSeconds: 1 } }), JSON.stringify({ version: 3, values: { tunnelMinutes: 45 } })]) {
       await writeFile(file, raw);
       expect((await readHostsSettings(file)).closeTunnelsOnArchive).toBe(false);
     }

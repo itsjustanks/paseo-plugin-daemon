@@ -94,4 +94,21 @@ describe("temporary web gate", () => {
     expect((await call(expired)).status).toBe(410);
     expect(() => expired.openUrl()).toThrow("not ready");
   });
+
+  it("extends an expiring gate in place so the existing session keeps working, and never shortens it", async () => {
+    const { gate, cookie } = await fixture();
+    // Session cookie outlives the first expiry by the lifetime cap, so a renewal needs no new login.
+    const session = await call(gate, "/__daemon_link/session", { origin: "https://fixture.example" }, "POST", new URL(gate.openUrl()).hash.slice(1));
+    expect(Number(/Max-Age=(\d+)/.exec(session.headers["set-cookie"]![0]!)![1])).toBeGreaterThan(24 * 3600);
+    const soon = await createGate({ port: gate.port, id: randomUUID(), expiresAt: Date.now() + 50, verify: async () => true });
+    cleanups.push(() => soon.close());
+    soon.setOrigin("https://fixture.example");
+    const url = soon.openUrl();
+    soon.extend(Date.now() + 60_000);
+    soon.extend(Date.now() - 1);
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(soon.openUrl()).toBe(url);
+    expect((await call(soon, "/__daemon_link")).status).toBe(200);
+    expect((await call(gate, "/", { cookie })).status).toBe(200);
+  });
 });

@@ -33,6 +33,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(rpc.linkConnect, ({ id }, context) => runtime.withContext(context, () => runtime.links.connect(id)));
   server.handle(rpc.linkDisconnect, ({ id }, context) => runtime.withContext(context, () => runtime.links.disconnect(id)));
   server.handle(rpc.tunnelStart, (input, context) => runtime.withContext(context, () => runtime.links.tunnels.start(input)));
+  server.handle(rpc.tunnelExtend, ({ id, minutes }, context) => runtime.withContext(context, () => runtime.links.tunnels.extend(id, minutes)));
   server.handle(rpc.tunnelStop, ({ id }, context) => runtime.withContext(context, () => runtime.links.tunnels.stop(id)));
   server.handle(rpc.tunnelOpen, ({ id }, context) => runtime.withContext(context, () => runtime.links.tunnels.open(id)));
   server.handle(rpc.tunnelInstall, (_input, context) => runtime.withContext(context, () => installCloudflared()));

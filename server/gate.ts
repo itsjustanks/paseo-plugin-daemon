@@ -1,6 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, request, type IncomingMessage, type OutgoingHttpHeaders, type ServerResponse } from "node:http";
 import type { Socket } from "node:net";
+import { TUNNEL_MAX_LIFETIME_MS } from "../shared/tunnel-lease";
 
 const BOOTSTRAP = "/__daemon_link";
 const SCRIPT = `const token=location.hash.slice(1);history.replaceState(null,'','${BOOTSTRAP}');fetch('${BOOTSTRAP}/session',{method:'POST',headers:{'Content-Type':'text/plain'},body:token}).then(r=>{if(!r.ok)throw Error();location.replace('/')}).catch(()=>{document.getElementById('status').textContent='This link is unavailable or expired. Open a fresh link from Paseo.'});`;
@@ -18,6 +19,8 @@ function safeHeaders(headers: OutgoingHttpHeaders): OutgoingHttpHeaders {
 export interface Gate {
   port: number;
   setOrigin(origin: string): void;
+  /** Move the expiry; the token, cookie name, and origin stay the same so open sessions keep working. */
+  extend(expiresAt: number): void;
   openUrl(): string;
   close(): Promise<void>;
 }
@@ -30,6 +33,7 @@ export async function createGate(options: {
   const cookieName = `__Host-daemon-link-${options.id}`;
   let origin: string | undefined;
   let closed = false;
+  let expiresAt = options.expiresAt;
   const sockets = new Set<Socket>();
   const upstreamOrigin = `http://localhost:${options.port}`;
   const secretMatches = (value: string) => Buffer.byteLength(value) === token.length && timingSafeEqual(Buffer.from(value), Buffer.from(token));
@@ -40,7 +44,7 @@ export async function createGate(options: {
     const [name, ...value] = item.trim().split("=");
     return name === cookieName && secretMatches(value.join("="));
   });
-  const active = () => !closed && Date.now() < options.expiresAt;
+  const active = () => !closed && Date.now() < expiresAt;
   const allowed = async (req: IncomingMessage) => active() && hostAllowed(req) && originAllowed(req) && authenticated(req) && await options.verify();
 
   function headers(req: IncomingMessage, upgrade = false): OutgoingHttpHeaders {
@@ -92,7 +96,8 @@ export async function createGate(options: {
       if (!secretMatches(body)) return reject(401, "Invalid link.");
       res.writeHead(204, {
         "cache-control": "no-store", "referrer-policy": "no-referrer",
-        "set-cookie": `${cookieName}=${token}; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.max(0, Math.floor((options.expiresAt - Date.now()) / 1000))}`,
+        // The cookie outlives the current expiry by the lifetime cap so a renewed link keeps its session; the gate still checks `active()` on every request.
+        "set-cookie": `${cookieName}=${token}; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.max(0, Math.floor((expiresAt + TUNNEL_MAX_LIFETIME_MS - Date.now()) / 1000))}`,
       });
       res.end(); return;
     }
@@ -146,6 +151,7 @@ export async function createGate(options: {
       if (url.protocol !== "https:" || url.origin !== value || url.username || url.password) throw new Error("Tunnel origin must be HTTPS.");
       origin = value;
     },
+    extend(value) { if (!closed && value > expiresAt) expiresAt = value; },
     openUrl() { if (!active() || !origin) throw new Error("Tunnel is not ready."); return `${origin}${BOOTSTRAP}#${token}`; },
     async close() {
       if (closed) return;

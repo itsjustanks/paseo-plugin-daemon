@@ -2,7 +2,7 @@ import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import type { Snapshot, SnapshotInput } from "../shared/contracts";
 import { EMPTY_HEALTH_MEMORY, evaluateHealth, type HealthInput, type HealthMemory, type HealthVerdict } from "../shared/health";
 import type { LinkState, Profile, Tunnel } from "../shared/link";
-import { SNAPSHOT_INTERVAL_DEFAULT, type HostsSettings } from "../shared/settings";
+import { HOSTS_SETTINGS_DEFAULTS, SNAPSHOT_INTERVAL_DEFAULT, type HostsSettings } from "../shared/settings";
 
 /** The slice of the runtime the checker needs; tests hand in a fake. */
 export interface HealthRuntime {
@@ -84,7 +84,7 @@ export class HealthChecker {
 
   private async settings(): Promise<HostsSettings> {
     try { return await this.options.readSettings(); }
-    catch { return { closeTunnelsOnArchive: false, panelScope: "workspace", snapshotIntervalSeconds: SNAPSHOT_INTERVAL_DEFAULT, backgroundHealthChecks: true, showComposerPill: true }; }
+    catch { return { ...HOSTS_SETTINGS_DEFAULTS, closeTunnelsOnArchive: false, snapshotIntervalSeconds: SNAPSHOT_INTERVAL_DEFAULT }; }
   }
 
   private schedule(settings: HostsSettings) {

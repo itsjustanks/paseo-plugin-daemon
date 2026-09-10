@@ -11,7 +11,7 @@ const row = (pid: number, cwd: string | null, ports: number[], extra: Partial<Ro
 const pressure = (state: "normal" | "critical" = "normal") => ({ pressure: state }) as unknown as Snapshot["cpu"] & Snapshot["memory"];
 const snapshot = (services: Row[], processes: Row[] = [], extra: Partial<HealthInput["snapshot"] & object> = {}): NonNullable<HealthInput["snapshot"]> =>
   ({ services, processes, supported: true, scope: { status: "ready", message: "", projects: [] }, cpu: pressure(), memory: pressure(), ...extra });
-const tunnel = (port: number, state: Tunnel["state"], message = ""): Tunnel => ({ id: `t-${port}`, port, state, message, expiresAt: 0, url: null });
+const tunnel = (port: number, state: Tunnel["state"], message = ""): Tunnel => ({ id: `t-${port}`, port, state, message, createdAt: 0, expiresAt: 0, url: null });
 const base = (over: Partial<HealthInput> = {}): HealthInput => ({ now: 1_000_000, snapshot: snapshot([]), tunnels: [], connections: [], profiles: [], background: true, ...over });
 
 describe("evaluateHealth", () => {

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Tunnel } from "../shared/link";
 import { Port } from "../shared/link";
+import { TUNNEL_MINUTES_MESSAGE, isTunnelMinutes, nextExpiry } from "../shared/tunnel-lease";
 import { cloudflaredPath } from "./binaries";
 import { createGate, type Gate } from "./gate";
 import { createServiceLease } from "./lease";
@@ -28,13 +29,14 @@ export class TunnelManager {
 
   async start({ port, minutes }: { port: number; minutes: number }): Promise<Tunnel> {
     Port.parse(port);
-    if (![15, 30, 60].includes(minutes)) throw new Error("Choose a 15, 30, or 60 minute link.");
+    if (!isTunnelMinutes(minutes)) throw new Error(TUNNEL_MINUTES_MESSAGE);
     if (this.closed) throw new Error("Daemon Link is stopping.");
     const existing = [...this.records.values()].find((r) => r.view.port === port && ["starting", "connected"].includes(r.view.state));
     if (existing) return { ...existing.view };
     if (this.records.size >= 4) throw new Error("Disconnect an existing link before opening another (limit: four).");
     const id = randomUUID();
-    const record: Running = { view: { id, port, expiresAt: Date.now() + minutes * 60_000, state: "starting", message: "Starting a temporary link…", url: null } };
+    const now = Date.now();
+    const record: Running = { view: { id, port, createdAt: now, expiresAt: now + minutes * 60_000, state: "starting", message: "Starting a temporary link…", url: null } };
     this.records.set(id, record);
     const pending = this.launch(record).catch(async (error) => {
       if (!record.stopping) await this.fail(record, error instanceof Error ? error.message : "Tunnel could not start.");
@@ -70,7 +72,7 @@ export class TunnelManager {
     child.stdout?.on("data", read); child.stderr?.on("data", read);
     child.once("error", () => { if (!record.stopping) void this.fail(record, "Tunnel helper is unavailable. Run tunnel setup, then retry."); });
     child.once("close", () => { if (!record.stopping) void this.fail(record, "Tunnel disconnected. Check outbound TCP port 7844 and retry, or use an SSH connection."); });
-    record.expiry = setTimeout(() => { void this.fail(record, "Link expired. Open the service again for a fresh link."); }, record.view.expiresAt - Date.now());
+    this.armExpiry(record);
     const started = Date.now();
     let checking = false;
     record.health = setInterval(() => {
@@ -81,6 +83,33 @@ export class TunnelManager {
         else if (record.view.state === "starting" && Date.now() - started > 45_000) await this.fail(record, "Tunnel could not connect. Check outbound TCP port 7844, or use an SSH connection.");
       })().finally(() => { checking = false; });
     }, 2000);
+  }
+
+  /** (Re)arm the expiry timer from the record's current `expiresAt`. */
+  private armExpiry(record: Running) {
+    clearTimeout(record.expiry);
+    record.expiry = setTimeout(() => { void this.fail(record, "Link expired. Open the service again for a fresh link."); }, Math.max(0, record.view.expiresAt - Date.now()));
+  }
+
+  /**
+   * Renew a live link in place. The gate, its session cookie, the helper
+   * process, and the public URL are untouched; only the expiry moves, and
+   * never beyond the lifetime cap measured from `createdAt`. The service
+   * lease keeps being re-verified every two seconds as before, so a renewal
+   * cannot outlive the dev server it was issued for.
+   */
+  extend(id: string, minutes: number): Tunnel {
+    if (!isTunnelMinutes(minutes)) throw new Error(TUNNEL_MINUTES_MESSAGE);
+    const record = this.records.get(id);
+    if (!record || record.stopping || !["starting", "connected"].includes(record.view.state)) throw new Error("This link is no longer live. Open the service again for a fresh link.");
+    const expiresAt = nextExpiry(Date.now(), record.view.createdAt, minutes);
+    if (expiresAt === null) throw new Error("This link has reached its 24-hour lifetime. Close it and open the service again for a fresh link.");
+    if (expiresAt > record.view.expiresAt) {
+      record.view.expiresAt = expiresAt;
+      record.gate?.extend(expiresAt);
+      if (record.child) this.armExpiry(record);
+    }
+    return { ...record.view };
   }
 
   private async dispose(record: Running) {

@@ -1,5 +1,6 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
+import { TUNNEL_MINUTES_DEFAULT, TunnelMinutesSchema } from "./tunnel-lease";
 
 export const Port = z.number().int().min(1).max(65535);
 export const ProfileSchema = z.object({
@@ -19,7 +20,13 @@ export const LinkStateSchema = z.object({
   message: z.string(),
 });
 export type LinkState = z.infer<typeof LinkStateSchema>;
-export const TunnelSchema = LinkStateSchema.extend({ port: Port, expiresAt: z.number(), url: z.string().nullable() });
+export const TunnelSchema = LinkStateSchema.extend({
+  port: Port,
+  /** When the link was first started; renewals never move it, so the lifetime cap is measured from here. */
+  createdAt: z.number(),
+  expiresAt: z.number(),
+  url: z.string().nullable(),
+});
 export type Tunnel = z.infer<typeof TunnelSchema>;
 const Empty = z.object({});
 const Id = z.object({ id: z.string().uuid() });
@@ -39,7 +46,13 @@ export const linkConnect = defineRpc({ name: "daemon-link.connect", input: Id, o
 export const linkDisconnect = defineRpc({ name: "daemon-link.disconnect", input: Id, output: Ok });
 export const tunnelStart = defineRpc({
   name: "daemon-link.tunnel.start",
-  input: z.object({ port: Port, minutes: z.union([z.literal(15), z.literal(30), z.literal(60)]).default(30) }),
+  input: z.object({ port: Port, minutes: TunnelMinutesSchema.default(TUNNEL_MINUTES_DEFAULT) }),
+  output: TunnelSchema,
+});
+/** Renew a live link in place: same URL, same gate session, later expiry. */
+export const tunnelExtend = defineRpc({
+  name: "daemon-link.tunnel.extend",
+  input: Id.extend({ minutes: TunnelMinutesSchema.default(TUNNEL_MINUTES_DEFAULT) }),
   output: TunnelSchema,
 });
 export const tunnelStop = defineRpc({ name: "daemon-link.tunnel.stop", input: Id, output: Ok });

@@ -3,6 +3,7 @@ import { Text } from "react-native";
 import { useSettings, type PluginSurfaceProps, type SettingsState } from "@getpaseo/plugin/client";
 import { SettingsAction, SettingsCard, SettingsInput, SettingsSection, SettingsSelect, SettingsSwitch } from "@getpaseo/plugin/client/ui";
 import { SNAPSHOT_INTERVAL_MAX, SNAPSHOT_INTERVAL_MIN, hostsSettings, type PanelScope } from "../shared/settings";
+import { TUNNEL_MINUTES, TUNNEL_MINUTES_DEFAULT, formatMinutes, isTunnelMinutes } from "../shared/tunnel-lease";
 
 type Ready = Extract<SettingsState<typeof hostsSettings.schema>, { status: "ready" }>;
 
@@ -10,6 +11,11 @@ const SCOPES: ReadonlyArray<{ label: string; value: PanelScope }> = [
   { label: "This workspace only", value: "workspace" },
   { label: "Whole host", value: "host" },
 ];
+/** The select speaks strings; the document stores the number. */
+const DURATIONS: ReadonlyArray<{ label: string; value: string }> = TUNNEL_MINUTES.map((minutes) => ({
+  label: `${formatMinutes(minutes).replace(" min", " minutes").replace(/ h$/, minutes === 60 ? " hour" : " hours")}${minutes === TUNNEL_MINUTES_DEFAULT ? " (default)" : ""}`,
+  value: String(minutes),
+}));
 
 function intervalError(text: string): string | null {
   if (!/^\d+$/.test(text.trim())) return "Enter a whole number of seconds.";
@@ -64,6 +70,18 @@ function HostsControls({ settings }: { settings: Ready }) {
             value={settings.values.showComposerPill}
             disabled={settings.saving}
             onValueChange={(showComposerPill) => save({ showComposerPill })}
+          />
+        </SettingsCard>
+      </SettingsSection>
+      <SettingsSection title="Browser links" info="A temporary browser link is a public HTTPS URL to one verified dev server. It always expires; Extend renews a live link without a new URL, up to 24 hours after it was started.">
+        <SettingsCard>
+          <SettingsSelect<string>
+            label="Link duration"
+            hint="How long Open keeps a new link alive, and how much each Extend adds. Longer is more convenient; shorter limits how long the URL stays public."
+            value={String(settings.values.tunnelMinutes)}
+            options={DURATIONS}
+            disabled={settings.saving}
+            onValueChange={(value) => { const minutes = Number(value); if (isTunnelMinutes(minutes)) save({ tunnelMinutes: minutes }); }}
           />
         </SettingsCard>
       </SettingsSection>
