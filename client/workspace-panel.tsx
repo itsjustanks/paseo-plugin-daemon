@@ -7,10 +7,11 @@ import { hostHealth, workspaceHealth, type HealthIssue, type HealthStatus } from
 import * as link from "../shared/link";
 import { HOSTS_SETTINGS_DEFAULTS, hostsSettings } from "../shared/settings";
 import { filterWorkspaceProcesses, workspacePorts } from "../shared/workspace-filter";
+import { rollupResources, type ResourceRollup } from "../shared/workspace-resources";
 import { DaemonSurface } from "./daemon";
 import { PROCESS_LIMIT, processKey, useMonitorRpc, type Process, type Snapshot } from "./rpc";
 import { ForceStopModal, ProcessRow, ServiceCard, errorText, usePendingStops, useProcessActions } from "./surface";
-import { Button, Card, Facts, Grid, Notice, Section, StatusPill, Tag, TokensProvider, useTokens, useUi, type Tone } from "./ui";
+import { Button, Card, Facts, Grid, Meter, Notice, Section, StatusPill, Tag, TokensProvider, formatBytes, formatPercent, useTokens, useUi, type Tone } from "./ui";
 
 const QUERY_KEY = ["monitor", "workspace-snapshot"] as const;
 /** Enough rows to cover a busy workspace; the server bounds this too. */
@@ -62,6 +63,67 @@ function HealthCard({ health, background }: { health: ReturnType<typeof workspac
   );
 }
 
+/**
+ * What this workspace costs the host right now: summed CPU and resident memory
+ * of its processes, each as a share of the machine when the host total is
+ * known. A metric the host has not measured yet reads as unknown, never 0.
+ */
+function ResourceCard({ rollup, snapshot }: { rollup: ResourceRollup; snapshot: Snapshot }) {
+  const t = useTokens();
+  const { cpu, memory } = snapshot.system;
+  const cpuPending = rollup.processCount - rollup.cpuSampled;
+  const memoryPending = rollup.processCount - rollup.memorySampled;
+  return (
+    <Card>
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: t.space.sm }}>
+        <Text style={t.text.heading}>Resources</Text>
+        <Text style={t.text.caption}>{rollup.processCount} process{rollup.processCount === 1 ? "" : "es"} in this workspace</Text>
+      </View>
+      {rollup.processCount === 0 ? (
+        <Text style={t.text.caption}>Nothing is running in this workspace, so it uses none of the host's CPU or memory.</Text>
+      ) : (
+        <Grid min={220}>
+          <ResourceFigure
+            title="CPU"
+            value={rollup.cpuPercent === null ? "sampling…" : formatPercent(rollup.cpuPercent, 1)}
+            share={rollup.cpuOfHostPercent}
+            facts={[
+              rollup.cpuOfHostPercent !== null ? { value: `${formatPercent(rollup.cpuOfHostPercent, 1)} of ${cpu.cores} cores` } : null,
+              rollup.cpuOfHostLoadPercent !== null ? { value: `${formatPercent(rollup.cpuOfHostLoadPercent, 1)} of the host's ${formatPercent(cpu.percent, 1)} load` } : null,
+              rollup.cpuPercent !== null && rollup.cpuOfHostPercent === null ? { value: "host share unknown" } : null,
+              cpuPending > 0 ? { value: `${cpuPending} still sampling` } : null,
+            ]}
+          />
+          <ResourceFigure
+            title="Memory"
+            value={rollup.rssBytes === null ? "unknown" : formatBytes(rollup.rssBytes)}
+            share={rollup.memoryOfHostPercent}
+            facts={[
+              rollup.memoryOfHostPercent !== null ? { value: `${formatPercent(rollup.memoryOfHostPercent, 1)} of ${formatBytes(memory.totalBytes)}` } : null,
+              rollup.memoryOfHostUsedPercent !== null ? { value: `${formatPercent(rollup.memoryOfHostUsedPercent, 1)} of what the host uses` } : null,
+              rollup.rssBytes !== null && rollup.memoryOfHostPercent === null ? { value: "host total unknown" } : null,
+              memoryPending > 0 ? { value: `${memoryPending} without a reading` } : null,
+            ]}
+          />
+        </Grid>
+      )}
+    </Card>
+  );
+}
+
+/** One figure with its meter against the host; the meter stays empty while the share is unknown. */
+function ResourceFigure({ title, value, share, facts }: { title: string; value: string; share: number | null; facts: Array<{ value: string } | null> }) {
+  const t = useTokens();
+  return (
+    <View style={{ gap: t.space.xs }}>
+      <Text style={t.text.label}>{title}</Text>
+      <Text style={t.text.value} accessibilityLabel={`${title} ${value}`}>{value}</Text>
+      <Meter percent={share} />
+      <Facts items={facts} />
+    </View>
+  );
+}
+
 function IssueRow({ issue }: { issue: HealthIssue }) {
   const t = useTokens();
   return (
@@ -107,6 +169,8 @@ function WorkspaceBody({ hostId, workspaceId, intervalSeconds, settingsLoading }
     return { ...host, services, processes: { items, total: items.length, truncated: host.processes.truncated } };
   }, [host, workspace]);
   const ports = useMemo(() => (snapshot ? workspacePorts([...snapshot.services, ...snapshot.processes.items]) : []), [snapshot]);
+  // Host totals come from the same sample as the rows, so the shares compare like with like.
+  const rollup = useMemo(() => (snapshot ? rollupResources([...snapshot.services, ...snapshot.processes.items], snapshot.system) : null), [snapshot]);
   const tunnels = useMemo(() => (links.data?.tunnels ?? []).filter((tunnel) => ports.includes(tunnel.port)), [links.data, ports]);
 
   const refresh = useCallback(() => {
@@ -142,6 +206,7 @@ function WorkspaceBody({ hostId, workspaceId, intervalSeconds, settingsLoading }
         </Notice>
         {settingsLoading ? <Text style={t.text.caption}>Loading Hosts settings; using defaults until they arrive.</Text> : null}
         {health ? <HealthCard health={health} background={healthQuery.data?.background ?? true} /> : null}
+        {snapshot && rollup ? <ResourceCard rollup={rollup} snapshot={snapshot} /> : null}
         {snapshotQuery.isError ? (
           <Notice icon="CircleAlert" tone="danger" action={<Button label="Retry" onPress={refresh} loading={snapshotQuery.isFetching} />}>
             {snapshot ? `Latest sample failed: ${errorText(snapshotQuery.error)}. Showing the last good data.` : `Could not read the host: ${errorText(snapshotQuery.error)}`}
