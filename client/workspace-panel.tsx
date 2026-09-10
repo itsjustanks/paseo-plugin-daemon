@@ -3,21 +3,26 @@ import { useToast } from "@getpaseo/plugin/client/react-native";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, ScrollView, Text, View } from "react-native";
+import { hostHealth, workspaceHealth, type HealthIssue, type HealthStatus } from "../shared/health";
 import * as link from "../shared/link";
 import { HOSTS_SETTINGS_DEFAULTS, hostsSettings } from "../shared/settings";
 import { filterWorkspaceProcesses, workspacePorts } from "../shared/workspace-filter";
 import { DaemonSurface } from "./daemon";
 import { PROCESS_LIMIT, processKey, useMonitorRpc, type Process, type Snapshot } from "./rpc";
 import { ForceStopModal, ProcessRow, ServiceCard, errorText, usePendingStops, useProcessActions } from "./surface";
-import { Button, Card, Grid, Notice, Section, StatusPill, Tag, TokensProvider, useTokens, useUi } from "./ui";
+import { Button, Card, Facts, Grid, Notice, Section, StatusPill, Tag, TokensProvider, useTokens, useUi, type Tone } from "./ui";
 
 const QUERY_KEY = ["monitor", "workspace-snapshot"] as const;
 /** Enough rows to cover a busy workspace; the server bounds this too. */
 const WORKSPACE_LIMIT = PROCESS_LIMIT * 4;
 
+const HEALTH_TONE: Record<HealthStatus, Tone> = { ok: "ok", warning: "warning", critical: "danger", unknown: "neutral" };
+const HEALTH_LABEL: Record<HealthStatus, string> = { ok: "Healthy", warning: "Needs attention", critical: "Unreachable", unknown: "Unknown" };
+
 /**
- * The workspace tab. In "workspace" scope it narrows the host snapshot to the
- * open workspace's processes; in "host" scope it is the full Hosts surface.
+ * The workspace tab, also shown in the Projects explorer. In "workspace"
+ * scope it leads with this workspace's health verdict, dev servers, and
+ * browser links; in "host" scope it is the full Hosts surface.
  */
 export function WorkspacePanel(props: PluginWorkspacePanelProps) {
   const settings = useSettings(hostsSettings);
@@ -29,6 +34,41 @@ export function WorkspacePanel(props: PluginWorkspacePanelProps) {
     <TokensProvider value={tokens}>
       <WorkspaceBody key={`${props.host.id}:${props.workspaceId}`} hostId={props.host.id} workspaceId={props.workspaceId} intervalSeconds={values.snapshotIntervalSeconds} settingsLoading={settings.status === "loading"} />
     </TokensProvider>
+  );
+}
+
+/** The verdict for this workspace first: status, when it was checked, and every issue that touches it. */
+function HealthCard({ health, background }: { health: ReturnType<typeof workspaceHealth>; background: boolean }) {
+  const t = useTokens();
+  const checked = new Date(health.checkedAt).toLocaleTimeString();
+  return (
+    <Card tone={health.status === "ok" ? undefined : HEALTH_TONE[health.status]}>
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: t.space.sm }}>
+        <Text style={t.text.heading}>Health</Text>
+        <StatusPill tone={HEALTH_TONE[health.status]} label={HEALTH_LABEL[health.status]} />
+      </View>
+      <Facts items={[
+        { value: `${health.services.length} dev server${health.services.length === 1 ? "" : "s"}` },
+        health.ports.length > 0 ? { value: `ports ${health.ports.map((port) => `:${port}`).join(" ")}` } : null,
+        { value: `checked ${checked}` },
+        { value: background ? "checks run on the daemon" : "background checks off" },
+      ]} />
+      {health.issues.length === 0 ? (
+        <Text style={t.text.caption}>Nothing wrong with this workspace's servers, browser links, or SSH forwards.</Text>
+      ) : (
+        health.issues.map((issue, index) => <IssueRow key={`${issue.code}-${issue.ports.join("-")}-${index}`} issue={issue} />)
+      )}
+    </Card>
+  );
+}
+
+function IssueRow({ issue }: { issue: HealthIssue }) {
+  const t = useTokens();
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
+      <Tag tone={issue.severity === "critical" ? "danger" : "warning"} label={issue.scope === "host" ? "host" : issue.ports.length > 0 ? `:${issue.ports.join(" :")}` : "process"} />
+      <Text style={[t.text.body, { flex: 1 }]}>{issue.message}</Text>
+    </View>
   );
 }
 
@@ -54,6 +94,10 @@ function WorkspaceBody({ hostId, workspaceId, intervalSeconds, settingsLoading }
     enabled: workspace !== null,
   });
   const links = useQuery({ queryKey: ["daemon-link", hostId, "status"], queryFn: () => linkStatus({}), refetchInterval: intervalSeconds * 1000, retry: 1 });
+  // The cached daemon verdict; the server re-checks on the same interval, so this never probes the host twice.
+  const readHealth = useRpc(hostHealth);
+  const healthQuery = useQuery({ queryKey: ["daemon-link", hostId, "health"], queryFn: () => readHealth({}), refetchInterval: intervalSeconds * 1000, retry: 1, enabled: workspace !== null });
+  const health = useMemo(() => (healthQuery.data && workspace ? workspaceHealth(healthQuery.data, workspace) : null), [healthQuery.data, workspace]);
 
   const host = snapshotQuery.data;
   const snapshot = useMemo<Snapshot | undefined>(() => {
@@ -68,7 +112,8 @@ function WorkspaceBody({ hostId, workspaceId, intervalSeconds, settingsLoading }
   const refresh = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: QUERY_KEY });
     void links.refetch();
-  }, [queryClient, links]);
+    void healthQuery.refetch();
+  }, [queryClient, links, healthQuery]);
   const pendingStops = usePendingStops(snapshot);
   const { actions, liveForceTarget, forceMutation, setForceTarget } = useProcessActions({ rpc, snapshot, pendingStops, refresh });
   const closeTunnel = useMutation({ mutationFn: (id: string) => tunnelStop({ id }), onSuccess: () => { void links.refetch(); }, onError: (error) => toast.error(errorText(error)) });
@@ -93,9 +138,10 @@ function WorkspaceBody({ hostId, workspaceId, intervalSeconds, settingsLoading }
           <StatusPill tone={status.tone} label={status.label} />
         </View>
         <Notice icon="FolderCode" action={<Button label="Refresh" onPress={refresh} loading={snapshotQuery.isFetching} />}>
-          Only processes running inside this workspace's directory are listed. Switch the panel to the whole host under Settings → Plugins → Daemon Link → Hosts.
+          Only dev servers, processes, and links that belong to this workspace's directory are listed. Switch the panel to the whole host under Settings → Plugins → Daemon Link → Hosts.
         </Notice>
         {settingsLoading ? <Text style={t.text.caption}>Loading Hosts settings; using defaults until they arrive.</Text> : null}
+        {health ? <HealthCard health={health} background={healthQuery.data?.background ?? true} /> : null}
         {snapshotQuery.isError ? (
           <Notice icon="CircleAlert" tone="danger" action={<Button label="Retry" onPress={refresh} loading={snapshotQuery.isFetching} />}>
             {snapshot ? `Latest sample failed: ${errorText(snapshotQuery.error)}. Showing the last good data.` : `Could not read the host: ${errorText(snapshotQuery.error)}`}
