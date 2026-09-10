@@ -1,6 +1,7 @@
 import type { PluginClientContext, PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { DaemonSurface } from "./client/daemon";
 import { HostsSettings } from "./client/settings";
+import { registerHealthPills } from "./client/pill";
 import { WorkspacePanel } from "./client/workspace-panel";
 
 export default function contribute(client: PluginClientContext) {
@@ -30,5 +31,7 @@ export default function contribute(client: PluginClientContext) {
     argumentHint: "", context: "workspace",
     onSubmit({ openPanel }) { openPanel("daemon-link"); },
   });
-  return () => {};
+  // One pill per live agent, present only while its workspace has a dev server or an issue to report.
+  const removePills = registerHealthPills(client);
+  return () => { removePills(); };
 }
