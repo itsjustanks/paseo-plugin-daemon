@@ -14,13 +14,12 @@ The package is `paseo-plugin-daemon`; the runtime ID and sidebar surface are `da
 
 | Tab | Use it for |
 | --- | --- |
-| **Local Projects** | Find verified dev servers grouped by the selected host's Paseo projects. |
-| **Dev Relay** | Pair hosts for private localhost access, create temporary browser links, or save SSH forwards. |
+| **Dev servers** | Verified dev servers with one-press Open, link state, Extend, private routes, and the guide. |
+| **Connect** | Pair hosts for private localhost access, manage temporary browser links, or save SSH forwards. |
 | **Daemon Health** | Read whole-machine CPU/memory and a sortable, paginated table of project processes. |
-| **Guide & Setup** | Follow the start → pair → open walkthrough, check setup, and troubleshoot missing apps. |
 
 “Local” always means the selected Paseo host, which may be a remote server. To open a remote app on
-your computer's localhost, select your computer's daemon in Dev Relay first. Closing a forward or
+your computer's localhost, select your computer's daemon in Connect first. Closing a forward or
 browser link only closes access; the dev server keeps running.
 
 ## Project scope and process controls
@@ -155,7 +154,7 @@ that same pattern instead of relying solely on a version string.
 ## Everyday use
 
 1. Start the dev server inside a Paseo project. On that host, open
-   **Dev Relay → Private localhost → Create pairing code**.
+   **Connect → Private localhost → Create pairing code**.
 2. Use Paseo's host picker to select the daemon running on your computer. Paste that code under
    **Pair host**. This is one-time pairing; no SSH password, key setup, or Cloudflare account is needed.
 3. Choose the paired host and press **Open localhost** beside its detected service. The plugin binds
@@ -165,8 +164,8 @@ that same pattern instead of relying solely on a version string.
 
 If the requested local port is occupied, a free port is allocated and the actual URL is displayed.
 A local port belongs to the **selected daemon's machine**. Select your own computer's daemon to
-use localhost in that computer's browser. Phones and browser-only devices can use **Dev Relay → Temporary
-browser link** instead.
+use localhost in that computer's browser. Phones and browser-only devices can press **Open** on a
+Dev servers card, or use **Connect → Browser link** instead.
 
 A pairing lets a trusted peer discover and connect to this OS user's verified Paseo project dev servers.
 It does not grant agent, file, process-control, or daemon-management access. Pair separately in the
@@ -180,16 +179,22 @@ a separate plugin pairing is currently required. A future host-selection API cou
 
 ### Fallback routes
 
-- **Temporary browser link** in Dev Relay lists verified project apps and creates an authenticated HTTPS link.
+- **Temporary browser link** (Open on a Dev servers card, or Connect → Browser link) creates an
+  authenticated HTTPS link to one verified project app.
   One-time setup downloads a pinned, checksum-verified `cloudflared` binary into this user's plugin
-  state directory. Nothing is installed system-wide. Links expire after 30 minutes in the UI;
-  the RPC supports 15, 30, or 60 minutes. Disconnect, expiry, and plugin shutdown revoke access.
-- **Saved SSH forward** in Dev Relay is optional. Save a hostname or SSH config alias and a port mapping on
+  state directory. Nothing is installed system-wide. A link lives for the configured duration (2 hours by default;
+  the RPC accepts 15, 30, 60, 120, 240, or 480 minutes) and `daemon-link.tunnel.extend` renews a live
+  link in place, never past 24 hours after `createdAt`. The gate's session cookie and token are
+  unchanged by a renewal; only its expiry moves. Disconnect, expiry, the lifetime cap, a failed
+  service lease, and plugin shutdown all revoke access.
+- **Saved SSH forward** in Connect is optional; a Dev servers card's **Private forward…** opens it with
+  the remote port preset. Save a hostname or SSH config alias and a port mapping on
   your local daemon.
   It uses existing keys or an SSH agent, strict known-host verification, loopback binding, keepalives,
   and reconnects. It never stores an SSH password or launches an invisible password prompt.
 - **Daemon Health** contains whole-machine metrics and verified project processes.
-- **Guide & Setup** explains the selected host, pairing, optional routes, and actionable setup checks.
+- **Setup guide & checks**, a collapsed card under Dev servers, explains the selected host, pairing,
+  the routes, and actionable setup checks.
 
 The private relay uses outbound WebSockets over TLS (normally port 443). Set
 `PASEO_DAEMON_LINK_RELAY=wss://your-relay.example` on both plugin hosts before creating pairings to

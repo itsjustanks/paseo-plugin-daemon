@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.9.0 — 2026-09-10
+
+The theme of this release: viewing a dev server that runs on a remote Paseo host should be one press,
+not a six-tab expedition that has to be repeated every 30 minutes.
+
+**What is and is not possible.** Rendering a `localhost:3000` page inside Paseo itself is not
+possible with the current plugin SDK (`@getpaseo/plugin` 0.8): the client exports no WebView or
+iframe primitive, and the server context has no HTTP route, proxy, or static-serving capability. A
+tunnel (public browser link), a paired-host forward, or an SSH forward therefore remains the only way
+to reach the server, and 0.9.0 makes those mechanisms cheap rather than pretending otherwise.
+
+- **One-click Open.** Every verified dev server is a card with an **Open in browser** button, both in
+  the Hosts sidebar surface and in each workspace's Hosts tab (which now leads with its dev servers,
+  above Health and Resources). One press reserves a tab, starts a browser link with the configured
+  duration or reuses the live one for that port, and sends the tab to the app once the daemon reports
+  it connected. The row shows live state: **No link yet**, **Starting link**, **Link ready · 1 h 59
+  min left**, **Link failed** with the daemon's reason (and a Retry that first clears the failed
+  record), or **Link expired**. The flow is one shared hook, `client/open-service.ts`, used by both
+  places; `prepareExternal()` is still called synchronously in the press so pop-up blockers allow it.
+- **Longer, extendable links.** `daemon-link.tunnel.start` now accepts 15, 30, 60, 120, 240, or 480
+  minutes (was 15/30/60). The default is 2 hours and comes from a new **Link duration** setting under
+  Settings → Hosts. A new `daemon-link.tunnel.extend` RPC renews a live link *in place*: the public
+  URL, the gate's session cookie, and the tunnel process are untouched; only the expiry moves. Every
+  link list shows the expiry time and remaining minutes and offers **Extend** and **Close**. A link
+  can be renewed as often as needed but never beyond **24 hours after it was created**
+  (`TUNNEL_MAX_LIFETIME_MS`); an unlimited link is a permanently public URL, and 24 hours already
+  covers any working day while forcing a fresh secret daily. The service lease is still re-verified
+  every two seconds, so an extended link still dies with its dev server. `Tunnel` gains a
+  `createdAt` field. Logic lives in `shared/tunnel-lease.ts` with its own tests.
+- **Simplified sidebar: six tabs become four.** `Overview` and `Local Projects` both answered "what
+  can I open?" and are now one tab, **Dev servers**, which is the first thing the surface shows. It
+  carries the host counts that Overview had, the server cards and search that Local Projects had,
+  and a **Browser link / Private forward** switch that explains in one line when each route is
+  right. `Guide & Setup` is no longer a tab: it is a collapsed **Setup guide & checks** card at the
+  foot of Dev servers whose header summarises the checks (`All checks passed`, `2 steps left`, `1
+  check failing`) and expands into the same walkthrough, checks, and troubleshooting cards.
+  `Dev Relay` is renamed **Connect**; its three routes are now labelled **Private localhost**,
+  **Browser link**, and **SSH forward** with one-line trade-offs. `Project Sync` and `Daemon Health`
+  are unchanged. Everything reachable in 0.8.0 is still reachable; only the entry points moved.
+- **SSH forward as a first-class private choice.** A dev-server card's **Private forward…** jumps to
+  Connect → SSH forward with the remote and local port preset to that server's port, and the
+  Private-forward view of Dev servers shows `remote :3000 → your 127.0.0.1:3000` per server with
+  SSH and paired-host buttons. The routes are explained side by side: a browser link is a public
+  URL that works from any device and expires; a private forward publishes nothing and lives at
+  `127.0.0.1` on your own computer.
+- **Settings document version 3.** `tunnelMinutes` is added with a default of 120. Version 1 and
+  version 2 documents (0.6.0 through 0.8.0) are migrated in place by both the daemon and the
+  server-side file reader: every saved value (`closeTunnelsOnArchive`, `panelScope`,
+  `snapshotIntervalSeconds`, `backgroundHealthChecks`, `showComposerPill`) is kept and only the new
+  field takes its default. A naive version bump would have reset them, because the reader treats an
+  unknown version as unreadable.
+- **Preview harness.** `tests/ui` now mounts the sidebar surface, the workspace panel
+  (`?view=panel`), and the settings screen (`?view=settings`); the fixture simulates link startup,
+  connection, extension, failure (`?tunnelfail`), and settings persistence, and stubs `window.open`
+  so a headless run can assert where a reserved tab was sent. Screenshots were regenerated from it.
+
 ## 0.8.0 — 2026-09-10
 
 - The **Hosts** workspace tab now reports what the open workspace costs the host. A **Resources**
