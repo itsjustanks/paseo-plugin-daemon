@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.8.0 — 2026-09-10
+
+- The **Hosts** workspace tab now reports what the open workspace costs the host. A **Resources**
+  card under the Health card sums the CPU (`cpuPercent`, one-core units) and resident memory
+  (`rssBytes`) of the workspace's processes, counts them once even when a dev server appears in
+  both snapshot lists, and shows each figure as a share of the host: CPU against the machine's
+  `cores` and its current `cpu.percent` load, memory against `memory.totalBytes` and
+  `memory.usedBytes`. Processes the host has not sampled twice read as "still sampling" and a share
+  is omitted when the host total it needs is missing or zero, so nothing is reported as 0 that is
+  merely unknown. The rollup is pure, dependency-free logic in `shared/workspace-resources.ts` with
+  its own test suite.
+- Health verdicts gain a `pressure-driver` issue: a project process the collector already marks as
+  a top-3 CPU or memory user while the host is under matching pressure. It is scoped to that
+  process's cwd and ports, so only the workspace running it is flagged; the host-level
+  `cpu-pressure` and `memory-pressure` codes are unchanged, and a busy host alone never produces
+  it. Zombie and driver issues are reported once per process even when the process is in both
+  `services` and `processes`.
+- The composer pill leads with an issue inside the workspace (`Driving host pressure`, `Dev server
+  :3000 stopped`) before a host-wide one, and stays a chip: no CPU or memory figures.
+
 ## 0.7.0 — 2026-09-09
 
 - Fixed the **Hosts** workspace tab never appearing in the Projects/Explorer view. The panel was

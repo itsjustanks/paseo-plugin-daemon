@@ -26,7 +26,11 @@ an isolated preview: no real accounts, host addresses, project names, credential
 - **Useful health information.** Whole-machine CPU and memory, alongside searchable project processes
   with sortable columns and 15 rows per page.
 - **Automatic health checks.** The daemon re-checks hosts on a schedule and flags a dev server that
-  stopped serving, a failed browser link, or an SSH forward that is down, per workspace.
+  stopped serving, a failed browser link, an SSH forward that is down, or a workspace process that
+  is driving host pressure, per workspace.
+- **What this workspace costs.** The workspace tab sums the CPU and memory of the workspace's own
+  processes and shows each as a share of the host, so you can tell a loaded machine from a loaded
+  workspace.
 - **A composer pill that knows your workspace.** Under each agent's composer, a chip counts that
   workspace's dev servers or names its problem, and opens the Hosts tab for it. Quiet workspaces get
   no chip.
@@ -130,11 +134,16 @@ setting described below.
 
 By default the workspace tab leads with a **Health** card for the open workspace: its status, how
 many verified dev servers run inside it and on which ports, when the daemon last checked, and every
-issue that touches it. Below that come the dev servers and other processes whose working directory
+issue that touches it. A **Resources** card follows: the summed CPU and resident memory of the
+workspace's processes, how many processes that is, and each figure as a share of the host (CPU
+against the machine's cores and its current load; memory against total and used memory). The
+numbers come from the same sample as the process rows; a process the host has not measured twice yet
+is reported as still sampling rather than as zero, and a share is left out when the host total it
+needs is not available. Below that come the dev servers and other processes whose working directory
 sits inside the workspace directory (or that share one of its ports), plus any temporary browser
 links pointing at those ports. Stop and force-stop controls are the same as in Daemon Health and
 keep the same server-side checks. Switch the scope to **Whole host** to get the full Hosts surface
-inside the tab instead.
+inside the tab instead; the whole-host surface shows machine totals, not a per-workspace rollup.
 
 ### Health checks and the composer pill
 
@@ -146,13 +155,17 @@ pill reads the same result instead of probing the host. A host or workspace is f
 - a temporary browser link is in the error state;
 - a saved SSH forward is retrying, or is set to auto-connect but is not running;
 - a project process is a zombie;
-- CPU or memory pressure is critical.
+- CPU or memory pressure is critical;
+- a project process is one of the top CPU or memory users while the host is under matching
+  pressure. This is the only way a workspace is blamed for host load: a busy process on a quiet
+  host, or a quiet workspace on a busy host, never triggers it.
 
 Each agent's composer gets a small pill while its workspace has something to report: `2 dev servers
-:3000 :4000` when things are fine, `Dev server :3000 stopped` or `Host unreachable` when they are
-not. Pressing it opens the Hosts tab for that workspace. When a workspace has no verified dev server
-and no issue, the pill is not shown at all. The verdict never carries tokens, link URLs, or raw
-command lines.
+:3000 :4000` when things are fine, `Dev server :3000 stopped`, `Driving host pressure`, or `Host
+unreachable` when they are not. A problem inside the workspace leads the chip ahead of a host-wide
+one. Pressing it opens the Hosts tab for that workspace. When a workspace has no verified dev server
+and no issue, the pill is not shown at all. The chip never shows CPU or memory figures; those live in
+the Resources card. The verdict never carries tokens, link URLs, or raw command lines.
 
 ### Settings: Hosts
 
@@ -277,9 +290,9 @@ framework handling, pressure thresholds, and known limitations.
 
 Requires Paseo 0.8 or newer. Version 0.5.0 moved to the 0.8 runtime layout: `index.client.tsx`
 and `index.server.ts` entries with code under `client/`, `server/`, and `shared/`, and
-`requirements.paseo` set to `>=0.8.0`. Versions 0.6.0 and 0.7.0 add the workspace panel, settings
-screen, lifecycle hooks, health checks, and composer pill on top of that layout. Paseo 0.7 hosts
-should stay on 0.4.0.
+`requirements.paseo` set to `>=0.8.0`. Versions 0.6.0 through 0.8.0 add the workspace panel,
+settings screen, lifecycle hooks, health checks, composer pill, and workspace resource rollup on top
+of that layout. Paseo 0.7 hosts should stay on 0.4.0.
 
 Features depend on the selected host's actual capabilities, so a newer host never lends its APIs
 to an older one. The `/daemon-link` composer shortcut appears only when the host provides that API.
