@@ -6,12 +6,17 @@ import * as peer from "./shared/peers";
 import { createRuntime } from "./server/runtime";
 import { installCloudflared } from "./server/binaries";
 import { hostsSettings } from "./shared/settings";
-import { registerHooks } from "./server/hooks";
+import { hostHealth } from "./shared/health";
+import { readHostsSettings, registerHooks } from "./server/hooks";
+import { HealthChecker } from "./server/health";
 
 export default function contribute(server: PluginServerContext) {
   const runtime = createRuntime();
   server.registerSettings(hostsSettings);
   const removeHooks = registerHooks(server, runtime);
+  // One cached verdict per host; pills and panels read it instead of probing.
+  const health = new HealthChecker({ runtime, readSettings: () => readHostsSettings() });
+  server.handle(hostHealth, (_input, context) => runtime.withContext(context, () => health.read(context)));
   server.handle(sync.syncStatus, (_input, context) => runtime!.withContext(context, async () => {
     await runtime!.scope.refresh(); return { projects: runtime!.scope.status().projects.map((p) => ({ id: p.id, name: p.name })), history: await runtime!.transfers.history(), grants: await runtime!.peers.projectGrants() };
   }));
@@ -39,5 +44,5 @@ export default function contribute(server: PluginServerContext) {
   server.handle(peer.peerServices, ({ id }, context) => runtime.withContext(context, () => runtime.peers.services(id)));
   server.handle(peer.peerForward, ({ id, port }, context) => runtime.withContext(context, () => runtime.peers.forward(id, port)));
   server.handle(peer.peerDisconnect, ({ id }, context) => runtime.withContext(context, () => runtime.peers.disconnect(id)));
-  return async () => { removeHooks(); await Promise.all([runtime.links.close(), runtime.peers.close(), runtime.transfers.close()]); };
+  return async () => { removeHooks(); health.close(); await Promise.all([runtime.links.close(), runtime.peers.close(), runtime.transfers.close()]); };
 }

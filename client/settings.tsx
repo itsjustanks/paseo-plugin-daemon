@@ -49,6 +49,24 @@ function HostsControls({ settings }: { settings: Ready }) {
           <SettingsAction label="Apply refresh interval" actionLabel="Save" disabled={settings.saving || !dirty} onPress={saveInterval} />
         </SettingsCard>
       </SettingsSection>
+      <SettingsSection title="Health checks" info="The daemon re-checks host health on the refresh interval and caches one verdict that every workspace reads.">
+        <SettingsCard>
+          <SettingsSwitch
+            label="Check host health in the background"
+            hint="Off means health only refreshes when a Hosts panel or pill asks for it."
+            value={settings.values.backgroundHealthChecks}
+            disabled={settings.saving}
+            onValueChange={(backgroundHealthChecks) => save({ backgroundHealthChecks })}
+          />
+          <SettingsSwitch
+            label="Show the composer pill"
+            hint="A small chip under each agent's composer that counts the workspace's dev servers and flags problems. It hides itself when there is nothing to report."
+            value={settings.values.showComposerPill}
+            disabled={settings.saving}
+            onValueChange={(showComposerPill) => save({ showComposerPill })}
+          />
+        </SettingsCard>
+      </SettingsSection>
       <SettingsSection title="Workspace cleanup">
         <SettingsCard>
           <SettingsSwitch

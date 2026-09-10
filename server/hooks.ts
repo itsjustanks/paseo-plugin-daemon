@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { PluginHandlerContext, PluginHookWorkspace, PluginLifecycleRegistration } from "@getpaseo/plugin/server";
 import type { Snapshot, SnapshotInput } from "../shared/contracts";
 import type { Tunnel } from "../shared/link";
-import { HOSTS_SETTINGS_DEFAULTS, HostsSettingsSchema, type HostsSettings } from "../shared/settings";
+import { HOSTS_SETTINGS_DEFAULTS, HOSTS_SETTINGS_VERSION, HostsSettingsSchema, migrateHostsSettings, type HostsSettings } from "../shared/settings";
 import { filterWorkspaceProcesses, workspacePorts } from "../shared/workspace-filter";
 
 /** The slice of the runtime the hooks need; tests hand in a fake. */
@@ -35,8 +35,10 @@ export async function readHostsSettings(file = hostsSettingsFile()): Promise<Hos
   }
   try {
     const envelope = JSON.parse(raw) as { version?: unknown; values?: unknown };
-    if (envelope.version !== 1) return UNREADABLE;
-    return HostsSettingsSchema.parse(envelope.values ?? {});
+    // Older documents are migrated the same way the daemon does it; newer ones are unknown.
+    if (typeof envelope.version !== "number" || envelope.version > HOSTS_SETTINGS_VERSION) return UNREADABLE;
+    const values = envelope.version === HOSTS_SETTINGS_VERSION ? envelope.values : migrateHostsSettings(envelope.values, envelope.version);
+    return HostsSettingsSchema.parse(values ?? {});
   } catch { return UNREADABLE; }
 }
 

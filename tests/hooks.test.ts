@@ -61,8 +61,11 @@ describe("readHostsSettings", () => {
     const file = join(dir, "hosts.json");
     expect(await readHostsSettings(file)).toEqual(HOSTS_SETTINGS_DEFAULTS);
     await writeFile(file, JSON.stringify({ version: 1, values: { closeTunnelsOnArchive: false, panelScope: "host" } }));
-    expect(await readHostsSettings(file)).toMatchObject({ closeTunnelsOnArchive: false, panelScope: "host", snapshotIntervalSeconds: 20 });
-    for (const raw of ["not json", JSON.stringify({ version: 2, values: {} }), JSON.stringify({ version: 1, values: { snapshotIntervalSeconds: 1 } })]) {
+    // A version 1 document is migrated in place: old values kept, new switches default on.
+    expect(await readHostsSettings(file)).toEqual({ closeTunnelsOnArchive: false, panelScope: "host", snapshotIntervalSeconds: 20, backgroundHealthChecks: true, showComposerPill: true });
+    await writeFile(file, JSON.stringify({ version: 2, values: { backgroundHealthChecks: false } }));
+    expect(await readHostsSettings(file)).toEqual({ ...HOSTS_SETTINGS_DEFAULTS, backgroundHealthChecks: false });
+    for (const raw of ["not json", JSON.stringify({ version: 3, values: {} }), JSON.stringify({ version: "1", values: {} }), JSON.stringify({ version: 1, values: { snapshotIntervalSeconds: 1 } })]) {
       await writeFile(file, raw);
       expect((await readHostsSettings(file)).closeTunnelsOnArchive).toBe(false);
     }
