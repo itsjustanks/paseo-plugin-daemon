@@ -14,9 +14,11 @@ The package is `paseo-plugin-daemon`; the runtime ID and sidebar surface are `da
 
 | Tab | Use it for |
 | --- | --- |
-| **Dev servers** | Verified dev servers with one-press Open, link state, Extend, private routes, and the guide. |
+| **Overview** | The host's state, status rows, and the guide with setup checks. |
+| **Processes** | Every process the daemon's user owns, runaways, container limits, and the ask-first stop. |
+| **Dev servers** | Verified dev servers with one-press Open, link state, Extend, and private routes. |
 | **Connect** | Pair hosts for private localhost access, manage temporary browser links, or save SSH forwards. |
-| **Daemon Health** | Read whole-machine CPU/memory and a sortable, paginated table of project processes. |
+| **Project Sync** | Reviewed Git transfers between paired hosts. |
 
 “Local” always means the selected Paseo host, which may be a remote server. To open a remote app on
 your computer's localhost, select your computer's daemon in Connect first. Closing a forward or
@@ -32,12 +34,21 @@ listeners are hidden. If registry verification fails, project sharing and proces
 - Recognized web dev servers and running Paseo service scripts are eligible for sharing.
 - Unknown project listeners remain read-only and cannot be shared. Register a custom server as a
   Paseo service script with its port so the plugin can verify its purpose.
-- Agent tools and other project processes are read-only. Manage agents from their Paseo agent tabs.
-- Stop controls appear in Daemon Health only, for verified project dev servers, after confirmation.
-  Stop/force-stop rechecks current project membership and the process identity; excluded descendants
-  and their children are skipped. Existing same-user and daemon-protection rules still apply.
-- Process headings sort by name, PID, CPU, or memory in either direction. Pages contain 15 rows;
-  desktop column headings remain above the scrolling rows.
+- Agent tools are never stopped from Daemon Link. Manage agents from their Paseo agent tabs.
+- The workspace tab's stop controls (`monitor.stop`/`monitor.force-stop`) still apply to verified
+  project dev servers only.
+- The Processes tab (`daemon-link.processes.*`, 0.10) uses its own guard and key. A process may be
+  stopped only when every rule passes, re-checked against a fresh read before each signal: same OS
+  user; not PID 1, root, a zombie, this plugin, or the daemon and its ancestors; not part of Paseo
+  (daemon, supervisor, `plugin-process.js`, `terminal-worker-process.js`, anything under
+  `@getpaseo/`); not started by a plugin host; not an agent CLI; not a terminal worker's direct
+  child (the terminal's shell); not infrastructure (postgres, redis, sshd, cloudflared, …); and
+  either a descendant of the daemon or inside a registered project. Excluded descendants and their
+  subtrees are skipped.
+- A Processes stop sends SIGTERM to the target and its eligible children, then after 10 seconds
+  SIGKILL to the target (through the guard's graceful-first gate) and to any recorded child that is
+  still the same process (uid and start identity) with a recent SIGTERM. Every step is appended to
+  `$PASEO_HOME/daemon-link/actions.jsonl` (mode 0600, newest 500 kept, no command lines).
 
 The project registry refreshes while the plugin is used, including during service lease checks.
 After a plugin/daemon restart, open Daemon Link on that host once to initialize the borrowed SDK
@@ -84,6 +95,16 @@ Daemon Link is built to describe your machine, not leak it:
 
 ## Pressure and thresholds
 
+Inside a container, `/proc/meminfo` and `/proc/stat` describe the host, so Daemon Link also reads the
+container's cgroup (v2 `memory.current`, `memory.max`, `memory.stat` `inactive_file`, `cpu.max`,
+`cpu.stat`, `memory.pressure`, `memory.events`; v1 as a fallback). The working set (usage minus
+inactive file cache) against `memory.max` decides memory pressure when a limit exists: 80% is high,
+90% critical, and a new OOM kill is critical. Per-process memory shares are measured against the
+limit. A process whose smoothed CPU stays at 90% of a core for 120 seconds is a runaway; one holding
+40% of the limit is flagged. More job roots (builds, tests, type checks, installs, dev servers whose
+parents are not jobs) than the configured limit is flagged. macOS has no cgroup; the whole machine is
+used.
+
 Daemon Link doesn't compute a single opaque "health score." Instead:
 
 - **System pressure** (`normal | high | critical`) reflects sustained CPU saturation and memory
@@ -112,9 +133,10 @@ What this means in practice:
   right before it's signaled — a descendant is never trusted just because its parent matched.
 - **No container or namespace escape.** Daemon Link only ever signals processes visible to it through
   the normal process table — it does not reach into containers or other PID namespaces.
-- **Graceful first, always.** Stop always sends a graceful termination signal first. Force-stop is
-  a separate, explicitly-confirmed action, and only becomes available after a graceful attempt has
-  been made and given a chance to work.
+- **Graceful first, always.** Stop always sends a graceful termination signal first. In the workspace
+  tab, force-stop is a separate, explicitly-confirmed action available only after a graceful attempt.
+  In Processes, the confirmation sheet says up front that survivors are stopped forcefully after 10
+  seconds, and that escalation passes the same graceful-first gate.
 - **Best-effort protection for important processes.** Daemon Link tries to protect its own process,
   Paseo itself, and their ancestors from being targeted — but see
   [Known limitations](#known-limitations) below for the honest edge cases.

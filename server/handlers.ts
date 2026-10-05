@@ -17,6 +17,8 @@ export interface MonitorHandlers {
   snapshot(input: SnapshotInput, context?: PluginHandlerContext): Promise<Snapshot>;
   stop(input: { token: string }): Promise<ActionResult>;
   forceStop(input: { token: string }): Promise<ActionResult>;
+  /** What the process report shares with the monitor (one collector, one CPU history); null on unsupported platforms. */
+  internals: { adapter: PlatformAdapter; collector: Collector; uid: number; selfPid: number; parentPid: number; clock: Clock } | null;
 }
 
 export interface MonitorRuntimeOptions {
@@ -45,6 +47,7 @@ export function createMonitorHandlers(options: MonitorRuntimeOptions = {}): Moni
       snapshot: async () => unsupportedSnapshot(clock.now()),
       stop: async () => unsupported(),
       forceStop: async () => unsupported(),
+      internals: null,
     };
   }
   const uid = options.uid ?? currentUid();
@@ -66,6 +69,7 @@ export function createMonitorHandlers(options: MonitorRuntimeOptions = {}): Moni
   const collector = options.collector ?? new Collector({ adapter, policy: guard, uid, home: options.home ?? homedir(), clock, scope: options.scope });
 
   return {
+    internals: uid < 0 ? null : { adapter, collector, uid, selfPid, parentPid, clock },
     async snapshot(input, context) {
       if (context) options.scope?.bind(context.paseo);
       if (options.scope) {

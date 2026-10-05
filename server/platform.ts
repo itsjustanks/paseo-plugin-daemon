@@ -1,4 +1,5 @@
 import type { ProcessState } from "../shared/contracts";
+import type { CgroupSample } from "./cgroup";
 
 /**
  * The adapter boundary. Adapters read raw operating-system facts and nothing
@@ -24,6 +25,8 @@ export interface RawSystemSample {
   /** Kernel-reported memory pressure level when the platform exposes one. */
   pressureSignal: "normal" | "warn" | "critical" | null;
   uptimeSeconds: number;
+  /** The container's own cgroup limits and usage (Linux); null or absent elsewhere. */
+  container?: CgroupSample | null;
 }
 
 export interface RawProcess {

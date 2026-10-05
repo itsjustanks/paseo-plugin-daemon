@@ -4,6 +4,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { DaemonSurface } from "../../client/daemon";
 import { HostsSettings } from "../../client/settings";
 import { WorkspacePanel } from "../../client/workspace-panel";
+import { makeQuickHealth } from "../../client/quick";
+const QuickHealth = makeQuickHealth("daemon-link");
 const queryClient = new QueryClient();
 const params = new URLSearchParams(location.search);
 const light = params.has("light");
@@ -21,7 +23,9 @@ function Preview() {
   useEffect(() => { const resize = () => setCompact(innerWidth < 640); addEventListener("resize", resize); return () => removeEventListener("resize", resize); }, []);
   const host = { theme: { colors }, host: { id: "preview", label: "My laptop" }, layout: { compact, platform: "web" as const } };
   return <QueryClientProvider client={queryClient}>
-    {view === "panel" ? <WorkspacePanel {...host} context="workspace" workspaceId="ws-fixture" /> : view === "settings" ? <HostsSettings {...host} /> : <DaemonSurface {...host} shortcuts />}
+    <div style={{ background: colors.surface0, minHeight: "100vh", color: colors.foreground }}>
+    {view === "panel" ? <WorkspacePanel {...host} context="workspace" workspaceId="ws-fixture" /> : view === "settings" ? <HostsSettings {...host} /> : view === "popover" ? <div style={{ maxWidth: 380, margin: 24, background: colors.surface1, border: `1px solid ${colors.border}`, borderRadius: 12 }}><QuickHealth theme={host.theme as never} close={() => {}} openScreen={() => {}} /></div> : <DaemonSurface {...host} shortcuts initialTab={(params.get("tab") as never) || undefined} />}
+    </div>
   </QueryClientProvider>;
 }
 createRoot(document.getElementById("root")!).render(<Preview />);

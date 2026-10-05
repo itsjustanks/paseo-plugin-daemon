@@ -2,16 +2,20 @@ import type { PluginTheme } from "@getpaseo/plugin";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import React, { createContext, useContext, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
+import { RADIUS, SPACE, TYPE } from "./kit";
 
 /**
- * Monitor's design language, derived entirely from the six Paseo theme tokens.
+ * The older screens' design language, derived entirely from the Paseo theme
+ * tokens. Since 0.10 every size here comes from the shared design standard's
+ * scales in kit.tsx (TYPE, SPACE, RADIUS), so these screens and the new ones
+ * read as one.
  *
  * Rules that keep it honest:
  *   - every Text takes foreground or foregroundMuted; status colours only ever
  *     sit next to a word or an icon, never on a bare number;
  *   - one accent-filled control per view (the selected segment);
  *   - a 1px border marks structure (card edge, row divider) and nothing else;
- *   - 4/8px rhythm, tabular figures on every numeric value.
+ *   - the SPACE rhythm, tabular figures on every numeric value.
  */
 
 // ------------------------------------------------------------------- colour
@@ -76,38 +80,23 @@ export function tokens(theme: PluginTheme, compact: boolean) {
       disabled: alpha(colors.foreground, 0.38),
     },
     text: {
-      title: { fontSize: 18, fontWeight: "700" as const, lineHeight: 24, color: colors.foreground },
-      heading: { fontSize: 14, fontWeight: "600" as const, lineHeight: 20, color: colors.foreground },
-      body: { fontSize: compact ? 14 : 13, fontWeight: "400" as const, lineHeight: compact ? 20 : 18, color: colors.foreground },
-      bodyStrong: { fontSize: compact ? 14 : 13, fontWeight: "600" as const, lineHeight: compact ? 20 : 18, color: colors.foreground },
-      label: { fontSize: 12, fontWeight: "500" as const, lineHeight: 16, color: colors.foregroundMuted },
-      caption: { fontSize: compact ? 12 : 11, fontWeight: "400" as const, lineHeight: 16, color: colors.foregroundMuted },
-      value: {
-        fontSize: compact ? 26 : 28,
-        fontWeight: "600" as const,
-        lineHeight: compact ? 30 : 32,
-        color: colors.foreground,
-        fontVariant: ["tabular-nums" as const],
-      },
-      figure: {
-        fontSize: compact ? 13 : 12,
-        fontWeight: "500" as const,
-        lineHeight: 16,
-        color: colors.foreground,
-        fontVariant: ["tabular-nums" as const],
-      },
-      mono: {
-        fontSize: compact ? 12 : 11,
-        lineHeight: 16,
-        color: colors.foregroundMuted,
-        fontFamily: compact ? "monospace" : "Menlo",
-      },
+      title: { ...TYPE.tabTitle, color: colors.foreground },
+      heading: { ...TYPE.item, color: colors.foreground },
+      body: { ...TYPE.body, fontWeight: "400" as const, color: colors.foreground },
+      bodyStrong: { ...TYPE.body, fontWeight: "600" as const, color: colors.foreground },
+      label: { ...TYPE.secondary, fontWeight: "500" as const, color: colors.foregroundMuted },
+      caption: { ...TYPE.secondary, fontWeight: "400" as const, color: colors.foregroundMuted },
+      value: { ...TYPE.figure, color: colors.foreground, fontVariant: ["tabular-nums" as const] },
+      figure: { ...TYPE.secondary, fontWeight: "500" as const, color: colors.foreground, fontVariant: ["tabular-nums" as const] },
+      small: { ...TYPE.small, color: colors.foregroundMuted },
+      mono: { ...TYPE.mono, color: colors.foregroundMuted },
     },
-    space: { xs: 4, sm: 8, md: 12, lg: 16, xl: 24 },
-    radius: { sm: 6, md: 10, pill: 999 },
-    control: { min: compact ? 40 : 30, hit: { top: 6, bottom: 6, left: 6, right: 6 } },
-    /** Wide content stays readable; nothing stretches edge to edge on a monitor. */
-    maxWidth: 1080,
+    /** The standard's SPACE scale under the names these screens already use: md is `row`, lg is the narrow page padding, xl is `section`. */
+    space: { hair: SPACE.hair, xs: SPACE.xs, sm: SPACE.sm, md: SPACE.row, lg: SPACE.md, card: SPACE.card, xl: SPACE.section },
+    radius: { sm: RADIUS.control, md: RADIUS.card, pill: RADIUS.pill },
+    control: { min: 44, hit: { top: SPACE.xs, bottom: SPACE.xs, left: SPACE.xs, right: SPACE.xs } },
+    /** The standard's page width: nothing stretches edge to edge on a monitor. */
+    maxWidth: 980,
   };
 }
 
@@ -150,8 +139,8 @@ export function Card({ children, tone, padded = true }: { children: React.ReactN
         borderRadius: t.radius.md,
         borderWidth: 1,
         borderColor: tone ? alpha(toneColor(t, tone), 0.45) : t.color.border,
-        padding: padded ? (t.compact ? t.space.md : t.space.lg) : 0,
-        gap: t.space.sm,
+        padding: padded ? t.space.card : 0,
+        gap: t.space.md,
         overflow: "hidden",
       }}
     >
@@ -164,7 +153,7 @@ export function Section({ title, trailing, children }: { title: string; trailing
   const t = useTokens();
   return (
     <View style={{ gap: t.space.sm }}>
-      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: t.space.sm, minHeight: 20 }}>
+      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: t.space.sm }}>
         <Text style={t.text.heading}>{title}</Text>
         {trailing}
       </View>
@@ -192,9 +181,9 @@ export function StatusPill({ tone, label }: { tone: Tone; label: string }) {
   const t = useTokens();
   const color = toneColor(t, tone);
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 0 }} accessibilityLabel={label}>
+    <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm, flexShrink: 0 }} accessibilityLabel={label}>
       <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} />
-      <Text style={[t.text.caption, { color: tone === "neutral" ? t.color.muted : t.color.fg, fontWeight: "600" }]}>{label}</Text>
+      <Text style={[t.text.small, { color: tone === "neutral" ? t.color.muted : t.color.fg, fontWeight: "600" }]}>{label}</Text>
     </View>
   );
 }
@@ -207,12 +196,12 @@ export function Tag({ label, tone }: { label: string; tone?: Tone }) {
       style={{
         alignSelf: "flex-start",
         backgroundColor: tone ? alpha(color, 0.16) : t.color.surface2,
-        borderRadius: t.radius.sm,
-        paddingVertical: 2,
-        paddingHorizontal: 7,
+        borderRadius: t.radius.pill,
+        paddingVertical: t.space.hair,
+        paddingHorizontal: t.space.sm,
       }}
     >
-      <Text style={{ fontSize: 11, lineHeight: 15, fontWeight: "600", color: tone ? t.color.fg : t.color.muted }}>{label}</Text>
+      <Text style={[t.text.small, { fontWeight: "600", color: tone ? t.color.fg : t.color.muted }]}>{label}</Text>
     </View>
   );
 }
@@ -223,7 +212,7 @@ export function Facts({ items }: { items: Array<{ value: string; tone?: Tone } |
   const list = items.filter(Boolean) as Array<{ value: string; tone?: Tone }>;
   if (list.length === 0) return null;
   return (
-    <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
+    <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
       {list.map((item, index) => (
         <React.Fragment key={`${item.value}-${index}`}>
           {index > 0 ? <Text style={[t.text.caption, { opacity: 0.5 }]}>·</Text> : null}
@@ -295,7 +284,7 @@ export function Button({
       hitSlop={t.control.hit}
       style={({ pressed }) => ({
         minHeight: t.control.min,
-        paddingHorizontal: variant === "ghost" ? 8 : 12,
+        paddingHorizontal: variant === "ghost" ? t.space.sm : t.space.lg,
         borderRadius: t.radius.sm,
         borderWidth: 1,
         borderColor: off && variant !== "ghost" ? t.color.borderSubtle : palette.border,
@@ -303,12 +292,12 @@ export function Button({
         alignItems: "center",
         justifyContent: "center",
         flexDirection: "row",
-        gap: 6,
+        gap: t.space.sm,
         opacity: pressed ? 0.75 : 1,
       })}
     >
-      {loading ? <ActivityIndicator size="small" color={fg} /> : icon ? <Icon name={icon} size={14} color={fg} /> : null}
-      <Text style={{ fontSize: t.compact ? 13 : 12, fontWeight: "600", color: fg }}>{label}</Text>
+      {loading ? <ActivityIndicator size="small" color={fg} /> : icon ? <Icon name={icon} size={16} color={fg} /> : null}
+      <Text style={[TYPE.body, { fontWeight: "600", color: fg }]}>{label}</Text>
     </Pressable>
   );
 }
@@ -326,8 +315,8 @@ export function IconButton({ icon, label, onPress, loading, disabled }: { icon: 
       disabled={off}
       hitSlop={t.control.hit}
       style={({ pressed }) => ({
-        width: Math.max(t.control.min, 36),
-        height: Math.max(t.control.min, 36),
+        width: t.control.min,
+        height: t.control.min,
         borderRadius: t.radius.sm,
         borderWidth: 1,
         borderColor: t.color.border,
@@ -410,11 +399,11 @@ export function Segmented<Id extends string>({
         flexDirection: "row",
         alignSelf: t.compact ? "stretch" : "flex-start",
         backgroundColor: t.color.surface1,
-        borderRadius: t.radius.sm + 2,
+        borderRadius: t.radius.sm,
         borderWidth: 1,
         borderColor: t.color.border,
-        padding: 2,
-        gap: 2,
+        padding: t.space.hair,
+        gap: t.space.hair,
       }}
     >
       {options.map((option) => {
@@ -429,19 +418,19 @@ export function Segmented<Id extends string>({
             hitSlop={t.control.hit}
             style={({ pressed }) => ({
               flex: t.compact ? 1 : undefined,
-              minHeight: t.control.min - 4,
-              paddingHorizontal: 12,
+              minHeight: t.control.min - t.space.xs,
+              paddingHorizontal: t.space.md,
               borderRadius: t.radius.sm,
               backgroundColor: selected ? t.color.accent : pressed ? t.color.surface2 : "transparent",
               flexDirection: "row",
               alignItems: "center",
               justifyContent: "center",
-              gap: 6,
+              gap: t.space.sm,
             })}
           >
-            <Text style={{ fontSize: 13, fontWeight: "600", color: selected ? t.color.accentFg : t.color.muted }}>{option.label}</Text>
+            <Text style={[TYPE.secondary, { fontWeight: "600", color: selected ? t.color.accentFg : t.color.muted }]}>{option.label}</Text>
             {option.badge ? (
-              <Text style={{ fontSize: 11, fontWeight: "600", color: selected ? t.color.accentFg : t.color.muted, fontVariant: ["tabular-nums"], opacity: 0.85 }}>
+              <Text style={[TYPE.small, { fontWeight: "600", color: selected ? t.color.accentFg : t.color.muted, fontVariant: ["tabular-nums"], opacity: 0.85 }]}>
                 {option.badge}
               </Text>
             ) : null}
@@ -463,7 +452,7 @@ export function Spark({ values, tone = "accent", height = 28, label }: { values:
   const t = useTokens();
   const color = toneColor(t, tone);
   return (
-    <View accessibilityLabel={label} style={{ flexDirection: "row", alignItems: "flex-end", gap: 2, height, width: "100%" }}>
+    <View accessibilityLabel={label} style={{ flexDirection: "row", alignItems: "flex-end", gap: t.space.hair, height, width: "100%" }}>
       {values.map((value, index) => {
         const bounded = value === null ? null : Math.max(0, Math.min(100, value));
         return (

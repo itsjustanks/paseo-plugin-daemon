@@ -1,5 +1,67 @@
 # Changelog
 
+## 0.10.0 — 2026-10-05
+
+The theme of this release: manage the large running processes behind the outages (OmniRoute pegging
+a CPU, Next.js dev servers piling up, a container near its memory limit, heavy builds and tests
+stacking up on an 8-core host), and look and behave like the other Paseo plugins on Paseo 0.11.
+
+- **Processes tab (was Daemon Health).** Lists every process the daemon's OS user owns, heaviest
+  first (CPU, memory, age or name), with how long each has run and the workspace, dev server or
+  "Started from Paseo" it belongs to. Heavy jobs (builds, tests, type checks, installs and dev
+  servers) are counted once per tree and can be shown as trees with their totals. Runaways are
+  flagged in plain sentences: a process holding a full CPU core for two minutes, one holding 40% of
+  the memory limit, memory near the container's limit, and more heavy jobs at once than the limit
+  (new setting, default 4). Nothing is ever stopped automatically. New RPC
+  `daemon-link.processes.report`.
+- **Ask-first stop.** Select processes and press Stop: a sheet (`daemon-link.processes.preview`)
+  lists exactly what will stop, children included, and what won't, with why. Confirming
+  (`daemon-link.processes.stop`) sends SIGTERM, then SIGKILL after 10 seconds to whatever is still
+  the same process. Only processes Paseo started or running inside a registered project qualify;
+  Paseo itself (daemon, supervisor, plugin hosts, terminal workers), anything a plugin started,
+  agent CLIs, terminal shells and infrastructure never do. A separate guard key, every rule
+  re-checked against a fresh read before each signal. Every stop, including the workspace tab's, is
+  appended to `$PASEO_HOME/daemon-link/actions.jsonl` without command lines
+  (`daemon-link.processes.log`).
+- **Container limits.** Memory and CPU are read from the container's cgroup (v2, v1 fallback), so
+  memory pressure and per-process shares are judged against the container's limit (7.3 GB on the
+  fleet) rather than the 64 GB machine; new OOM kills count as critical. macOS uses the whole
+  machine. The snapshot gains an optional `container` field.
+- **Watched services.** Health URLs on other machines, checked on the health schedule (at most every
+  30 seconds, 5 second timeout, GET without redirects, user-agent only) with a short history. Slow
+  means over 2 s or five times slower than usual; down means no answer or the wrong status. Results
+  reach the verdict (`service-slow`, `service-down`), the sidebar dot, the Overview card and the
+  composer chip. When the AI Router plugin is set up on the daemon, watching its OmniRoute is
+  offered in one press, from its `endpoint` only. URLs must be http(s) without user information or
+  credential-like query keys.
+- **Paseo 0.11 natives, feature-detected.** A Hosts screen with its own sidebar row and a status dot
+  that opens a quick health check (memory, heavy jobs, issues, watched services, Open Hosts, See
+  heavy processes, Check again); screens accept `params.tab`. External links use `openExternalUrl`
+  (0.10+). Settings changes are picked up at once through `registerSettings().subscribe` (0.10+), and
+  read through `read()` instead of the file. Older apps get exactly the 0.9 surface and behaviour.
+- **Composer chip fixed.** Paseo 0.8.0 stable and later take composer chips as buttons and the old
+  component shape threw on add, so the chip never appeared on 0.9 or 0.11 apps; and since 0.9,
+  `agents.subscribe()` only hears an observation the plugin opens itself. The chip is now a button
+  whose label is pushed (`shared/pills.ts`, tested), and on 0.9+ the plugin keeps its own agent
+  observation, reopened with backoff. Both are detected at runtime, as in paseo-mcp 0.18.1.
+- **For other plugins.** `daemon-link.host.summary` (version 1) and
+  `$PASEO_HOME/daemon-link/host-summary.json`, rewritten after every check: status, plain issue
+  sentences, memory and heavy-job figures and watched services; no paths, commands or URLs.
+- **Design standard.** The shared layout of AI Router 0.15: an icon header with a one-line status,
+  an underline tab bar (icons only when narrow), a plain intro on every tab with "What you can do
+  here" folded away, and a calm Overview (the state in words, at most four rows, two buttons, one
+  "New to Hosts? How it works" guide holding the walkthrough, setup checks, troubleshooting and a
+  glossary). One type, spacing and radius scale (`client/kit.tsx`, also behind the older screens'
+  tokens), 980 px page width, light and dark. Dev servers, Connect and Project Sync keep every
+  control; copy is plainer throughout.
+- **Settings document version 4.** Adds `maxHeavyJobs` (4) and `watchedServices` (none). Versions 1
+  to 3 are migrated in place, keeping every saved value. The default refresh interval is now 30
+  seconds (was 20) for a lighter load on shared daemons.
+- **Tests.** New suites for the process rules, stop and escalation, the action log, cgroups,
+  watched services, the chip registry, host features, the summary, and a scan that fails on any SDK
+  import path Paseo 0.9.1 can't build or any client import of server code. A screenshot script
+  (`tests/screenshots.mjs`) renders every state wide and narrow, light and dark.
+
 ## 0.9.0 — 2026-09-10
 
 The theme of this release: viewing a dev server that runs on a remote Paseo host should be one press,

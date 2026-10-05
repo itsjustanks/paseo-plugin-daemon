@@ -74,11 +74,18 @@ a trusted-operator model.
 
 ## Project scope
 
-Daemon Link 0.3 limits service sharing and process controls to verified Paseo project/workspace
-processes. A listening port alone is insufficient. Agent tools and unknown project listeners are
-read-only; database and infrastructure processes are excluded. Stop authorization rechecks the live
-registry and process identity, and skips excluded descendant subtrees. Scope initialization or
-refresh failure denies sharing and stopping. CPU/memory totals still describe the whole machine.
+Daemon Link 0.3 limits service sharing to verified Paseo project/workspace processes. A listening port
+alone is insufficient. Agent tools and unknown project listeners are never shared; database and
+infrastructure processes are excluded. Scope initialization or refresh failure denies sharing.
+
+Since 0.10, the Processes tab lists every process the daemon's OS user owns (commands redacted) and
+can stop a wider set than dev servers: processes Paseo started (descendants of the daemon) or that run
+inside a registered project, never Paseo's own processes, anything a plugin started, agent CLIs,
+terminal shells, or infrastructure. It uses its own signing key and re-checks every rule against a
+fresh read before each signal; without verified projects only processes Paseo started qualify. Every
+stop is logged without command lines. The workspace tab's controls keep the 0.3 dev-server-only rule.
+Watched-service URLs must be http(s) without user information or credential-like query keys; the
+daemon sends a plain GET with a user-agent only, follows no redirects and discards the body.
 
 Project membership is directory attribution, not proof that Paseo launched the process. A manually
 started dev server inside a registered project qualifies. Update both paired hosts to apply the new

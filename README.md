@@ -1,10 +1,15 @@
 # Daemon Link for Paseo
 
-**Open a remote project's dev server from Paseo in one press.**
+**Keep a Paseo host healthy, and open its dev servers in one press.**
 
-See every dev server running on a host, press **Open**, and it appears in your browser. Pair two
-Paseo hosts for a private local URL, or save an SSH forward. Receive selected Git projects with a
-preview and history. Check host health from the same place.
+See what is using a host's CPU and memory, against the container's own limit, and stop a runaway
+build safely after a list of exactly what will stop. Watch services on other machines, such as
+OmniRoute. See every dev server running on a host, press **Open**, and it appears in your browser.
+Pair two Paseo hosts for a private local URL, or save an SSH forward. Receive selected Git projects
+with a preview and history.
+
+Supports Paseo 0.7 through 0.11 (current releases need 0.8 or newer; see
+[Paseo compatibility](#paseo-compatibility)).
 
 The plugin is **Daemon Link**; its sidebar entry is **Hosts**, matching Paseo's host terminology.
 
@@ -12,13 +17,29 @@ The plugin is **Daemon Link**; its sidebar entry is **Hosts**, matching Paseo's 
 [Private connection](#your-first-private-connection) · [Screenshots](#inside-the-plugin) ·
 [Troubleshooting](#troubleshooting) · [Contributing](#development-and-contributing)
 
-![Hosts leads with the dev servers running on the selected host, each with Open.](docs/screenshots/dev-servers.png)
+![Hosts Overview: the state in words, memory against its limit, heavy jobs.](docs/screenshots/overview.png)
 
 *Actual plugin components rendered with fictional data. Every screenshot in this repository uses
 an isolated preview: no real accounts, host addresses, project names, credentials, or conversations.*
 
 ## What you get
 
+- **Heavy processes, first-class.** The Processes tab lists the heaviest processes with how long
+  they have run and which workspace or dev server they belong to, groups each build or test run with
+  everything it started, and flags runaways: a process holding a full CPU core for minutes, memory
+  near the container's limit, or more heavy jobs at once than your limit (4 by default).
+- **Memory against the real limit.** Inside a container, Daemon Link reads the container's own
+  memory limit (cgroups), so "6.9 GB of 7.3 GB" is judged against what actually stops processes,
+  not the 64 GB machine. On macOS it uses the whole machine.
+- **A safe stop.** Select processes, see exactly what will stop (children included) and what won't,
+  then stop: each is asked to exit, and anything still running after 10 seconds is stopped
+  forcefully. Paseo itself, its plugins, agents, terminals and databases are never stopped, and
+  every stop is logged.
+- **Watched services.** Add health URLs on other machines (such as the AI Router's OmniRoute, offered
+  in one press when that plugin is set up). A slow or failing answer shows on the sidebar dot and the
+  Overview card in plain words: "OmniRoute is slow: 4.2 s, usually 110 ms".
+- **Native on Paseo 0.11.** A full Hosts screen with its own sidebar row and a status dot that opens
+  a quick health check. Older apps keep the 0.9 sidebar surface.
 - **One press to open.** Every verified dev server on the host is a card with an **Open** button, in
   the Hosts sidebar and in each workspace's Hosts tab. Open starts a browser link (or reuses the live
   one) and lands your browser on the app; the card shows starting, ready with time left, or why not.
@@ -28,19 +49,17 @@ an isolated preview: no real accounts, host addresses, project names, credential
   forward preset to the server's port; nothing is published. The surface says when each is right.
 - **Reviewed project transfers.** Separate sharing permissions, a commit preview, isolated checkouts,
   and persistent transfer history. Nothing syncs automatically.
-- **Useful health information.** Whole-machine CPU and memory, alongside searchable project processes
-  with sortable columns and 15 rows per page.
 - **Automatic health checks.** The daemon re-checks hosts on a schedule and flags a dev server that
-  stopped serving, a failed browser link, an SSH forward that is down, or a workspace process that
-  is driving host pressure, per workspace.
+  stopped serving, a failed browser link, an SSH forward that is down, a runaway, memory near the
+  limit, too many heavy jobs, or a slow watched service, per workspace.
 - **What this workspace costs.** The workspace tab sums the CPU and memory of the workspace's own
   processes and shows each as a share of the host, so you can tell a loaded machine from a loaded
   workspace.
 - **A composer pill that knows your workspace.** Under each agent's composer, a chip counts that
   workspace's dev servers or names its problem, and opens the Hosts tab for it. Quiet workspaces get
-  no chip.
-- **Guidance where you need it.** Four descriptive tabs, a collapsed setup guide with live checks, clear
-  empty states, and recovery steps.
+  no chip. (Fixed in 0.10.0: on Paseo 0.9 and 0.11 the chip never appeared.)
+- **Guidance where you need it.** Five tabs with plain intros, one "New to Hosts? How it works" guide
+  with live setup checks, clear empty states, and recovery steps.
 
 Agent Browser is not required. Daemon Link forwards traffic; your normal browser renders the app. The
 app cannot be rendered inside Paseo itself: the plugin SDK has no WebView and no plugin HTTP route,
@@ -142,15 +161,15 @@ project access. Both plugins must remain running while you use a connection.
 
 | Tab | What to do here |
 | --- | --- |
-| **Dev servers** | First thing you see: a card per running app with Open, link state, Extend, private routes. |
+| **Overview** | The host's state in words, up to four status rows, two buttons, and the "How it works" guide. |
+| **Processes** | Heaviest processes, runaways, memory against the container's limit, and the ask-first stop. |
+| **Dev servers** | A card per running app with Open, link state, Extend, private routes. |
 | **Connect** | Pair hosts for private localhost links, manage browser links, or save an SSH forward. |
 | **Project Sync** | Share selected Git projects, review a transfer, and inspect receive history. |
-| **Daemon Health** | Check CPU and memory; search, sort, and inspect processes associated with Paseo projects. |
 
-Version 0.9.0 reduced six tabs to these four. **Overview** and **Local Projects** both answered "what
-can I open?", so they are one tab, **Dev servers**; **Guide & Setup** became a collapsed card at the
-bottom of it; **Dev Relay** was renamed **Connect**. Nothing was removed: counts, search, setup
-checks, the walkthrough, and the troubleshooting cards are all still there.
+Version 0.10.0 follows the shared Paseo plugin design standard (the same layout as AI Router 0.15).
+The 0.9 **Daemon Health** tab is now **Processes**, and the setup guide and checks moved into
+Overview's "New to Hosts? How it works". Nothing was removed.
 
 Each workspace also gets a **Hosts** tab, in the workspace view and in the Projects explorer; what it
 shows depends on the panel scope setting described below.
@@ -168,8 +187,9 @@ numbers come from the same sample as the process rows; a process the host has no
 is reported as still sampling rather than as zero, and a share is left out when the host total it
 needs is not available. Below that come the other processes whose working directory sits inside the
 workspace directory (or that share one of its ports), plus any temporary browser links pointing at
-those ports with their remaining time. Stop and force-stop controls are the same as in Daemon Health
-and keep the same server-side checks. Switch the scope to **Whole host** to get the full Hosts surface
+those ports with their remaining time. Its stop and force-stop controls apply to verified dev
+servers and keep the same server-side checks; heavy builds and tests are stopped from Processes.
+Switch the scope to **Whole host** to get the full Hosts surface
 inside the tab instead; the whole-host surface shows machine totals, not a per-workspace rollup.
 
 ### Health checks and the composer pill
@@ -182,7 +202,9 @@ pill reads the same result instead of probing the host. A host or workspace is f
 - a temporary browser link is in the error state;
 - a saved SSH forward is retrying, or is set to auto-connect but is not running;
 - a project process is a zombie;
-- CPU or memory pressure is critical;
+- CPU or memory pressure is critical, or the container's memory is near its limit;
+- more heavy jobs run at once than your limit, or a process has held a full CPU core for two minutes;
+- a watched service is slow or doesn't answer;
 - a project process is one of the top CPU or memory users while the host is under matching
   pressure. This is the only way a workspace is blamed for host load: a busy process on a quiet
   host, or a quiet workspace on a busy host, never triggers it.
@@ -202,17 +224,20 @@ Center. Settings are saved per host and shared by every client of that host.
 | Setting | Default | Effect |
 | --- | --- | --- |
 | Panel shows | This workspace only | Workspace tab lists only the workspace's processes, or the whole host. |
-| Refresh interval | 20 seconds | How often the workspace tab re-reads the host (5–120 seconds). |
+| Refresh interval | 30 seconds | How often health is checked and the workspace tab re-reads the host (5–120 seconds). |
 | Check host health in the background | On | The daemon re-checks on the refresh interval; off means only on demand. |
 | Show the composer pill | On | Show the per-agent health chip described above. |
 | Link duration | 2 hours | How long Open keeps a new browser link alive, and what each Extend adds (15 min–8 h). |
 | Close browser links on archive | On | Archiving a workspace stops browser links that point at its dev servers. |
+| Heavy jobs at once | 4 | More builds, tests and dev servers than this is flagged; nothing stops on its own. |
+| Watched services | None | Health URLs elsewhere (http/https, no secrets), checked at most every 30 s. |
 
 Archive cleanup and background health checks run on the daemon, so they work even when no app is
 connected. Cleanup only stops temporary browser links; the dev server itself keeps running. If the
 saved settings file cannot be read, cleanup is skipped rather than guessed. Settings saved by 0.6.0
-through 0.8.0 are migrated in place: every value you chose is kept and the link duration starts at 2
-hours.
+through 0.9.0 are migrated in place: every value you chose is kept and new settings take their
+defaults. Defaults are safe on a shared team daemon: nothing is published, paired or stopped until
+someone presses a button.
 
 ### Browser links: how long they live
 
@@ -284,26 +309,49 @@ Git LFS objects, or submodule contents. **Files already committed to Git travel 
 including private data or secrets someone committed. Review the project before granting access.
 No project permission or transfer is enabled by installing or updating the plugin.
 
-### Daemon Health: manageable process lists
+### Processes: heavy processes and a safe stop
 
-![Daemon Health shows sortable, paginated fictional project processes.](docs/screenshots/daemon-health.png)
+![Processes: a runaway type check, memory near the limit, the heaviest processes.](docs/screenshots/processes.png)
 
-Click **Process**, **PID**, **CPU**, or **Memory** to sort; click again to reverse the order.
-Search by process or project, and use the page controls to browse 15 rows at a time. Expand a row
-for details. Agents and unknown project tools are read-only; manage agents from their Paseo tabs.
+Runaways come first, each with the decision it needs; then the load (memory against the container's
+limit or the machine, CPU, heavy jobs against your limit); then the list. Show **Everything**,
+**Heavy jobs** (each job with everything it started, added together) or what **Can stop here**; sort
+by CPU, memory, age or name; search by name, workspace, folder or PID. Press a row for its command,
+parent and folder.
 
-Stop controls appear only for recognized project servers and require confirmation. The backend
-rechecks project membership and process identity before acting. Force-stop is available only
-after a graceful stop attempt.
+**What can be stopped.** Only processes owned by the daemon's OS user that Paseo started (anything an
+agent or a terminal launched) or that run inside a registered Paseo project. Never Paseo itself (the
+daemon, supervisor, plugin hosts, terminal workers), anything a plugin started, an agent CLI (stop it
+from its chat), a terminal's own shell, or a database or system service. Anything else your user runs
+is listed but view-only, with the reason on the row.
 
-### Setup guide & checks: there when you need it
+**How a stop works.** Select one or more rows and press **Stop**. A sheet lists exactly what will stop,
+children included, and anything that won't, with why. Confirming asks each process to exit; anything
+still running 10 seconds later is stopped forcefully. Every rule is re-checked against a fresh read at
+the moment of each signal, and every step is written to `$PASEO_HOME/daemon-link/actions.jsonl`
+(names, PIDs and outcomes only, never command lines). **Recent stops** lists them.
 
-![Dev servers on a narrow light-theme screen, setup guide collapsed.](docs/screenshots/guide-mobile.png)
+### Overview and the quick health check
 
-The card at the foot of Dev servers summarises the setup checks on one line and expands into the
-walkthrough: which host to select, how to start a project server, which route to pick, how pairing
-works, and what to try when discovery or a connection fails. Checks report observed state rather
-than assuming that a saved pairing means the other machine is online.
+![The quick health check opened from the sidebar dot.](docs/screenshots/popover.png)
+
+Overview says the state in words, with up to four rows (memory, heavy jobs, dev servers, watched
+services), the last stop and two buttons. "New to Hosts? How it works" holds the walkthrough, this
+host's setup checks, troubleshooting and a glossary; it is open until setup is done. On Paseo 0.11,
+the dot beside **Hosts** in the sidebar opens the same check without leaving your chat.
+
+### For other plugins: the host summary
+
+Other plugins can read this host's health without depending on Daemon Link's internals:
+
+- `daemon-link.host.summary` (version 1), for anything holding a Paseo daemon client:
+  `invokePluginRpc("daemon-link", "daemon-link.host.summary", {})`;
+- `$PASEO_HOME/daemon-link/host-summary.json`, rewritten after every health check, for another
+  plugin's server on the same daemon. A missing file means Daemon Link isn't installed or hasn't
+  checked yet.
+
+Both carry the status, plain issue sentences, memory and heavy-job figures and watched services; never
+paths, commands, URLs or tokens.
 
 ## Scope, privacy, and limits
 
@@ -313,9 +361,10 @@ project can qualify too; the plugin does not claim every matching process was la
 
 - Unrelated listeners and infrastructure processes are hidden. Broad home-directory or filesystem-root
   projects are excluded; register each project directory separately.
-- Unknown project tools and agents are read-only. Custom web servers can be registered as running
-  Paseo service scripts with explicit ports.
-- If project verification fails, sharing and process controls pause. Global health stays readable.
+- Sharing is limited to verified dev servers; agents and unknown listeners are never shared. Custom web
+  servers can be registered as running Paseo service scripts with explicit ports.
+- If project verification fails, sharing pauses and only processes Paseo started can be stopped.
+  Global health stays readable.
 - Process commands are redacted before display, paths are home-relative, and secrets are not logged.
 - Pairing codes and temporary access links grant access. Share them only with the intended recipient.
 
@@ -329,7 +378,14 @@ framework handling, pressure thresholds, and known limitations.
 
 ## Paseo compatibility
 
-Requires Paseo 0.8 or newer. Version 0.5.0 moved to the 0.8 runtime layout: `index.client.tsx`
+Supports Paseo 0.7 through 0.11. Paseo 0.8 and newer run the current version; Paseo 0.7 hosts should
+stay on 0.4.0. Version 0.10.0 was built and checked on Paseo 0.11.0-beta.3 and keeps
+`requirements.paseo` at `>=0.8.0`: the 0.11 screen, sidebar row, status dot and popover, the 0.10
+external-link opener and settings read/subscribe, and button-style composer chips are each detected at
+runtime, and older apps get exactly what 0.9 drew. No plugin file imports an SDK path that Paseo 0.9.1
+can't build (a test checks this).
+
+Before 0.10.0, it required Paseo 0.8 or newer. Version 0.5.0 moved to the 0.8 runtime layout: `index.client.tsx`
 and `index.server.ts` entries with code under `client/`, `server/`, and `shared/`, and
 `requirements.paseo` set to `>=0.8.0`. Versions 0.6.0 through 0.9.0 add the workspace panel,
 settings screen, lifecycle hooks, health checks, composer pill, workspace resource rollup, one-press

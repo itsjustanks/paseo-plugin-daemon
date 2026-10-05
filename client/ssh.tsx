@@ -10,7 +10,7 @@ const errorMessage = (error: unknown) => error instanceof Error ? error.message 
 
 function Field({ label, value, onChange, numeric = false }: { label: string; value: string; onChange(value: string): void; numeric?: boolean }) {
   const t = useTokens();
-  return <View style={{ gap: 4 }}><Text style={t.text.label}>{label}</Text><TextInput accessibilityLabel={label} value={value} onChangeText={onChange} keyboardType={numeric ? "number-pad" : "default"} autoCapitalize="none" autoCorrect={false} style={{ ...t.text.body, backgroundColor: t.color.surface2, borderRadius: 6, padding: 10, borderColor: t.color.border, borderWidth: 1 }} /></View>;
+  return <View style={{ gap: t.space.xs }}><Text style={t.text.label}>{label}</Text><TextInput accessibilityLabel={label} value={value} onChangeText={onChange} keyboardType={numeric ? "number-pad" : "default"} autoCapitalize="none" autoCorrect={false} style={{ ...t.text.body, backgroundColor: t.color.surface2, borderRadius: t.radius.sm, padding: t.space.md, borderColor: t.color.border, borderWidth: 1 }} /></View>;
 }
 
 /** `initialRemotePort` comes from a dev-server card's "Private forward" press, so the form starts on the right port. */
@@ -31,7 +31,7 @@ export function Connections({ profiles, states, refresh, initialRemotePort }: { 
       return <Card key={profile.id}>
         <Text style={t.text.heading}>{profile.name}</Text><Text style={t.text.label}>{profile.destination}:{profile.remotePort} → localhost:{profile.localPort}</Text>
         <Text style={t.text.body}>{state?.message || "Disconnected"}</Text>
-        <View style={{ flexDirection: "row", gap: 8, flexWrap: "wrap" }}>
+        <View style={{ flexDirection: "row", gap: t.space.sm, flexWrap: "wrap" }}>
           <Button label={state ? "Disconnect" : "Connect"} disabled={mutation.isPending} onPress={() => mutation.mutate(() => state ? disconnect({ id: profile.id }) : connect({ id: profile.id }))} />
           {state?.state === "connected" && <Button label="Open on this computer" onPress={() => { void openExternal(`http://localhost:${profile.localPort}`).catch((err) => toast.error(errorMessage(err))); }} />}
           <Button label="Edit" onPress={() => { setEditing(profile.id); setName(profile.name); setDestination(profile.destination); setSshPort(String(profile.sshPort)); setRemotePort(String(profile.remotePort)); setLocalPort(String(profile.localPort)); setAutoConnect(profile.autoConnect); }} />
@@ -45,7 +45,7 @@ export function Connections({ profiles, states, refresh, initialRemotePort }: { 
       <Field label="SSH port" value={sshPort} onChange={setSshPort} numeric />
       <Field label="Remote service port" value={remotePort} onChange={setRemotePort} numeric />
       <Field label="Local port on this daemon" value={localPort} onChange={setLocalPort} numeric />
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}><Switch accessibilityLabel="Reconnect when plugin starts" value={autoConnect} onValueChange={setAutoConnect} /><Text style={t.text.body}>Reconnect when plugin starts</Text></View>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}><Switch accessibilityLabel="Reconnect when plugin starts" value={autoConnect} onValueChange={setAutoConnect} /><Text style={t.text.body}>Reconnect when plugin starts</Text></View>
       <Button label={mutation.isPending ? "Saving…" : "Save connection"} disabled={mutation.isPending || !name.trim() || !destination.trim()} onPress={() => mutation.mutate(async () => {
         await save({ id: editing, name, destination, sshPort: Number(sshPort), remotePort: Number(remotePort), localPort: Number(localPort), autoConnect });
         setEditing(undefined); setName(""); setDestination(""); toast.show("Connection saved", { variant: "success" });

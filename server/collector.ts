@@ -1,6 +1,6 @@
 import type { ProcessView, Snapshot, SnapshotInput } from "../shared/contracts";
 import { SnapshotInputSchema } from "../shared/contracts";
-import { classifyCpuPressure, classifyMemoryPressure, classifyProcessImpact, detectService } from "./heuristics";
+import { classifyContainerMemory, classifyCpuPressure, classifyMemoryPressure, classifyProcessImpact, detectService, worstPressure } from "./heuristics";
 import type { ProjectScope } from "./scope";
 import type { Clock, PlatformAdapter, RawProcess, RawSystemSample } from "./platform";
 import { systemClock } from "./platform";
@@ -22,6 +22,8 @@ export const CPU_EMA_ALPHA = 0.3;
 
 const SYSTEM_CPU_HIGH = 85;
 const PROCESS_CPU_HIGH = 30;
+/** A process at or above this share of one core is "running hot"; held long enough, it is a runaway. */
+export const RUNAWAY_CPU_PERCENT = 90;
 
 export interface ActionPolicy {
   /** Decide from a same-user sample whether a process may be signalled. */
@@ -42,6 +44,8 @@ interface TrackedProcess {
   cpuPercent: number | null;
   cpuEma: number | null;
   highSince: number | null;
+  /** When the smoothed CPU first reached RUNAWAY_CPU_PERCENT, or null. */
+  hotSince: number | null;
   rss: Point[];
   seen: number;
 }
@@ -65,14 +69,27 @@ export interface CollectorOptions {
   scope?: ProjectScope;
 }
 
-interface ClassifiedBase {
+/** Server-only facts about one process that the process report needs; never sent as-is. */
+export interface ProcessDetail {
+  raw: RawProcess;
+  view: ProcessView;
+  cpuSustained: number | null;
+  /** Seconds the smoothed CPU has stayed at or above RUNAWAY_CPU_PERCENT. */
+  hotSeconds: number;
+}
+
+export interface ClassifiedBase {
   at: number;
   sampling: Snapshot["sampling"];
   warnings: string[];
   uptimeSeconds: number;
   cpu: Snapshot["cpu"];
   memory: Snapshot["memory"];
+  container: NonNullable<Snapshot["container"]> | null;
   processes: ProcessView[];
+  /** The bytes a process's memory share is measured against: the container limit when there is one. */
+  memoryBasisBytes: number;
+  details: ProcessDetail[];
 }
 
 function pushPoint(points: Point[], point: Point, now: number): void {
@@ -98,6 +115,8 @@ export class Collector {
   private readonly portCacheMs: number;
   private readonly tracked = new Map<string, TrackedProcess>();
   private readonly system: SystemHistory = { last: null, cpuPercent: null, cpuEma: null, highSince: null, swap: [] };
+  private containerCpu: { at: number; usec: number } | null = null;
+  private oomKills: number | null = null;
   private base: ClassifiedBase | null = null;
   private inflight: Promise<ClassifiedBase> | null = null;
   private portCache: { at: number; ports: Map<number, number[]>; warnings: string[] } | null = null;
@@ -139,6 +158,7 @@ export class Collector {
       uptimeSeconds: base.uptimeSeconds,
       cpu: base.cpu,
       memory: base.memory,
+      container: base.container,
       services,
       processes: page,
       totalProcesses: visible.length,
@@ -185,7 +205,13 @@ export class Collector {
     warnings.push(...portScan.warnings);
 
     const cpu = this.updateSystem(system, at);
-    const memory = this.memoryView(system, at);
+    const container = this.containerView(system, at);
+    const hostMemory = this.memoryView(system, at);
+    // The container limit is what kills processes, so it decides memory pressure when there is one.
+    const memory = container
+      ? { ...hostMemory, pressure: worstPressure(hostMemory.pressure, container.pressure), reasons: [...container.reasons, ...hostMemory.reasons] }
+      : hostMemory;
+    const memoryBasisBytes = container?.memoryLimitBytes ?? system.memoryTotalBytes;
     const sampling: Snapshot["sampling"] = cpu.percent === null ? "sampling" : "live";
 
     const byPid = new Map<number, RawProcess>();
@@ -205,8 +231,9 @@ export class Collector {
     const cpuRank = new Map(cpuOrder.map((m, i) => [m.track.key, i]));
     const memoryRank = new Map(memoryOrder.map((m, i) => [m.track.key, i]));
 
+    const details: ProcessDetail[] = [];
     const views: ProcessView[] = measured.map(({ raw, track, rssGrowth }) => {
-      const memoryPercent = system.memoryTotalBytes > 0 ? Math.min(100, (raw.rssBytes / system.memoryTotalBytes) * 100) : 0;
+      const memoryPercent = memoryBasisBytes > 0 ? Math.min(100, (raw.rssBytes / memoryBasisBytes) * 100) : 0;
       const impact = classifyProcessImpact({
         cpuPercent: track.cpuPercent,
         cpuSustainedPercent: track.cpuEma,
@@ -227,7 +254,7 @@ export class Collector {
         ? { actionable: false, reason: project?.kind === "agent" ? "Manage this agent in its Paseo agent tab." : "Only verified project dev servers can be stopped here." }
         : baseDecision;
       const argvHash = hashArgv(raw.argv);
-      return {
+      const view: ProcessView = {
         ...(this.scope ? { project } : {}),
         pid: raw.pid,
         ppid: raw.ppid,
@@ -247,9 +274,11 @@ export class Collector {
         protectedReason: decision.reason,
         actionToken: decision.actionable ? this.policy.mint(raw, argvHash, at) : null,
       };
+      details.push({ raw, view, cpuSustained: track.cpuEma === null ? null : round1(track.cpuEma), hotSeconds: track.hotSince === null ? 0 : (at - track.hotSince) / 1000 });
+      return view;
     });
 
-    return { at, sampling, warnings: dedupe(warnings), uptimeSeconds: system.uptimeSeconds, cpu, memory, processes: views };
+    return { at, sampling, warnings: dedupe(warnings), uptimeSeconds: system.uptimeSeconds, cpu, memory, container, processes: views, memoryBasisBytes, details };
   }
 
   private updateSystem(sample: RawSystemSample, at: number): Snapshot["cpu"] {
@@ -287,6 +316,35 @@ export class Collector {
     };
   }
 
+  private containerView(sample: RawSystemSample, at: number): NonNullable<Snapshot["container"]> | null {
+    const raw = sample.container;
+    if (!raw) return null;
+    let cores: number | null = null;
+    if (raw.cpuUsageUsec !== null) {
+      if (this.containerCpu && at > this.containerCpu.at && raw.cpuUsageUsec >= this.containerCpu.usec) {
+        cores = (raw.cpuUsageUsec - this.containerCpu.usec) / ((at - this.containerCpu.at) * 1000);
+      }
+      this.containerCpu = { at, usec: raw.cpuUsageUsec };
+    }
+    const newOomKills = raw.oomKills === null || this.oomKills === null ? null : Math.max(0, raw.oomKills - this.oomKills);
+    this.oomKills = raw.oomKills;
+    const classified = classifyContainerMemory({ limitBytes: raw.memoryLimitBytes, workingSetBytes: raw.memoryWorkingSetBytes, psiSome10: raw.psiMemorySome10, newOomKills });
+    const cpuBasis = raw.cpuLimitCores ?? sample.cores;
+    return {
+      memoryLimitBytes: raw.memoryLimitBytes,
+      memoryUsedBytes: raw.memoryWorkingSetBytes,
+      memoryPercent: raw.memoryLimitBytes ? round1((raw.memoryWorkingSetBytes / raw.memoryLimitBytes) * 100) : null,
+      cpuLimitCores: raw.cpuLimitCores,
+      cpuCoresUsed: cores === null ? null : Math.round(cores * 100) / 100,
+      cpuPercent: cores === null || cpuBasis <= 0 ? null : round1(Math.min(100, (cores / cpuBasis) * 100)),
+      psiMemorySome10: raw.psiMemorySome10,
+      psiCpuSome10: raw.psiCpuSome10,
+      oomKills: raw.oomKills,
+      pressure: classified.pressure,
+      reasons: classified.reasons,
+    };
+  }
+
   private memoryView(sample: RawSystemSample, at: number): Snapshot["memory"] {
     pushPoint(this.system.swap, { at, value: sample.swapUsedBytes }, at);
     const swapGrowth = growth(this.system.swap);
@@ -316,7 +374,7 @@ export class Collector {
     const key = `${raw.pid}:${raw.startId}`;
     let track = this.tracked.get(key);
     if (!track) {
-      track = { key, lastCpuSeconds: raw.cpuSeconds, lastAt: at, cpuPercent: null, cpuEma: null, highSince: null, rss: [], seen: 0 };
+      track = { key, lastCpuSeconds: raw.cpuSeconds, lastAt: at, cpuPercent: null, cpuEma: null, highSince: null, hotSince: null, rss: [], seen: 0 };
       this.tracked.set(key, track);
     } else {
       const wall = (at - track.lastAt) / 1000;
@@ -327,6 +385,8 @@ export class Collector {
         track.cpuEma = track.cpuEma === null ? percent : track.cpuEma + CPU_EMA_ALPHA * (percent - track.cpuEma);
         if (track.cpuEma >= PROCESS_CPU_HIGH) track.highSince ??= at;
         else track.highSince = null;
+        if (track.cpuEma >= RUNAWAY_CPU_PERCENT) track.hotSince ??= at;
+        else track.hotSince = null;
       }
       track.lastCpuSeconds = raw.cpuSeconds;
       track.lastAt = at;

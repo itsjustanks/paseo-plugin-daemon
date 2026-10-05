@@ -1,6 +1,8 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 import type { Snapshot } from "./contracts";
+import type { ProcessReport } from "./processes";
+import { WatchResultSchema, type WatchResult } from "./watch";
 import type { LinkState, Profile, Tunnel } from "./link";
 import { cwdWithinDirectory, filterWorkspaceProcesses, workspacePorts, type WorkspaceProcessLike, type WorkspaceTarget } from "./workspace-filter";
 
@@ -20,6 +22,10 @@ import { cwdWithinDirectory, filterWorkspaceProcesses, workspacePorts, type Work
  *  - a project process is a top CPU or memory user while the host is under
  *    pressure (the collector's `pressure-driver` impact), which lets a
  *    workspace see that it is the one loading the host rather than a bystander
+ *  - the container's memory is near its limit, too many heavy jobs run at
+ *    once, or a process has held a full CPU core for minutes (the process
+ *    report's runaways)
+ *  - a watched service on another machine is slow or down
  * Nothing here contains tokens, URLs, or raw command lines; issues carry only
  * ports, a home-relative cwd, and fixed copy.
  */
@@ -32,6 +38,7 @@ export type HealthStatus = z.infer<typeof HealthStatusSchema>;
 
 export const HealthIssueCodeSchema = z.enum([
   "host-unreachable", "host-unsupported", "projects-unavailable", "port-gone", "tunnel-failed", "link-retrying", "link-down", "process-zombie", "cpu-pressure", "memory-pressure", "pressure-driver",
+  "too-many-jobs", "runaway", "service-slow", "service-down",
 ]);
 export type HealthIssueCode = z.infer<typeof HealthIssueCodeSchema>;
 
@@ -44,6 +51,8 @@ export const HealthIssueSchema = z.object({
   ports: z.array(z.number().int()),
   /** Home-relative cwd of the process the issue is about, when known. */
   cwd: z.string().nullable(),
+  /** A short name for chips: the watched service or process the issue is about. */
+  subject: z.string().nullable().optional(),
 });
 export type HealthIssue = z.infer<typeof HealthIssueSchema>;
 
@@ -56,10 +65,18 @@ export const HealthVerdictSchema = z.object({
   issues: z.array(HealthIssueSchema),
   /** Dev servers the host is verifying right now, so clients can count per workspace without a second snapshot. */
   services: z.array(z.object({ name: z.string(), cwd: z.string().nullable(), ports: z.array(z.number().int()), project: z.object({ path: z.string(), workspace: z.string().nullable() }).nullable() })),
+  /** Watched services on other machines; absent on daemons before 0.10. */
+  watched: z.array(WatchResultSchema).optional(),
+  /** The few figures the status dot and popover show; absent on daemons before 0.10. */
+  load: z.object({
+    memoryUsedBytes: z.number(), memoryLimitBytes: z.number(), memoryBasis: z.enum(["container", "machine"]),
+    cpuPercent: z.number().nullable(), heavyJobs: z.number().int(), heavyJobLimit: z.number().int(),
+  }).nullable().optional(),
 });
 export type HealthVerdict = z.infer<typeof HealthVerdictSchema>;
 
-export const hostHealth = defineRpc({ name: "daemon-link.health", input: z.object({}), output: HealthVerdictSchema });
+/** `refresh` checks now instead of serving the cached verdict (older daemons ignore it). */
+export const hostHealth = defineRpc({ name: "daemon-link.health", input: z.object({ refresh: z.boolean().optional() }), output: HealthVerdictSchema });
 
 /** A served dev-server port remembered between checks. */
 export interface ServingRecord { cwd: string | null; name: string; seenAt: number }
@@ -77,6 +94,9 @@ export interface HealthInput {
   connections: readonly LinkState[];
   profiles: readonly Pick<Profile, "id" | "name" | "localPort" | "autoConnect">[];
   background: boolean;
+  /** The process report, for runaways and load; null when it couldn't be read. */
+  report?: Pick<ProcessReport, "runaways" | "container" | "host" | "memoryBasis" | "memoryBasisBytes" | "heavyJobs"> | null;
+  watched?: readonly WatchResult[];
 }
 
 const host = (code: HealthIssueCode, severity: HealthIssue["severity"], message: string): HealthIssue => ({ code, severity, scope: "host", message, ports: [], cwd: null });
@@ -104,8 +124,17 @@ export function evaluateHealth(input: HealthInput, memory: HealthMemory = EMPTY_
   } else {
     if (!snapshot.supported) issues.push(host("host-unsupported", "warning", "Monitoring is not supported on this host's platform."));
     if (snapshot.scope?.status === "unavailable") issues.push(host("projects-unavailable", "warning", snapshot.scope.message));
-    if (snapshot.cpu.pressure === "critical") issues.push(host("cpu-pressure", "warning", "CPU pressure on the host is critical."));
-    if (snapshot.memory.pressure === "critical") issues.push(host("memory-pressure", "warning", "Memory pressure on the host is critical."));
+    const runaways = input.report?.runaways ?? [];
+    const busy = runaways.find((runaway) => runaway.code === "cpu-busy");
+    if (busy) issues.push(host("cpu-pressure", "warning", busy.title));
+    else if (snapshot.cpu.pressure === "critical") issues.push(host("cpu-pressure", "warning", "CPU pressure on the host is critical."));
+    const near = runaways.find((runaway) => runaway.code === "memory-near-limit");
+    if (near) issues.push(host("memory-pressure", near.severity, near.title));
+    else if (snapshot.memory.pressure === "critical") issues.push(host("memory-pressure", "warning", "Memory pressure on the host is critical."));
+    for (const runaway of runaways) {
+      if (runaway.code === "too-many-jobs") issues.push(host("too-many-jobs", "warning", runaway.title));
+      if (runaway.code === "cpu-runaway" || runaway.code === "memory-heavy") issues.push({ ...process_("runaway", runaway.severity, runaway.title, [], runaway.cwd), subject: runaway.title.split(" (PID")[0] ?? null });
+    }
     services = snapshot.services.map((service) => ({ name: service.name, cwd: service.cwd, ports: service.ports, project: service.project ? { path: service.project.path, workspace: service.project.workspace } : null }));
     // A dev server is in both lists; report each process once.
     const seen = new Set<string>();
@@ -141,7 +170,17 @@ export function evaluateHealth(input: HealthInput, memory: HealthMemory = EMPTY_
     }
   }
 
-  return { verdict: { status: healthStatus(issues), checkedAt: now, background: input.background, issues, services }, memory: next };
+  for (const result of input.watched ?? []) {
+    if (result.state === "slow") issues.push({ ...host("service-slow", "warning", result.message), subject: result.name });
+    if (result.state === "down") issues.push({ ...host("service-down", "warning", result.message), subject: result.name });
+  }
+  const report = input.report;
+  const load = report ? {
+    memoryUsedBytes: report.container?.memoryLimitBytes ? report.container.memoryUsedBytes : report.host.memoryUsedBytes,
+    memoryLimitBytes: report.memoryBasisBytes, memoryBasis: report.memoryBasis,
+    cpuPercent: report.host.cpuPercent, heavyJobs: report.heavyJobs.count, heavyJobLimit: report.heavyJobs.limit,
+  } : null;
+  return { verdict: { status: healthStatus(issues), checkedAt: now, background: input.background, issues, services, watched: [...(input.watched ?? [])], load }, memory: next };
 }
 
 /** Remember which dev-server ports are served; move vanished ones to `lost` and expire old entries. */
@@ -205,8 +244,12 @@ export function pillText(health: WorkspaceHealth): string | null {
     if (first.code === "link-retrying" || first.code === "link-down") return `SSH forward :${first.ports[0]} down${more}`;
     if (first.code === "process-zombie") return `Zombie process${more}`;
     if (first.code === "pressure-driver") return `Driving host pressure${more}`;
-    if (first.code === "cpu-pressure") return `CPU pressure critical${more}`;
-    if (first.code === "memory-pressure") return `Memory pressure critical${more}`;
+    if (first.code === "runaway") return `Runaway: ${first.subject ?? "process"}${more}`;
+    if (first.code === "too-many-jobs") return `Too many heavy jobs${more}`;
+    if (first.code === "service-down") return `${first.subject ?? "Watched service"} down${more}`;
+    if (first.code === "service-slow") return `${first.subject ?? "Watched service"} slow${more}`;
+    if (first.code === "cpu-pressure") return `CPU busy${more}`;
+    if (first.code === "memory-pressure") return `Memory nearly full${more}`;
     if (first.code === "projects-unavailable") return `Projects unverified${more}`;
     return `Host issue${more}`;
   }

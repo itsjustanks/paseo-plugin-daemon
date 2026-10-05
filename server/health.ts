@@ -2,12 +2,17 @@ import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import type { Snapshot, SnapshotInput } from "../shared/contracts";
 import { EMPTY_HEALTH_MEMORY, evaluateHealth, type HealthInput, type HealthMemory, type HealthVerdict } from "../shared/health";
 import type { LinkState, Profile, Tunnel } from "../shared/link";
+import type { ProcessReport, ReportInput } from "../shared/processes";
+import type { WatchedService, WatchResult } from "../shared/watch";
 import { HOSTS_SETTINGS_DEFAULTS, SNAPSHOT_INTERVAL_DEFAULT, type HostsSettings } from "../shared/settings";
 
 /** The slice of the runtime the checker needs; tests hand in a fake. */
 export interface HealthRuntime {
   monitor: { snapshot(input: SnapshotInput, context?: PluginHandlerContext): Promise<Snapshot> };
   links: { status(): Promise<{ profiles: Profile[]; connections: LinkState[]; tunnels: Tunnel[] }> };
+  /** Absent in older fakes; the verdict then has no runaways or load. */
+  processes?: { report(input: ReportInput): Promise<ProcessReport> };
+  watch?: { check(services: readonly WatchedService[], force?: boolean): Promise<WatchResult[]> };
 }
 
 export interface HealthCheckerOptions {
@@ -16,6 +21,8 @@ export interface HealthCheckerOptions {
   now?: () => number;
   setTimer?: typeof setTimeout;
   clearTimer?: typeof clearTimeout;
+  /** Called with every fresh verdict (the summary file for other plugins). */
+  onVerdict?: (verdict: HealthVerdict) => void;
 }
 
 /**
@@ -51,21 +58,21 @@ export class HealthChecker {
    * Serve the cache when it is younger than the interval, otherwise check now.
    * The first call with a context also arms the background timer.
    */
-  async read(context?: PluginHandlerContext): Promise<HealthVerdict> {
+  async read(context?: PluginHandlerContext, refresh = false): Promise<HealthVerdict> {
     if (context) this.context = context;
     const settings = await this.settings();
     if (this.context && !this.timer && !this.closed) this.schedule(settings);
-    const fresh = this.verdict && this.now() - this.verdict.checkedAt < settings.snapshotIntervalSeconds * 1000;
-    return fresh ? this.verdict! : this.check(settings);
+    const fresh = !refresh && this.verdict && this.now() - this.verdict.checkedAt < settings.snapshotIntervalSeconds * 1000;
+    return fresh ? this.verdict! : this.check(settings, refresh);
   }
 
   /** Run one check now, coalescing concurrent callers onto the same pass. */
-  check(settings?: HostsSettings): Promise<HealthVerdict> {
-    this.inflight ??= this.run(settings).finally(() => { this.inflight = null; });
+  check(settings?: HostsSettings, force = false): Promise<HealthVerdict> {
+    this.inflight ??= this.run(settings, force).finally(() => { this.inflight = null; });
     return this.inflight;
   }
 
-  private async run(given?: HostsSettings): Promise<HealthVerdict> {
+  private async run(given?: HostsSettings, force = false): Promise<HealthVerdict> {
     const settings = given ?? await this.settings();
     const context = this.context ?? undefined;
     const input: HealthInput = { now: this.now(), snapshot: null, tunnels: [], connections: [], profiles: [], background: settings.backgroundHealthChecks };
@@ -76,9 +83,17 @@ export class HealthChecker {
       input.tunnels = status.tunnels; input.connections = status.connections;
       input.profiles = status.profiles.map(({ id, name, localPort, autoConnect }) => ({ id, name, localPort, autoConnect }));
     } catch { /* Links unavailable: the verdict just has no link issues this round. */ }
+    const { processes, watch } = this.options.runtime;
+    const [report, watched] = await Promise.all([
+      processes ? processes.report({ limit: 1 }).catch(() => null) : Promise.resolve(null),
+      watch ? watch.check(settings.watchedServices ?? [], force).catch(() => []) : Promise.resolve([]),
+    ]);
+    input.report = report;
+    input.watched = watched;
     const result = evaluateHealth(input, this.memory);
     this.memory = result.memory;
     this.verdict = result.verdict;
+    try { this.options.onVerdict?.(result.verdict); } catch { /* A listener never breaks a check. */ }
     return result.verdict;
   }
 

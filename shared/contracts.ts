@@ -57,6 +57,31 @@ export const MemorySnapshotSchema = z.object({
 });
 export type MemorySnapshot = z.infer<typeof MemorySnapshotSchema>;
 
+/**
+ * The container's own limits (Linux cgroups). Inside Docker the machine-wide
+ * memory figures describe the whole host, while the kernel stops the
+ * container at its own limit, so pressure is judged against this when it
+ * exists. Absent on macOS and on hosts without a readable cgroup.
+ */
+export const ContainerSnapshotSchema = z.object({
+  memoryLimitBytes: z.number().min(0).nullable(),
+  /** Working set: usage minus the file cache the kernel can drop. */
+  memoryUsedBytes: z.number().min(0),
+  /** Working set as a share of the limit; null without a limit. */
+  memoryPercent: z.number().min(0).nullable(),
+  cpuLimitCores: z.number().min(0).nullable(),
+  /** Cores the container used over the last interval; null until two samples. */
+  cpuCoresUsed: z.number().min(0).nullable(),
+  /** `cpuCoresUsed` as a share of the CPU limit, or of the host's cores without one. */
+  cpuPercent: z.number().min(0).nullable(),
+  psiMemorySome10: z.number().min(0).max(100).nullable(),
+  psiCpuSome10: z.number().min(0).max(100).nullable(),
+  oomKills: z.number().int().min(0).nullable(),
+  pressure: PressureStateSchema,
+  reasons: z.array(z.string()),
+});
+export type ContainerSnapshot = z.infer<typeof ContainerSnapshotSchema>;
+
 export const ProjectMatchSchema = z.object({
   id: z.string(), name: z.string(), path: z.string(), workspace: z.string().nullable(),
   shareablePorts: z.array(z.number().int()).optional(),
@@ -105,6 +130,8 @@ export const SnapshotSchema = z.object({
   uptimeSeconds: z.number().min(0),
   cpu: CpuSnapshotSchema,
   memory: MemorySnapshotSchema,
+  /** Null when this host has no container limit to read (macOS, bare metal without cgroups). */
+  container: ContainerSnapshotSchema.nullable().optional(),
   services: z.array(ProcessSchema),
   processes: z.array(ProcessSchema),
   totalProcesses: z.number().int().min(0),

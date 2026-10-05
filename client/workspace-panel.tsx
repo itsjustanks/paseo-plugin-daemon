@@ -21,7 +21,9 @@ const QUERY_KEY = ["monitor", "workspace-snapshot"] as const;
 const WORKSPACE_LIMIT = PROCESS_LIMIT * 4;
 
 const HEALTH_TONE: Record<HealthStatus, Tone> = { ok: "ok", warning: "warning", critical: "danger", unknown: "neutral" };
-const HEALTH_LABEL: Record<HealthStatus, string> = { ok: "Healthy", warning: "Needs attention", critical: "Unreachable", unknown: "Unknown" };
+const HEALTH_LABEL: Record<HealthStatus, string> = { ok: "Healthy", warning: "Needs attention", critical: "Needs attention now", unknown: "Unknown" };
+/** Rows shown before "Show all": the heaviest first, so the list stays calm. */
+const ROWS_FOLDED = 8;
 
 /**
  * The workspace tab, also shown in the Projects explorer. In "workspace"
@@ -145,6 +147,7 @@ function WorkspaceBody({ hostId, workspaceId, intervalSeconds, minutes, settings
   const linkStatus = useRpc(link.linkStatus);
   const workspace = useWorkspace(workspaceId, ({ directory, projectRootPath, name }) => ({ directory, projectRootPath, name }));
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
 
   const snapshotQuery = useQuery({
     queryKey: [...QUERY_KEY, hostId, workspaceId],
@@ -196,10 +199,10 @@ function WorkspaceBody({ hostId, workspaceId, intervalSeconds, minutes, settings
   const status = snapshotQuery.isError ? { tone: "danger" as const, label: "Host unavailable" } : snapshot ? { tone: "ok" as const, label: `Every ${intervalSeconds}s` } : { tone: "neutral" as const, label: "Connecting" };
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: t.color.surface0 }} contentContainerStyle={{ padding: t.space.lg, paddingBottom: 48, alignItems: "stretch" }}>
-      <View style={{ width: "100%", maxWidth: t.maxWidth, alignSelf: "center", gap: t.space.lg }}>
-        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-          <View style={{ gap: 3, flexShrink: 1 }}>
+    <ScrollView style={{ flex: 1, backgroundColor: t.color.surface0 }} contentContainerStyle={{ padding: t.compact ? t.space.lg : t.space.xl, paddingBottom: t.space.xl * 2, alignItems: "stretch" }}>
+      <View style={{ width: "100%", maxWidth: t.maxWidth, alignSelf: "center", gap: t.space.xl }}>
+        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: t.space.md }}>
+          <View style={{ gap: t.space.hair, flexShrink: 1 }}>
             <Text style={t.text.title}>Hosts · {workspace?.name ?? "this workspace"}</Text>
             <Text style={t.text.label} numberOfLines={1}>{workspace?.directory ?? "Workspace details are loading…"}</Text>
           </View>
@@ -209,12 +212,12 @@ function WorkspaceBody({ hostId, workspaceId, intervalSeconds, minutes, settings
         {snapshot ? (
           <Section title="Dev servers in this workspace" trailing={<Text style={t.text.caption}>{snapshot.services.length > 0 ? `${snapshot.services.length} found · Open creates a ${formatMinutes(minutes)} browser link` : ""}</Text>}>
             {snapshot.services.length === 0 ? (
-              <Notice icon="Server" action={<Button label="Refresh" onPress={refresh} loading={snapshotQuery.isFetching} />}>No verified dev server is running inside this workspace. Start its dev command in a terminal here and it appears automatically with an Open button.</Notice>
+              <Notice icon="Server" action={<Button label="Refresh" onPress={refresh} loading={snapshotQuery.isFetching} />}>No dev server is running in this workspace. Run its dev command in a terminal here and it appears with an Open button.</Notice>
             ) : (
               <>
                 {!available && links.data ? (
                   <Notice icon="Globe" tone="warning" action={<Button label={opener.installing ? "Setting up…" : "Set up browser links"} variant="primary" loading={opener.installing} disabled={opener.installing} onPress={() => opener.installLinks()} />}>
-                    Open needs the tunnel helper on this host once. No Cloudflare account, domain, or SSH password is needed. For a private route instead, use Hosts → Connect.
+                    Open needs the link helper on this host once. No Cloudflare account, domain or SSH password is needed. For a private route instead, use Hosts → Connect.
                   </Notice>
                 ) : null}
                 <Grid min={300}>
@@ -249,23 +252,26 @@ function WorkspaceBody({ hostId, workspaceId, intervalSeconds, minutes, settings
           <>
             <Section title="Other workspace processes" trailing={<Text style={t.text.caption}>{rows.length > 0 ? `${rows.length} running` : ""}</Text>}>
               {rows.length === 0 ? (
-                <Notice icon="Activity">No other processes are running in this workspace.{snapshot.processes.truncated ? " The host list was truncated; open the Hosts sidebar for the full table." : ""}</Notice>
+                <Notice icon="Activity">No other processes are running in this workspace.{snapshot.processes.truncated ? " The host's list was cut short; Hosts → Processes has everything." : ""}</Notice>
               ) : (
-                <Card padded={false}>
-                  {rows.map((process, index) => (
-                    <ProcessRow key={processKey(process)} process={process} first={index === 0} expanded={expanded === processKey(process)} onToggle={() => setExpanded(expanded === processKey(process) ? null : processKey(process))} actions={actions} />
-                  ))}
-                </Card>
+                <>
+                  <Card padded={false}>
+                    {(showAll ? rows : rows.slice(0, ROWS_FOLDED)).map((process, index) => (
+                      <ProcessRow key={processKey(process)} process={process} first={index === 0} expanded={expanded === processKey(process)} onToggle={() => setExpanded(expanded === processKey(process) ? null : processKey(process))} actions={actions} />
+                    ))}
+                  </Card>
+                  {rows.length > ROWS_FOLDED ? <View style={{ flexDirection: "row" }}><Button label={showAll ? "Show the heaviest only" : `Show all ${rows.length}`} onPress={() => setShowAll(!showAll)} /></View> : null}
+                </>
               )}
             </Section>
-            <Section title="Browser links for this workspace" trailing={ports.length > 0 ? <View style={{ flexDirection: "row", gap: 6 }}>{ports.map((port) => <Tag key={port} label={`:${port}`} />)}</View> : undefined}>
+            <Section title="Browser links for this workspace" trailing={ports.length > 0 ? <View style={{ flexDirection: "row", gap: t.space.sm }}>{ports.map((port) => <Tag key={port} label={`:${port}`} />)}</View> : undefined}>
               {tunnels.length === 0 ? (
                 <Notice icon="Globe">No temporary browser link points at this workspace. Press Open beside a dev server above to create one.</Notice>
               ) : (
                 tunnels.map((tunnel) => <TunnelCard key={tunnel.id} tunnel={tunnel} minutes={minutes} onExtend={opener.extendLink} onClose={opener.closeLink} busy={opener.extending || opener.closing} />)
               )}
             </Section>
-            <Text style={t.text.caption}>Only dev servers, processes, and links that belong to this workspace's directory are listed. Switch the panel to the whole host under Settings → Plugins → Daemon Link → Hosts.</Text>
+            <Text style={t.text.caption}>Only dev servers, processes and links in this workspace's folder are listed. Heavy processes for the whole host, with a safe stop for any job Paseo started, are in the Hosts screen → Processes. To show the whole host here instead, use Settings → Hosts → Panel shows.</Text>
           </>
         ) : null}
       </View>

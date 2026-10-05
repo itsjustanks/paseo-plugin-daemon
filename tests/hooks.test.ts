@@ -62,13 +62,13 @@ describe("readHostsSettings", () => {
     expect(await readHostsSettings(file)).toEqual(HOSTS_SETTINGS_DEFAULTS);
     await writeFile(file, JSON.stringify({ version: 1, values: { closeTunnelsOnArchive: false, panelScope: "host" } }));
     // A version 1 document is migrated in place: old values kept, new switches default on.
-    expect(await readHostsSettings(file)).toEqual({ closeTunnelsOnArchive: false, panelScope: "host", snapshotIntervalSeconds: 20, backgroundHealthChecks: true, showComposerPill: true, tunnelMinutes: 120 });
+    expect(await readHostsSettings(file)).toEqual({ closeTunnelsOnArchive: false, panelScope: "host", snapshotIntervalSeconds: 30, backgroundHealthChecks: true, showComposerPill: true, tunnelMinutes: 120, maxHeavyJobs: 4, watchedServices: [] });
     // A version 2 document (0.7.0 and 0.8.0) keeps every saved value and only gains the link duration.
     await writeFile(file, JSON.stringify({ version: 2, values: { closeTunnelsOnArchive: false, panelScope: "host", backgroundHealthChecks: false, snapshotIntervalSeconds: 45 } }));
-    expect(await readHostsSettings(file)).toEqual({ closeTunnelsOnArchive: false, panelScope: "host", snapshotIntervalSeconds: 45, backgroundHealthChecks: false, showComposerPill: true, tunnelMinutes: 120 });
+    expect(await readHostsSettings(file)).toEqual({ closeTunnelsOnArchive: false, panelScope: "host", snapshotIntervalSeconds: 45, backgroundHealthChecks: false, showComposerPill: true, tunnelMinutes: 120, maxHeavyJobs: 4, watchedServices: [] });
     await writeFile(file, JSON.stringify({ version: 3, values: { tunnelMinutes: 480 } }));
     expect(await readHostsSettings(file)).toEqual({ ...HOSTS_SETTINGS_DEFAULTS, tunnelMinutes: 480 });
-    for (const raw of ["not json", JSON.stringify({ version: 4, values: {} }), JSON.stringify({ version: "1", values: {} }), JSON.stringify({ version: 1, values: { snapshotIntervalSeconds: 1 } }), JSON.stringify({ version: 3, values: { tunnelMinutes: 45 } })]) {
+    for (const raw of ["not json", JSON.stringify({ version: 5, values: {} }), JSON.stringify({ version: "1", values: {} }), JSON.stringify({ version: 1, values: { snapshotIntervalSeconds: 1 } }), JSON.stringify({ version: 3, values: { tunnelMinutes: 45 } })]) {
       await writeFile(file, raw);
       expect((await readHostsSettings(file)).closeTunnelsOnArchive).toBe(false);
     }

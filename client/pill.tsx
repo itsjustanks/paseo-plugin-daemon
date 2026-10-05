@@ -4,7 +4,9 @@ import { settingsRpc } from "@getpaseo/plugin";
 import React, { useEffect, useState } from "react";
 import { Text } from "react-native";
 import { hostHealth, pillText, workspaceHealth, type HealthStatus, type HealthVerdict } from "../shared/health";
-import { HOSTS_SETTINGS_DEFAULTS, HostsSettingsSchema, SNAPSHOT_INTERVAL_DEFAULT, type HostsSettings } from "../shared/settings";
+import { canObserveAgents, supportsButtonPills } from "../shared/host-features";
+import { createPillRegistry, type PillAgent } from "../shared/pills";
+import { HOSTS_SETTINGS_DEFAULTS, HostsSettingsSchema, type HostsSettings } from "../shared/settings";
 import type { WorkspaceTarget } from "../shared/workspace-filter";
 
 /**
@@ -76,74 +78,121 @@ async function workspaceTarget(client: PluginClientContext, workspaceId: string,
   } catch { return null; }
 }
 
+const OBSERVE_RETRY_MIN_MS = 2_000;
+const OBSERVE_RETRY_MAX_MS = 60_000;
+
+type PillButtonsClient = {
+  addComposerPill(contribution: {
+    id: string;
+    workspaceId: string;
+    agentId: string;
+    button: { title: string; icon: string; label?: string; behavior: { kind: "action"; onPress(): void } };
+  }): { update(patch: { label?: string; icon?: string }): void; remove(): void };
+};
+type AgentLike = { id?: string; workspaceId?: string | null };
+type AgentListLike = { entries: Array<{ agent: AgentLike }> };
+type AgentUpdateLike = { kind: string; agentId?: string; agent?: AgentLike };
+type AgentObservation = {
+  subscribe(observer: { snapshot(list: AgentListLike): void; update(message: { type: string; payload?: unknown }): void; error?(error: unknown): void }): () => void;
+  release(): Promise<void>;
+};
+const pillAgent = (agent: AgentLike | undefined): PillAgent | null => (agent?.id && agent.workspaceId ? { id: agent.id, workspaceId: agent.workspaceId } : null);
+
 /**
- * Track live agents, poll the cached verdict, and add or remove each agent's
- * pill as its workspace gains or loses something to report. Returns a cleanup
- * that stops polling, unsubscribes, and removes every pill.
+ * One Hosts chip per live agent whose workspace has something to report.
+ * The registry (shared/pills.ts) decides which chips exist and what they
+ * say; this wires it to the app.
+ *
+ * 0.10.0: Paseo 0.8.0 stable and later take a chip as a button, and the old
+ * component shape threw on add, so the chip never showed on 0.9 or 0.11
+ * apps. And since 0.9, `agents.subscribe()` only hears an observation the
+ * plugin opened itself, so new agents got no chip either. Both are chosen at
+ * runtime; a 0.8.0-beta.1 app keeps the old component and the old listener.
  */
 export function registerHealthPills(client: PluginClientContext): () => void {
+  const buttons = supportsButtonPills(client);
   const store = new VerdictStore();
   const HealthPill = createHealthPill(store);
-  const agents = new Map<string, string>();
-  const pills = new Map<string, () => void>();
   const targets = new Map<string, WorkspaceTarget>();
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let closed = false;
-  let polling = false;
-
-  const removePill = (agentId: string) => { pills.get(agentId)?.(); pills.delete(agentId); };
-
-  const reconcile = async (settings: HostsSettings) => {
-    if (!settings.showComposerPill || !store.verdict) { for (const agentId of [...pills.keys()]) removePill(agentId); return; }
-    for (const [agentId, workspaceId] of agents) {
-      const target = await workspaceTarget(client, workspaceId, targets);
-      if (closed) return;
-      const wanted = target !== null && pillText(workspaceHealth(store.verdict, target)) !== null;
-      if (wanted && !pills.has(agentId)) {
-        pills.set(agentId, client.addComposerPill({
-          id: "host-health", title: "Open Hosts for this workspace", workspaceId, agentId, Component: HealthPill,
-          // The workspace panel is the landing spot: it shows exactly the servers, links, and issues the pill counted.
-          onPress() { client.openPanel("daemon-link", { workspaceId }); },
-        }));
-      } else if (!wanted && pills.has(agentId)) removePill(agentId);
-    }
-  };
-
-  const poll = async () => {
-    if (polling || closed) return;
-    polling = true;
-    let settings = HOSTS_SETTINGS_DEFAULTS;
-    try {
-      settings = await readSettings(client);
-      if (settings.showComposerPill && agents.size > 0) {
-        try { store.set(await client.rpc(hostHealth, {})); }
-        catch { /* The host is unreachable from here; keep the last verdict until it answers again. */ }
+  const registry = createPillRegistry({
+    addPill(agent, face) {
+      // The workspace panel is the landing spot: it shows exactly the servers, links, and issues the chip counted.
+      const onPress = () => client.openPanel("daemon-link", { workspaceId: agent.workspaceId });
+      if (buttons) {
+        const registration = (client as unknown as PillButtonsClient).addComposerPill({
+          id: "host-health", workspaceId: agent.workspaceId, agentId: agent.id,
+          button: { title: "Open Hosts for this workspace", icon: face.icon, label: face.label, behavior: { kind: "action", onPress } },
+        });
+        return { update: (next) => registration.update({ label: next.label, icon: next.icon }), remove: () => registration.remove() };
       }
-      if (!closed) await reconcile(settings);
-    } finally {
-      polling = false;
-      if (!closed) timer = setTimeout(() => { void poll(); }, (settings.snapshotIntervalSeconds || SNAPSHOT_INTERVAL_DEFAULT) * 1000);
-    }
-  };
-
-  const unsubscribe = client.paseo.agents.subscribe((update) => {
-    if (update.kind === "remove") { agents.delete(update.agentId); removePill(update.agentId); return; }
-    if (update.kind !== "upsert" || !update.agent.workspaceId) return;
-    const { id: agentId, workspaceId } = update.agent;
-    if (agents.get(agentId) === workspaceId) return;
-    agents.set(agentId, workspaceId);
-    removePill(agentId);
-    // A new agent should not wait a full interval for its chip.
-    if (timer) { clearTimeout(timer); timer = null; }
-    void poll();
+      const remove = client.addComposerPill({ id: "host-health", title: "Open Hosts for this workspace", workspaceId: agent.workspaceId, agentId: agent.id, Component: HealthPill, onPress });
+      return { update: () => undefined, remove };
+    },
+    readSettings: () => readSettings(client),
+    readVerdict: () => client.rpc(hostHealth, {}),
+    target: (workspaceId) => workspaceTarget(client, workspaceId, targets),
+    publish: (verdict) => store.set(verdict),
+    schedule: (run, ms) => setTimeout(run, ms),
+    cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   });
-  void poll();
 
+  const onUpdate = (update: AgentUpdateLike) => {
+    if (update.kind === "remove" && update.agentId) { registry.remove(update.agentId); return; }
+    if (update.kind !== "upsert") return;
+    const agent = pillAgent(update.agent);
+    if (agent) registry.upsert(agent);
+  };
+  const stopFollowing = canObserveAgents(client.paseo)
+    ? observeAgents(client, (agents) => registry.replaceAll(agents), onUpdate)
+    : client.paseo.agents.subscribe((update) => onUpdate(update as unknown as AgentUpdateLike));
+  registry.start();
   return () => {
-    closed = true;
-    unsubscribe();
-    if (timer) clearTimeout(timer);
-    for (const remove of pills.values()) remove();
-    pills.clear();
+    stopFollowing();
+    registry.stop();
+  };
+}
+
+/**
+ * Paseo 0.9 and later: keep an agent observation open for the plugin's
+ * lifetime. The snapshot replaces what is known (first, and after every
+ * reconnect), updates apply in between, and an observation the app drops is
+ * reopened with backoff. The approach of paseo-mcp 0.18.1.
+ */
+function observeAgents(client: PluginClientContext, replaceAll: (agents: PillAgent[]) => void, onUpdate: (update: AgentUpdateLike) => void): () => void {
+  const lifetime = new AbortController();
+  let observation: AgentObservation | null = null;
+  let retry: ReturnType<typeof setTimeout> | null = null;
+  let delay = OBSERVE_RETRY_MIN_MS;
+  const fromList = (list: AgentListLike) => list.entries.map((entry) => pillAgent(entry.agent)).filter((agent): agent is PillAgent => agent !== null);
+  const reopen = () => {
+    observation = null;
+    if (lifetime.signal.aborted || retry !== null) return;
+    retry = setTimeout(() => { retry = null; open(); }, delay);
+    delay = Math.min(delay * 2, OBSERVE_RETRY_MAX_MS);
+  };
+  const open = () => {
+    (client.paseo.agents as unknown as { list(options: { subscribe: object; signal: AbortSignal }): Promise<AgentListLike & { subscription?: AgentObservation }> })
+      .list({ subscribe: {}, signal: lifetime.signal })
+      .then((result) => {
+        if (lifetime.signal.aborted) { void result.subscription?.release().catch(() => undefined); return; }
+        replaceAll(fromList(result));
+        const subscription = result.subscription;
+        if (!subscription) throw new Error("the app returned no agent observation");
+        observation = subscription;
+        subscription.subscribe({
+          snapshot(list) { delay = OBSERVE_RETRY_MIN_MS; replaceAll(fromList(list)); },
+          update(message) { if (message.type === "agent_update") onUpdate(message.payload as AgentUpdateLike); },
+          error: reopen,
+        });
+      })
+      .catch(reopen);
+  };
+  open();
+  return () => {
+    lifetime.abort();
+    if (retry !== null) clearTimeout(retry);
+    retry = null;
+    void observation?.release().catch(() => undefined);
+    observation = null;
   };
 }

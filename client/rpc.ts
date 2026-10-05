@@ -12,7 +12,6 @@ import {
   monitorForceStop,
   monitorSnapshot,
   monitorStop,
-  SNAPSHOT_LIMIT_DEFAULT,
   type ActionResult,
   type PressureState,
   type ProcessImpact,
@@ -81,13 +80,6 @@ export interface Snapshot {
   services: Process[];
   processes: { items: Process[]; total: number; truncated: boolean };
 }
-
-export const SORTS: ReadonlyArray<{ id: Sort; label: string }> = [
-  { id: "cpu", label: "CPU" },
-  { id: "memory", label: "Memory" },
-  { id: "name", label: "Name" },
-  { id: "pid", label: "PID" },
-];
 
 /** Processes page size. The server bounds this too; the client just asks for one screenful. */
 export const PROCESS_LIMIT = 15;

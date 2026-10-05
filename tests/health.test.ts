@@ -123,7 +123,7 @@ describe("workspaceHealth and pillText", () => {
     expect(pillText(workspaceHealth(verdict([issue("port-gone", [3000], "~/app/.worktrees/feature"), issue("tunnel-failed", [3000], null)]), target))).toBe("Dev server :3000 stopped +1");
     expect(pillText(workspaceHealth(verdict([issue("link-down", [9000], null, "process")]), target))).toBeNull();
     expect(pillText(workspaceHealth(verdict([issue("host-unreachable", [], null, "host", "critical")]), target))).toBe("Host unreachable");
-    expect(pillText(workspaceHealth(verdict([issue("cpu-pressure", [], null, "host")]), target))).toBe("CPU pressure critical");
+    expect(pillText(workspaceHealth(verdict([issue("cpu-pressure", [], null, "host")]), target))).toBe("CPU busy");
     // The workspace's own driver outranks the host-wide code in the chip; both stay counted.
     expect(pillText(workspaceHealth(verdict([issue("cpu-pressure", [], null, "host"), issue("pressure-driver", [3000], "~/app/.worktrees/feature")]), target))).toBe("Driving host pressure +1");
     expect(pillText(workspaceHealth(verdict([issue("pressure-driver", [3001], "~/app/.worktrees/other")]), target))).toBeNull();
@@ -155,7 +155,7 @@ describe("HealthChecker", () => {
     expect(a.status).toBe("ok");
     advance(5_000);
     expect(await checker.read()).toBe(a);
-    advance(20_000);
+    advance(30_000);
     const c = await checker.read();
     expect(c).not.toBe(a);
     expect(snapshotFn).toHaveBeenCalledTimes(2);
@@ -168,7 +168,7 @@ describe("HealthChecker", () => {
     expect(timers).toHaveLength(0);
     await checker.read({ paseo: {} as never });
     expect(timers).toHaveLength(1);
-    expect(timers[0]!.ms).toBe(20_000);
+    expect(timers[0]!.ms).toBe(30_000);
     await tick();
     expect(snapshotFn).toHaveBeenCalledTimes(2);
     expect(timers).toHaveLength(1);
@@ -188,3 +188,64 @@ describe("HealthChecker", () => {
     expect(verdict.issues[0]).toMatchObject({ code: "host-unreachable", message: "Monitor could not read system state." });
   });
 });
+
+describe("runaways, watched services and the summary", () => {
+  const runaway = (code: string, severity: "warning" | "critical", title: string, cwd: string | null = null) => ({ code, severity, title, pids: [1], cwd }) as never;
+  const report = (runaways: never[]) => ({
+    runaways, container: { memoryLimitBytes: 8e9, memoryUsedBytes: 7.4e9 } as never, memoryBasis: "container" as const, memoryBasisBytes: 8e9,
+    host: { cores: 8, cpuPercent: 40, load1: 1, memoryTotalBytes: 64e9, memoryUsedBytes: 20e9, cpuPressure: "normal", memoryPressure: "critical" } as never,
+    heavyJobs: { count: 5, limit: 4, pids: [] },
+  });
+  it("puts the report's plain sentences on the verdict, scoped to the process where there is one", () => {
+    const { verdict } = evaluateHealth(base({
+      snapshot: snapshot([], [], { memory: pressure("critical") }),
+      report: report([
+        runaway("memory-near-limit", "critical", "This container's memory is nearly full: 7.4 GB of its 8.0 GB limit."),
+        runaway("too-many-jobs", "warning", "5 heavy jobs are running at once; your limit is 4."),
+        runaway("cpu-runaway", "warning", "tsc (PID 402) has used a full CPU core for 4 min.", "~/app"),
+      ]),
+      watched: [{ id: "o", name: "OmniRoute", target: "h/x", state: "slow", latencyMs: 4200, usualMs: 100, status: 200, checkedAt: 1, message: "OmniRoute is slow: 4.2 s, usually 100 ms.", history: [] }],
+    }));
+    expect(HealthVerdictSchema.safeParse(verdict).success).toBe(true);
+    expect(verdict.status).toBe("critical");
+    expect(verdict.issues.map((issue) => [issue.code, issue.scope])).toEqual([["memory-pressure", "host"], ["too-many-jobs", "host"], ["runaway", "process"], ["service-slow", "host"]]);
+    expect(verdict.issues[0]!.message).toBe("This container's memory is nearly full: 7.4 GB of its 8.0 GB limit.");
+    expect(verdict.issues[2]).toMatchObject({ cwd: "~/app", subject: "tsc" });
+    expect(verdict.load).toEqual({ memoryUsedBytes: 7.4e9, memoryLimitBytes: 8e9, memoryBasis: "container", cpuPercent: 40, heavyJobs: 5, heavyJobLimit: 4 });
+    const target = { directory: "/home/alice/app", projectRootPath: "/home/alice/app", name: "App" };
+    expect(pillText(workspaceHealth(verdict, target))).toBe("This container's memory is nearly full: 7.4 GB of its 8.0 GB limit.");
+    expect(pillText(workspaceHealth({ ...verdict, status: "warning", issues: verdict.issues.slice(1) }, target))).toBe("Runaway: tsc +2");
+    const quiet = evaluateHealth(base({ report: report([]), watched: [{ id: "o", name: "OmniRoute", target: "h/x", state: "down", latencyMs: null, usualMs: null, status: null, checkedAt: 1, message: "OmniRoute is down: it can't be reached.", history: [] }] })).verdict;
+    expect(pillText(workspaceHealth(quiet, { directory: "/elsewhere" }))).toBe("OmniRoute down");
+  });
+  it("summarises a verdict for other plugins without paths or commands, and writes it atomically", async () => {
+    const { summarize, HostSummarySchema } = await import("../shared/summary");
+    const { verdict } = evaluateHealth(base({ report: report([runaway("cpu-runaway", "warning", "tsc (PID 402) has used a full CPU core for 4 min.", "~/secret-project")]),
+      watched: [{ id: "o", name: "OmniRoute", target: "10.0.0.9:20128/api/health/ping", state: "up", latencyMs: 90, usualMs: 100, status: 200, checkedAt: 1, message: "OmniRoute answered in 90 ms.", history: [] }] }));
+    const summary = HostSummarySchema.parse(summarize(verdict));
+    expect(summary.watched).toEqual([{ name: "OmniRoute", state: "up", latencyMs: 90, usualMs: 100, message: "OmniRoute answered in 90 ms." }]);
+    expect(JSON.stringify(summary)).not.toContain("10.0.0.9");
+    expect(summary).toMatchObject({ version: 1, plugin: "daemon-link", status: "warning", load: { heavyJobs: 5 } });
+    expect(JSON.stringify(summary)).not.toContain("secret-project");
+    const { mkdtemp, readFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { summaryWriter } = await import("../server/summary-file");
+    const dir = await mkdtemp(join(tmpdir(), "daemon-link-summary-"));
+    await summaryWriter(dir)(verdict);
+    expect(HostSummarySchema.parse(JSON.parse(await readFile(join(dir, "host-summary.json"), "utf8"))).status).toBe("warning");
+    await rm(dir, { recursive: true, force: true });
+  });
+  it("checks watched services and reads the process report on each health check", async () => {
+    const check = vi.fn(async () => []);
+    const reportFn = vi.fn(async () => report([]) as never);
+    const runtime: HealthRuntime = { monitor: { snapshot: async () => snapshot([]) as Snapshot }, links: { status: async () => ({ profiles: [], connections: [], tunnels: [] }) }, processes: { report: reportFn }, watch: { check } };
+    const seen: HealthVerdict[] = [];
+    const checker = new HealthChecker({ runtime, readSettings: async () => ({ ...HOSTS_SETTINGS_DEFAULTS, watchedServices: [{ id: "o", name: "OmniRoute", url: "http://h/x", expectedStatus: null }] }), onVerdict: (v) => seen.push(v) });
+    await checker.read(undefined, true);
+    expect(check).toHaveBeenCalledWith([expect.objectContaining({ id: "o" })], true);
+    expect(reportFn).toHaveBeenCalledWith({ limit: 1 });
+    expect(seen).toHaveLength(1);
+  });
+});
+

@@ -1,3 +1,27 @@
+# Validation — 2026-10-05 (0.10.0)
+
+Built and checked against Paseo **0.11.0-beta.3** (the fleet's and the Mac's version):
+
+- TypeScript check, repository hygiene and `git diff --check` pass. The suite (228 tests, 1 optional
+  network test skipped) passed three consecutive runs; coverage clears every floor (statements 89.6%,
+  branches 80.2%, functions 87.0%, lines 95.4%).
+- A Mac build check installed this checkout as `daemon-link-buildcheck`, saw "Plugin ready", and
+  removed it. While installed, the Paseo app's health request ran the macOS process report on the
+  real machine and wrote a valid `host-summary.json` (whole machine, no container), since deleted.
+- `npm run test:compatibility` fails before compiling anything: it still expects the 0.7 `index.ts`
+  entry removed in the 0.5.0 migration. This predates 0.10.0 and is unchanged.
+- The cgroup reader was written against a fleet container's real files (read-only): a 7.3 GB
+  `memory.max` on a 64 GB host, `cpu.max` unlimited, and Paseo's own process tree (supervisor,
+  daemon, plugin hosts, terminal worker), which the process tests reproduce.
+- Screenshots of every state, wide (1280 px) and narrow (420 px), light and dark, with no page errors
+  or clipped boxes, from the preview harness's fictional fixtures.
+
+Not verified: stopping real processes inside a fleet container (tests use a fake process table), the
+0.11 sidebar row, status dot and popover inside the Paseo app (the preview has no SidebarRow), and the
+button-shaped composer chip in a live app.
+
+---
+
 # Validation — 2026-09-05
 
 Daemon Link supports Paseo **0.7.2 and the 0.8 preview API** from the same checkout.

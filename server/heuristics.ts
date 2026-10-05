@@ -113,6 +113,51 @@ export function classifyMemoryPressure(input: MemoryPressureInput): { pressure: 
   return { pressure, reasons };
 }
 
+// ------------------------------------------------------- container pressure
+
+export interface ContainerPressureInput {
+  limitBytes: number | null;
+  workingSetBytes: number;
+  psiSome10: number | null;
+  /** OOM kills since the previous sample; null when unknown. */
+  newOomKills: number | null;
+}
+
+export const CONTAINER_HIGH_PERCENT = 80;
+export const CONTAINER_CRITICAL_PERCENT = 90;
+
+/**
+ * Pressure against the container's own memory limit, which is where the
+ * kernel stops processes. Reasons are plain sentences: they reach the
+ * Overview card as they are.
+ */
+export function classifyContainerMemory(input: ContainerPressureInput): { pressure: PressureState; reasons: string[] } {
+  const reasons: string[] = [];
+  let pressure: PressureState = "normal";
+  if (input.limitBytes !== null && input.limitBytes > 0) {
+    const percent = (input.workingSetBytes / input.limitBytes) * 100;
+    if (percent >= CONTAINER_CRITICAL_PERCENT) pressure = "critical";
+    else if (percent >= CONTAINER_HIGH_PERCENT) pressure = "high";
+    if (pressure !== "normal") reasons.push(`using ${Math.round(percent)}% of this container's ${formatBytes(input.limitBytes)} memory limit`);
+  }
+  if (input.psiSome10 !== null && input.psiSome10 >= 25) {
+    pressure = "critical";
+    reasons.push(`processes waited on memory ${input.psiSome10.toFixed(0)}% of the last 10 seconds`);
+  } else if (input.psiSome10 !== null && input.psiSome10 >= 5) {
+    if (pressure === "normal") pressure = "high";
+    reasons.push(`processes waited on memory ${input.psiSome10.toFixed(0)}% of the last 10 seconds`);
+  }
+  if (input.newOomKills !== null && input.newOomKills > 0) {
+    pressure = "critical";
+    reasons.push(`the kernel stopped ${input.newOomKills === 1 ? "a process" : `${input.newOomKills} processes`} for running out of memory`);
+  }
+  return { pressure, reasons };
+}
+
+export function worstPressure(...states: PressureState[]): PressureState {
+  return states.includes("critical") ? "critical" : states.includes("high") ? "high" : "normal";
+}
+
 // ------------------------------------------------------------ process impact
 
 export interface ProcessImpactInput {

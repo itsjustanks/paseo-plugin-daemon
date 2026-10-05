@@ -6,24 +6,23 @@ only; it does not read daemon settings, credentials, processes, or project direc
 
 ## Reproduce
 
-1. Run `npm ci`, then `npm run preview:ui` from the repository root.
-2. Open `http://127.0.0.1:43197` in a fresh browser session without saved authentication.
-3. Use a 1280 × 1060 viewport for Dev servers, Connect, Project Sync, Daemon Health, and the workspace
-   panel (`?view=panel`).
-4. Use a 390 × 844 viewport with `?light` for the narrow Dev servers view with its collapsed guide.
-5. Headless: `AGENT_BROWSER_ARGS=--no-sandbox agent-browser open http://127.0.0.1:43197/` then
-   `agent-browser screenshot <file>`; press Open on a card first for the link-ready state.
-6. Capture the viewport directly, inspect every image, then commit the reviewed PNGs.
+1. Run `npm ci` in the repository root.
+2. Point `PLAYWRIGHT_CORE` at any checkout of `playwright-core` (it is not a dependency of this
+   plugin) and have Google Chrome installed.
+3. Run `node tests/screenshots.mjs <folder>`. It renders every state in light and dark, at 1280 and
+   420 px wide, and reports page errors and clipped boxes. `SHOTS=overview,processes` limits it.
+4. Inspect every image, copy the reviewed ones here, then commit them.
+
+Preview query strings: `?busy` (a runaway, memory near the container limit, a slow watched
+service), `?mac` (no container), `?light`, `?view=panel`, `?view=settings`, `?view=popover`,
+`?tab=processes`.
 
 | File | View |
 | --- | --- |
-| `dev-servers.png` | Dev servers with a live browser link on one card, dark theme |
-| `workspace-panel.png` | Workspace Hosts tab (`?view=panel`) after pressing Open, dark theme |
-| `dev-relay.png` | Connect → Private localhost, dark theme |
-| `project-sync.png` | Project Sync → Receive a project → Development server → Preview Website |
-| `daemon-health.png` | Daemon Health → Project processes, dark theme |
-| `guide-mobile.png` | Dev servers with the collapsed setup guide, light theme and narrow viewport |
-
-Fixture names, paths, ports, process IDs, metrics, and peer records are fictional. Never replace
-these images with a live daemon screenshot. Redaction patterns cannot reliably remove every account
-name, project detail, session identifier, or access URL from a real installation.
+| `overview.png` | Overview with four issues (`?busy`), light theme |
+| `processes.png` | Processes with runaways and the heaviest processes (`?busy`), dark theme |
+| `popover.png` | The quick health check from the sidebar dot, narrow, light theme |
+| `dev-servers.png` | Dev servers, dark theme |
+| `dev-relay.png` | Connect, dark theme |
+| `project-sync.png` | Project Sync, light theme |
+| `workspace-panel.png` | A workspace's Hosts tab with issues (`?view=panel&busy`), light theme |

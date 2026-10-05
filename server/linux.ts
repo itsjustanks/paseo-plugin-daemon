@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { readdir, readFile, readlink } from "node:fs/promises";
 import { cpus, loadavg, uptime } from "node:os";
 import { promisify } from "node:util";
+import { readCgroup } from "./cgroup";
 import { hashArgv } from "./redaction";
 import {
   mapLimit,
@@ -250,6 +251,7 @@ export class LinuxAdapter implements PlatformAdapter {
     const cpu = parseProcStat(stat);
     const loads = load ? parseLoadavg(load) : { load1: loadavg()[0] ?? 0, load5: loadavg()[1] ?? 0, load15: loadavg()[2] ?? 0 };
     const memory = parseMeminfo(mem);
+    const container = await readCgroup(memory.totalBytes, this.fs).catch(() => null);
     return {
       cpuBusy: cpu.busy,
       cpuTotal: cpu.total,
@@ -263,6 +265,7 @@ export class LinuxAdapter implements PlatformAdapter {
       swapUsedBytes: Math.max(0, memory.swapTotalBytes - memory.swapFreeBytes),
       pressureSignal: null,
       uptimeSeconds: up ? parseUptime(up) : uptime(),
+      container,
     };
   }
 

@@ -66,6 +66,8 @@ type SignalOutcome = "delivered" | "exited" | "denied" | "failed";
 
 interface DescendantOutcome {
   delivered: number;
+  /** The rows that received the signal, for a later forceful pass over survivors. */
+  rows: TreeRow[];
   /** Exited, changed identity, or became protected between the tree read and the signal. */
   skipped: number;
   failed: number;
@@ -289,7 +291,7 @@ export class ProcessGuard {
    * matches the tree row (PID reuse), or when the static rules now reject it.
    */
   private async signalDescendants(candidates: readonly TreeRow[], protectedPids: ReadonlySet<number>, signal: Signal): Promise<DescendantOutcome> {
-    const outcome: DescendantOutcome = { delivered: 0, skipped: 0, failed: 0 };
+    const outcome: DescendantOutcome = { delivered: 0, rows: [], skipped: 0, failed: 0 };
     const excluded = new Set<number>();
     for (const candidate of candidates) {
       if (excluded.has(candidate.ppid)) { excluded.add(candidate.pid); outcome.skipped += 1; continue; }
@@ -307,7 +309,12 @@ export class ProcessGuard {
         continue;
       }
       const result = this.trySignal(candidate.pid, signal);
-      if (result === "delivered") outcome.delivered += 1;
+      if (result === "delivered") {
+        outcome.delivered += 1;
+        outcome.rows.push(candidate);
+        if (signal === "SIGTERM") this.recordGraceful(fresh);
+        else this.graceful.delete(identityKey(fresh));
+      }
       else if (result === "exited") outcome.skipped += 1;
       else outcome.failed += 1;
     }
@@ -329,21 +336,72 @@ export class ProcessGuard {
 
   /** SIGTERM the verified process, record the attempt, then its re-verified descendants. */
   async stop(token: string): Promise<ActionResult> {
+    return (await this.stopTree(token)).result;
+  }
+
+  /**
+   * `stop`, also returning the descendants that received SIGTERM, so a
+   * caller can later force-stop whichever of them outlive the grace period
+   * (a parent can exit and leave its workers running).
+   */
+  async stopTree(token: string): Promise<{ result: ActionResult; children: TreeRow[] }> {
     const auth = await this.authorize(token);
-    if (!auth.ok) return auth.result;
+    if (!auth.ok) return { result: auth.result, children: [] };
     const { identity, protectedPids, candidates } = auth;
     const primary = this.trySignal(identity.pid, "SIGTERM");
-    if (primary === "exited") return { ok: true, status: "already-exited", message: "Process has already exited.", pid: identity.pid, signaledCount: 0 };
-    if (primary !== "delivered") return this.failure(primary, identity.pid);
+    if (primary === "exited") return { result: { ok: true, status: "already-exited", message: "Process has already exited.", pid: identity.pid, signaledCount: 0 }, children: [] };
+    if (primary !== "delivered") return { result: this.failure(primary, identity.pid), children: [] };
     this.recordGraceful(identity);
     const kids = await this.signalDescendants(candidates, protectedPids, "SIGTERM");
     return {
-      ok: true,
-      status: "signaled",
-      message: this.describe("SIGTERM", identity.pid, candidates.length, kids),
-      pid: identity.pid,
-      signaledCount: 1 + kids.delivered,
+      result: { ok: true, status: "signaled", message: this.describe("SIGTERM", identity.pid, candidates.length, kids), pid: identity.pid, signaledCount: 1 + kids.delivered },
+      children: kids.rows,
     };
+  }
+
+  /**
+   * What `stop` would signal, without signalling anything: the verified
+   * target and the descendants that pass the same checks. Used for the
+   * ask-first list. Not a promise: the real stop re-verifies everything.
+   */
+  async plan(token: string): Promise<{ ok: true; pid: number; children: number[] } | { ok: false; result: ActionResult }> {
+    const auth = await this.authorize(token);
+    if (!auth.ok) return auth;
+    const children: number[] = [];
+    const excluded = new Set<number>();
+    for (const candidate of auth.candidates) {
+      if (excluded.has(candidate.ppid) || (this.authorizeProcess && !await this.authorizeProcess(candidate.pid, true).catch(() => false))) {
+        excluded.add(candidate.pid);
+        continue;
+      }
+      children.push(candidate.pid);
+    }
+    return { ok: true, pid: auth.identity.pid, children };
+  }
+
+  /**
+   * SIGKILL the given descendants that are still the same processes (uid and
+   * start identity) and received a verified SIGTERM within the grace window.
+   * Each is re-read and re-checked first, exactly like any other signal.
+   */
+  async forceSurvivors(rows: readonly TreeRow[]): Promise<number> {
+    if (rows.length === 0) return 0;
+    let tree: TreeRow[];
+    try { tree = await this.adapter.readTree(); } catch { return 0; }
+    const protectedPids = protectedSet(tree, this.selfPid, this.alwaysProtected);
+    let killed = 0;
+    for (const row of rows) {
+      let fresh: ProcessIdentity | null;
+      try { fresh = await this.adapter.readIdentity(row.pid); } catch { continue; }
+      if (!fresh || fresh.uid !== row.uid || fresh.startId !== row.startId) continue;
+      if (!this.evaluateAgainst(fresh, protectedPids).actionable || !this.hadRecentGraceful(fresh)) continue;
+      if (this.authorizeProcess && !await this.authorizeProcess(row.pid, true).catch(() => false)) continue;
+      if (this.trySignal(row.pid, "SIGKILL") === "delivered") {
+        killed += 1;
+        this.graceful.delete(identityKey(fresh));
+      }
+    }
+    return killed;
   }
 
   /** SIGKILL, gated on a recent verified SIGTERM for the same identity. */
