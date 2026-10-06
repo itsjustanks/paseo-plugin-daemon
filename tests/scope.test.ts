@@ -64,7 +64,7 @@ describe("Paseo project scope", () => {
     await expect(scope.refresh(true)).rejects.toThrow("could not be verified");
     expect(scope.status().projects).toEqual([]);
     const unbound = new ProjectScope();
-    await expect(unbound.refresh()).rejects.toThrow("Open Daemon Link");
+    await expect(unbound.refresh()).rejects.toThrow("Open Hosts");
   });
 
   it("filters before sorting/pagination and keeps agents and unknown tools read-only", async () => {

@@ -63,7 +63,7 @@ describe("WatchChecker", () => {
     const checker = new WatchChecker(fetcher, () => now);
     const services = [service()];
     let results = await checker.check(services);
-    expect(calls[0]).toMatchObject({ url: services[0]!.url, init: { method: "GET", redirect: "manual", headers: { "user-agent": "Paseo Daemon Link health check" } } });
+    expect(calls[0]).toMatchObject({ url: services[0]!.url, init: { method: "GET", redirect: "manual", headers: { "user-agent": "Paseo Hosts health check" } } });
     expect(Object.keys(calls[0]!.init.headers)).toEqual(["user-agent"]);
     expect(results[0]).toMatchObject({ state: "up", latencyMs: 100, target: "10.0.0.9:20128/api/health/ping" });
     // Within the minimum interval: the cached answer, no new request.

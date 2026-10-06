@@ -200,7 +200,6 @@ export function ServiceCard({ process, actions, footer }: { process: Process; ac
           </Text>
           <Text style={t.text.caption} numberOfLines={1}>
             {process.classification.label}
-            {process.cwd ? ` · ${process.cwd}` : ""}
           </Text>
         </View>
         <StatusPill tone={stateTone(process.state)} label={process.state} />
@@ -217,10 +216,9 @@ export function ServiceCard({ process, actions, footer }: { process: Process; ac
           { value: `CPU ${formatPercent(process.cpuPercent, 1)}` },
           { value: `memory ${formatBytes(process.rssBytes)}` },
           { value: `up ${formatDuration(process.ageSeconds)}` },
-          { value: `PID ${process.pid}` },
         ]}
       />
-      <Text style={t.text.caption}>{process.project?.name}{process.project?.workspace ? ` · ${process.project.workspace}` : ""} · Stop it from Hosts → Processes.</Text>
+      <Text style={t.text.caption}>{process.project?.name}{process.project?.workspace ? ` · ${process.project.workspace}` : ""}</Text>
       {footer}
     </Card>
   );

@@ -30,7 +30,7 @@ export class TunnelManager {
   async start({ port, minutes }: { port: number; minutes: number }): Promise<Tunnel> {
     Port.parse(port);
     if (!isTunnelMinutes(minutes)) throw new Error(TUNNEL_MINUTES_MESSAGE);
-    if (this.closed) throw new Error("Daemon Link is stopping.");
+    if (this.closed) throw new Error("Hosts is stopping.");
     const existing = [...this.records.values()].find((r) => r.view.port === port && ["starting", "connected"].includes(r.view.state));
     if (existing) return { ...existing.view };
     if (this.records.size >= 4) throw new Error("Disconnect an existing link before opening another (limit: four).");

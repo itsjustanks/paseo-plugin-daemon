@@ -172,3 +172,13 @@ export const processLog = defineRpc({
   input: z.object({ limit: z.number().int().min(1).max(200).default(50) }),
   output: z.object({ entries: z.array(ActionLogEntrySchema) }),
 });
+
+/** What a row looks like at a glance (0.12.1): rows that look the same also show their PID. */
+export const sameness = (row: { name: string; owner: { label: string }; ports: readonly number[] }) => `${row.name}\u0000${row.owner.label}\u0000${row.ports.join(",")}`;
+
+/** The looks shared by more than one row. */
+export function twinKeys(rows: ReadonlyArray<{ name: string; owner: { label: string }; ports: readonly number[] }>): Set<string> {
+  const seen = new Map<string, number>();
+  for (const row of rows) seen.set(sameness(row), (seen.get(sameness(row)) ?? 0) + 1);
+  return new Set([...seen].filter(([, count]) => count > 1).map(([key]) => key));
+}

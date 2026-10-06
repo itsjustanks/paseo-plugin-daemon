@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.12.1 — 2026-10-06
+
+Fixes from an audit of the real Paseo app (0.11.0-beta.5), checked again in the real app before
+release. One name, one way to refresh, nothing technical in plain view.
+
+- **Optional steps aren't to-dos.** "Start a dev server" is optional, so a calm host no longer shows
+  "Setup checks: 1 still to do".
+- **One name: Hosts.** The slash command is `/hosts` (was `/daemon-link`; the SDK has no hidden
+  aliases, so the old name is gone, and "daemon-link" stays a Command Center keyword). Messages,
+  the pairing box, the stop rules, the link page's title and the health check's user-agent say
+  "Hosts". The plugin's own process reads "Hosts (this plugin)".
+- **Processes rows can be told apart.** Paseo's parts are named ("Paseo · window", "Paseo · graphics",
+  "Paseo · plugin host", "Paseo · daemon"), browser and desktop-app helpers get their role ("Outside
+  Paseo · window or tab", "· network", "· audio"), an agent outside a project shows its folder, and
+  rows that still look the same show their PID.
+- **Dev servers.** "None running" is neutral (no green dot), "Checking…" until it knows. Copying a
+  project isn't about dev servers, so Project Sync folds out on Overview now; `sync` links land there.
+  Dev-server cards drop the folder path and PID.
+- **Workspace panel, rebuilt in the new style.** The Hosts header with the workspace's name and state
+  and one Refresh link; its dev servers; what needs attention (with Ask an agent); then folded: what
+  the workspace uses, its other processes, browser links, and Technical details (folder, ports,
+  schedule). No path, PIDs, "Every 30s" or "daemon" in plain view.
+- **Words.** "Whole machine" is said once, in the header. Heavy jobs explain the number: "builds, tests
+  and dev servers running now; 4 at once is the limit" (Overview, Processes, the quick check).
+- **Consistency with the other plugins.** Help is folded questions only; the walkthrough is the
+  question "How does Hosts work?". One Refresh link in the page header (no "Check again", grey Refresh
+  or "Run checks again"). The app's header title follows the tab ("Hosts · Processes"): the screen
+  title comes from `params.tab`, and changing tab reopens the screen with it, as Memories does. A
+  link that reopens the screen while it's showing now moves it to that tab.
+- **Manifest.** `paseo-plugin.json` has a plain `description`, shown in Settings → Plugins. Paseo
+  0.8's manifest schema is strict and has no `description`, so `requirements.paseo` is now `>=0.9.0`
+  (the first version that accepts it); a 0.8 host should stay on 0.12.0.
+- **Tests.** `tests/ux.test.ts` (manifest, role names, duplicate rows, no "Daemon Link" in visible
+  text, `/hosts`); tab mapping covers `sync` on Overview and the header titles.
+
 ## 0.12.0 — 2026-10-06
 
 The theme of this release: from "something is wrong" to "an agent is on it" in two presses, because

@@ -32,7 +32,7 @@ export function decodeOffer(invitation: string): Offer {
     const offer = Offer.parse(JSON.parse(Buffer.from(invitation.slice(12), "base64url").toString("utf8")));
     relayUrl(offer.relay, offer.serverId, "client");
     return offer;
-  } catch { throw new Error("This is not a valid Daemon Link pairing code."); }
+  } catch { throw new Error("This is not a valid Hosts pairing code."); }
 }
 
 export class PeerManager {
@@ -58,7 +58,7 @@ export class PeerManager {
   private async load() {
     try { this.data = Store.parse(JSON.parse(await readFile(join(this.directory, "peers.json"), "utf8"))); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Cannot read Daemon Link pairings. Repair peers.json before continuing.");
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Cannot read the Hosts pairings. Repair peers.json before continuing.");
       const keys = generateKeyPair();
       this.data = { version: 1, serverId: randomUUID(), publicKey: exportPublicKey(keys.publicKey), secretKey: exportSecretKey(keys.secretKey), relay: process.env.PASEO_DAEMON_LINK_RELAY || DEFAULT_RELAY, grants: [], peers: [] };
     }
@@ -73,7 +73,7 @@ export class PeerManager {
   }
 
   private serialize<T>(fn: () => Promise<T>): Promise<T> {
-    const operation = this.queue.then(async () => { await this.ready; if (this.stopped) throw new Error("Daemon Link is stopping."); return fn(); });
+    const operation = this.queue.then(async () => { await this.ready; if (this.stopped) throw new Error("Hosts is stopping."); return fn(); });
     this.queue = operation.catch(() => {}); return operation;
   }
 

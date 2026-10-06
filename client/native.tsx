@@ -20,7 +20,7 @@ type SidebarItemProps = PluginHostProps & {
 type SidebarRowProps = { icon?: string; label?: string; onPress(): void; active?: boolean; trailing?: ReactNode };
 type ScreenProps = PluginSurfaceProps & { params?: Record<string, string> };
 type NativeClient = {
-  addScreen?: (contribution: { id: string; title: string; Component: ComponentType<ScreenProps> }) => () => void;
+  addScreen?: (contribution: { id: string; title: string | ((params: Record<string, string>) => string); Component: ComponentType<ScreenProps> }) => () => void;
   addSidebarHeaderItem?: (contribution: { id: string; title: string; Component: ComponentType<SidebarItemProps> }) => () => void;
 };
 
@@ -34,6 +34,8 @@ export function hostSidebarRow(): ComponentType<SidebarRowProps> | null {
 export type MainScreen = {
   id: string;
   title: string;
+  /** The header title from the screen's params (0.11+), such as "Hosts · Processes"; `title` elsewhere. */
+  screenTitle?: (params: Record<string, string>) => string;
   icon: string;
   Component: ComponentType<ScreenProps>;
   Trailing?: ComponentType<{ theme: PluginHostProps["theme"]; openPopover?: SidebarItemProps["openPopover"] }>;
@@ -49,12 +51,13 @@ export function registerMainScreen(client: PluginClientContext, screen: MainScre
   const native = client as PluginClientContext & NativeClient;
   const Row = hostSidebarRow();
   if (supportsNativeScreens(client, Row)) {
-    native.addScreen!({ id: screen.id, title: screen.title, Component: screen.Component });
+    native.addScreen!({ id: screen.id, title: screen.screenTitle ?? screen.title, Component: screen.Component });
+    screenOpener = (params) => (client as unknown as { openScreen(input: ScreenInput): void }).openScreen({ screenId: screen.id, params });
     native.addSidebarHeaderItem!({ id: screen.id, title: screen.title, Component: sidebarEntry(Row!, screen) });
     return { screen: "screen", sidebar: "row" };
   }
   const hasScreens = typeof native.addScreen === "function";
-  if (hasScreens) native.addScreen!({ id: screen.id, title: screen.title, Component: screen.Component });
+  if (hasScreens) native.addScreen!({ id: screen.id, title: screen.screenTitle ?? screen.title, Component: screen.Component });
   else client.addSurface(screen.id, screen.Component);
   client.addSidebarItem({ id: screen.id, title: screen.title, icon: screen.icon, surface: screen.id });
   return { screen: hasScreens ? "screen" : "surface", sidebar: "item" };
@@ -66,6 +69,20 @@ function sidebarEntry(Row: ComponentType<SidebarRowProps>, screen: MainScreen): 
     const trailing = Trailing ? <Trailing theme={theme} openPopover={typeof openPopover === "function" ? openPopover : undefined} /> : undefined;
     return <Row icon={screen.icon} active={currentScreen?.screenId === screen.id} onPress={() => openScreen({ screenId: screen.id })} trailing={trailing} />;
   };
+}
+
+let screenOpener: ((params: Record<string, string>) => void) | null = null;
+
+/**
+ * Reopens the Hosts screen with new params (0.12.1), so the app's header
+ * title follows the tab ("Hosts · Processes") and back/forward keep the
+ * place, as Memories does. False where the app has no native screens.
+ */
+export function syncScreenParams(next: Record<string, string>, current: Record<string, string> | undefined): boolean {
+  if (!screenOpener || current === undefined) return false;
+  const key = (params: Record<string, string>) => JSON.stringify(Object.keys(params).sort().map((name) => [name, params[name]]));
+  if (key(next) !== key(current)) screenOpener(next);
+  return true;
 }
 
 /** Opens a screen (with params) with `openScreen` on a 0.11 app, `openSurface` before. */

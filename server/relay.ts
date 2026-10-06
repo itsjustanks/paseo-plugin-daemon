@@ -150,7 +150,7 @@ export async function openRelay(args: { relay: string; serverId: string; publicK
   return new Promise((resolve, reject) => {
     let channel: EncryptedChannel;
     let ready = false;
-    const timeout = setTimeout(() => { ws.terminate(); reject(new Error("Peer did not respond. Check that Daemon Link is running on both machines and the relay is reachable.")); }, 15_000);
+    const timeout = setTimeout(() => { ws.terminate(); reject(new Error("Peer did not respond. Check that Hosts is running on both computers and the relay is reachable.")); }, 15_000);
     ws.once("close", () => { clearTimeout(timeout); if (!ready) reject(new Error("Peer connection failed. Check pairing and relay access.")); });
     ws.once("open", () => {
       void createClientChannel(relayTransport(ws), args.publicKey, {

@@ -107,3 +107,45 @@ export function programName(argv: readonly string[], fallback: string): string {
   const name = base(script).replace(/\.(ts|py|rb)$/, "");
   return name && name.length <= 40 && !/[=]/.test(name) ? name : fallback;
 }
+
+const flagValue = (argv: readonly string[], name: string): string | null => {
+  const prefix = `${name}=`;
+  const hit = argv.find((arg) => arg.startsWith(prefix));
+  return hit ? hit.slice(prefix.length) : null;
+};
+
+/**
+ * What a Chromium or Electron helper does, from its `--type` flag (0.12.1):
+ * browsers and desktop apps run a dozen processes with the same name, and
+ * "Google · Outside Paseo" ten times over tells nobody anything. Null for a
+ * process that isn't such a helper.
+ */
+export function helperRole(argv: readonly string[]): string | null {
+  const type = flagValue(argv, "--type");
+  if (!type) return null;
+  if (type === "renderer") return argv.includes("--extension-process") ? "extension" : "window or tab";
+  if (type === "gpu-process") return "graphics";
+  if (type === "utility") {
+    const sub = flagValue(argv, "--utility-sub-type") ?? "";
+    if (/network/i.test(sub)) return "network";
+    if (/audio/i.test(sub)) return "audio";
+    if (/storage/i.test(sub)) return "storage";
+    return "helper";
+  }
+  if (type === "crashpad-handler") return "crash reporter";
+  return "helper";
+}
+
+/** Which part of Paseo a Paseo process is, in a word or two: "daemon", "plugin host", "window". */
+export function paseoRole(process: { argv: readonly string[]; comm: string }, isDaemon: boolean): string {
+  if (isDaemon) return "daemon";
+  if (isPluginHost(process)) return "plugin host";
+  if (isTerminalWorker(process)) return "terminals";
+  const first = process.argv[0] ?? process.comm;
+  if (/^Paseo Supervisor/.test(first) || /^Paseo Supervisor/.test(process.comm)) return "supervisor";
+  const helper = helperRole(process.argv);
+  if (helper) return helper === "window or tab" ? "window" : helper;
+  if (/[\\/]Paseo\.app[\\/]Contents[\\/]MacOS[\\/]Paseo$/.test(first)) return "app";
+  if (/esbuild/.test(base(first))) return "bundler";
+  return "helper";
+}

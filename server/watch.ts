@@ -51,7 +51,7 @@ export class WatchChecker {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), WATCH_TIMEOUT_MS);
       try {
-        const response = await this.fetcher(service.url, { method: "GET", redirect: "manual", signal: controller.signal, headers: { "user-agent": "Paseo Daemon Link health check" } });
+        const response = await this.fetcher(service.url, { method: "GET", redirect: "manual", signal: controller.signal, headers: { "user-agent": "Paseo Hosts health check" } });
         probe = { at: started, latencyMs: Math.max(0, this.now() - started), status: response.status, error: null };
         void response.body?.cancel?.().catch(() => undefined);
       } catch {

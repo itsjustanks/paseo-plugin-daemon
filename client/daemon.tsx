@@ -1,8 +1,8 @@
 import { Transfers } from "./transfers";
 import { type PluginSurfaceProps, useRpc, useSettings } from "@getpaseo/plugin/client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import React, { useMemo, useState } from "react";
-import { ScrollView, Text, TextInput, View } from "react-native";
+import React, { useEffect, useMemo, useState } from "react";
+import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { hostHealth } from "../shared/health";
 import * as rpc from "../shared/link";
 import * as peerRpc from "../shared/peers";
@@ -11,6 +11,7 @@ import { hostsSettings } from "../shared/settings";
 import { TUNNEL_MINUTES_DEFAULT, formatMinutes, type TunnelMinutes } from "../shared/tunnel-lease";
 import { resolveTab, type Fold } from "../shared/tabs";
 import { HostsNavigationProvider, OpenTerminalButton } from "./ask";
+import { syncScreenParams } from "./native";
 import { HelpTab, type SetupCheck } from "./guide";
 import { OverviewTab } from "./home";
 import { Accordion, AccordionItem, IconBadge, MessageBar, QuietLine, SPACE, TYPE, type Tone } from "./kit";
@@ -42,20 +43,25 @@ export function DaemonSurface(props: DaemonProps) {
   return <TokensProvider value={useUi(props.theme, props.layout.compact)}><HostsNavigationProvider navigation={props.navigation}><DaemonBody key={props.host.id} {...props} /></HostsNavigationProvider></TokensProvider>;
 }
 
-/** The page header: the plugin's icon and name, and one line on this host with a coloured dot. */
-function PageHeader({ theme, host, tone, line }: { theme: PluginSurfaceProps["theme"]; host: string; tone: Tone; line: string }) {
+/** The page header: the plugin's icon and name, one line on this host with a coloured dot, and the page's one Refresh link (0.12.1). */
+export function PageHeader({ theme, title = "Hosts", host, tone, line, onRefresh, refreshing }: { theme: PluginSurfaceProps["theme"]; title?: string; host: string; tone: Tone; line: string; onRefresh?: () => void; refreshing?: boolean }) {
   const t = useTokens();
   const dot = tone === "success" ? t.color.success : tone === "warning" ? t.color.warning : tone === "danger" ? t.color.danger : t.color.muted;
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.row }}>
       <IconBadge theme={theme} name="Network" size={46} />
       <View style={{ flex: 1, gap: SPACE.hair }}>
-        <Text accessibilityRole="header" style={{ ...TYPE.page, color: t.color.fg }}>Hosts</Text>
+        <Text accessibilityRole="header" style={{ ...TYPE.page, color: t.color.fg }}>{title}</Text>
         <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
           <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: dot }} />
-          <Text style={{ ...TYPE.secondary, color: t.color.muted, flexShrink: 1 }}>{`${host} · ${line}`}</Text>
+          <Text style={{ ...TYPE.secondary, color: t.color.muted, flexShrink: 1 }}>{host ? `${host} · ${line}` : line}</Text>
         </View>
       </View>
+      {onRefresh ? (
+        <Pressable accessibilityRole="link" accessibilityLabel="Refresh" disabled={refreshing} onPress={onRefresh} hitSlop={SPACE.sm} style={{ alignSelf: "flex-start", paddingTop: SPACE.xs }}>
+          <Text style={{ ...TYPE.secondary, fontWeight: "600", color: refreshing ? t.color.muted : t.color.accent }}>{refreshing ? "Refreshing…" : "Refresh"}</Text>
+        </Pressable>
+      ) : null}
     </View>
   );
 }
@@ -95,7 +101,18 @@ function DaemonBody(props: DaemonProps) {
     setTab(next);
     setFold((previous) => ({ id: nextFold, asked: previous.asked + 1 }));
     setPairingRequested(pairing);
+    // 0.11+ screens: the app's header title follows the tab ("Hosts · Processes").
+    syncScreenParams({ ...(next === "overview" ? {} : { tab: next }), ...(nextFold ? { open: nextFold } : {}) }, props.params);
   };
+  // A link that opens this screen again while it's showing (the dot's "See heavy processes") moves it to that tab.
+  const paramTab = props.params?.tab, paramOpen = props.params?.open;
+  useEffect(() => {
+    if (props.params === undefined) return;
+    const target = resolveTab(paramTab, paramOpen);
+    setTab(target.tab);
+    if (target.fold) setFold((previous) => ({ id: target.fold, asked: previous.asked + 1 }));
+  }, [paramTab, paramOpen]);
+  const refreshAll = () => { check.mutate(); void queryClient.invalidateQueries({ queryKey: ["daemon-link", props.host.id] }); };
   const toHelp = (next: TabId, nextFold?: Fold) => go(next, nextFold ?? null, nextFold === "private");
   const privateRoute = (port: number) => { setSshRemotePort(port); go("servers", "ssh"); };
   const ready = local.data?.scope?.status === "ready" && !local.isError;
@@ -103,7 +120,8 @@ function DaemonBody(props: DaemonProps) {
   const checks: SetupCheck[] = [
     { state: links.isError ? "error" : links.data ? "ready" : "pending", title: "Hosts is answering", detail: "The plugin on the selected host answers." },
     { state: ready ? "ready" : "pending", title: "Paseo projects found", detail: local.data?.scope?.message || "Loading the selected host's project list…" },
-    { state: apps.length ? "ready" : "pending", title: apps.length ? `${apps.length} dev server${apps.length === 1 ? "" : "s"} found` : "Start a dev server", detail: "It must run inside a project or workspace folder that Paseo knows." },
+    // Optional (0.12.1): a calm host with no dev server running has nothing left to do.
+    { state: apps.length ? "ready" : "optional", title: apps.length ? `${apps.length} dev server${apps.length === 1 ? "" : "s"} found` : "Start a dev server", detail: "It must run inside a project or workspace folder that Paseo knows." },
     { state: peers.isError ? "error" : peers.data?.peers.length || peers.data?.grants.length ? "ready" : "optional", title: peers.data?.peers.length ? `${peers.data.peers.length} paired computer${peers.data.peers.length === 1 ? "" : "s"} saved` : peers.data?.grants.length ? "Pairing code created on this host" : "Pair your own computer", detail: "Only needed for private links. A saved pairing doesn't prove the other computer is online; open its app list to check." },
     ...(peers.data?.grants.length ? [{ state: peers.data.relayState === "connected" ? "ready" : "pending", title: "Incoming private connection", detail: `Current connection: ${peers.data.relayState}. Hosts must keep running on both computers.` } satisfies SetupCheck] : []),
     { state: available ? "ready" : "optional", title: "Browser links", detail: available ? "The link helper is installed. Press Open beside a server." : "One-time setup for the Open button; skip it if you only use private links." },
@@ -115,6 +133,7 @@ function DaemonBody(props: DaemonProps) {
   const forwards = peers.data?.forwards ?? [];
   const profiles = links.data?.profiles ?? [];
   const headerTone: Tone = links.isError ? "danger" : !verdict ? "neutral" : verdict.status === "ok" ? "success" : verdict.status === "critical" ? "danger" : verdict.status === "warning" ? "warning" : "neutral";
+  // The memory basis is said here once (0.12.1), not again on Overview's Memory row.
   const headerLine = links.isError ? "Hosts isn't answering" : container?.memoryLimitBytes ? `Container with a ${formatBytes(container.memoryLimitBytes)} memory limit` : summary.data?.platform === "darwin" ? "macOS, whole machine" : links.data ? "Connected" : "Connecting…";
   const pad = layout.compact ? SPACE.md : SPACE.section;
   const foldOpen = (id: Fold) => fold.id === id;
@@ -122,7 +141,7 @@ function DaemonBody(props: DaemonProps) {
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: t.color.surface0 }} contentContainerStyle={{ padding: pad, paddingBottom: SPACE.section * 2, maxWidth: t.maxWidth, width: "100%", alignSelf: "center" }}>
-      <PageHeader theme={theme} host={props.host.label} tone={headerTone} line={headerLine} />
+      <PageHeader theme={theme} host={props.host.label} tone={headerTone} line={headerLine} onRefresh={refreshAll} refreshing={check.isPending} />
       <TabBar theme={theme} compact={layout.compact} tabs={TAB_IDS} active={tab} onSelect={(next) => go(next)} />
       <TabLine theme={theme} tab={tab} />
       {message ? <MessageBar theme={theme} tone={message.tone} text={message.text} /> : null}
@@ -131,14 +150,16 @@ function DaemonBody(props: DaemonProps) {
         {local.isError && tab === "servers" && <Notice icon="CircleAlert" tone="danger" action={<Button label="Refresh projects" onPress={refresh} />}>{errorMessage(local.error)}</Notice>}
         {local.data?.scope?.status === "unavailable" && tab === "servers" && <Notice icon="ShieldAlert" tone="warning" action={<Button label="Refresh project access" onPress={refresh} />}>{local.data.scope.message}</Notice>}
       </View>
-      {tab === "overview" ? <OverviewTab theme={theme} compact={layout.compact} hostId={props.host.id} verdict={verdict} report={summary.data} devServers={apps.length} liveLinks={liveLinks} setupDone={ready && !links.isError} checks={checks} go={toHelp} say={setMessage} onCheck={() => check.mutate()} checking={check.isPending} /> : null}
+      {tab === "overview" ? <OverviewTab theme={theme} compact={layout.compact} hostId={props.host.id} verdict={verdict} report={summary.data} devServers={apps.length} liveLinks={liveLinks} setupDone={ready && !links.isError} checks={checks} go={toHelp} say={setMessage}
+        sync={<AccordionItem key={foldKey("sync")} theme={theme} compact={layout.compact} icon="FolderSync" title="Copy a project from another computer" summary="Preview its Git history before it arrives (Project Sync)" open={foldOpen("sync")}>
+          <Transfers hostId={props.host.id} openPairing={() => go("servers", "private", true)} />
+        </AccordionItem>} /> : null}
       {tab === "processes" ? <ProcessesTab theme={theme} compact={layout.compact} hostId={props.host.id} say={setMessage} /> : null}
       {tab === "help" ? <HelpTab theme={theme} compact={layout.compact} go={toHelp} minutes={formatMinutes(minutes)} shortcuts={!!props.shortcuts} /> : null}
       {tab === "servers" && <View style={{ gap: t.space.xl }}>
         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
-          <StatusPill tone={ready ? "ok" : "warning"} label={ready ? `${apps.length} running` : "Projects need attention"} />
-          <Facts items={[{ value: `${ready ? local.data?.scope?.projects.length || 0 : "—"} projects` }]} />
-          <Button label="Refresh" onPress={refresh} loading={local.isFetching && !local.data} />
+          <StatusPill tone={local.isPending ? "neutral" : !ready ? "warning" : apps.length ? "ok" : "neutral"} label={local.isPending ? "Checking…" : ready ? (apps.length ? `${apps.length} running` : "None running") : "Projects need attention"} />
+          {ready ? <Facts items={[{ value: `in ${local.data?.scope?.projects.length || 0} project${local.data?.scope?.projects.length === 1 ? "" : "s"}` }]} /> : null}
         </View>
         {!available && links.data ? (
           <Notice icon="Globe" tone="warning" action={<Button label={opener.installing ? "Setting up…" : "Set up browser links"} variant="primary" loading={opener.installing} disabled={opener.installing} onPress={() => opener.installLinks()} />}>
@@ -179,9 +200,6 @@ function DaemonBody(props: DaemonProps) {
           <AccordionItem key={foldKey("ssh")} theme={theme} compact={layout.compact} icon="KeyRound" title="Use your SSH keys instead" summary={profiles.length ? `${profiles.length} saved forward${profiles.length === 1 ? "" : "s"}` : "For a host you already reach with SSH"} open={foldOpen("ssh")}>
             <Text style={t.text.body}>Save a forward on your own computer's daemon: the server then answers at 127.0.0.1 on your laptop and nothing is published. Pairing is simpler when both computers run Paseo.</Text>
             <Connections profiles={profiles} states={links.data?.connections || []} refresh={() => { void links.refetch(); }} initialRemotePort={sshRemotePort} />
-          </AccordionItem>
-          <AccordionItem key={foldKey("sync")} theme={theme} compact={layout.compact} icon="FolderSync" title="Copy a project from another computer" summary="Preview its Git history before it arrives (Project Sync)" open={foldOpen("sync")}>
-            <Transfers hostId={props.host.id} openPairing={() => go("servers", "private", true)} />
           </AccordionItem>
         </Accordion>
         <QuietLine theme={theme} icon="Info">Databases, system services and other listeners are left out. Link length is under Settings → Hosts.</QuietLine>

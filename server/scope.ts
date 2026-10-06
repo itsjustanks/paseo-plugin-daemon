@@ -30,7 +30,7 @@ export class ProjectScope {
   private roots: Root[] = [];
   private updated = 0;
   private pending?: Promise<void>;
-  private failure = "Open Daemon Link on this host once to load its Paseo projects.";
+  private failure = "Open Hosts on this host once to load its Paseo projects.";
   private broadRoots = 0;
   constructor(private canonical: (path: string) => Promise<string> = realpath, private home = homedir(), private now = Date.now) {}
   bind(api: PaseoApi) { this.api = api; }

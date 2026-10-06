@@ -29,16 +29,16 @@ export class LinkManager {
   private async load() {
     let text: string;
     try { text = await readFile(this.file, "utf8"); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw new Error("Could not read Daemon Link profiles."); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return; throw new Error("Could not read the Hosts SSH forwards."); }
     try { this.profiles = Profiles.parse(JSON.parse(text)); }
-    catch { throw new Error("Daemon Link profiles are invalid. Repair profiles.json before saving changes."); }
+    catch { throw new Error("The Hosts SSH forwards file is invalid. Repair profiles.json before saving changes."); }
     if (!this.closing) for (const profile of this.profiles) if (profile.autoConnect) this.start(profile);
   }
 
   private serialize<T>(fn: () => Promise<T>): Promise<T> {
     const result = this.queue.then(async () => {
       await this.ready;
-      if (this.closing) throw new Error("Daemon Link is stopping.");
+      if (this.closing) throw new Error("Hosts is stopping.");
       return fn();
     });
     this.queue = result.catch(() => {});

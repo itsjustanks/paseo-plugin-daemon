@@ -96,9 +96,9 @@ describe("process report", () => {
     expect(result.processes.some((item) => item.pid === 1)).toBe(false);
     const stoppable = result.processes.filter((item) => item.stoppable).map((item) => item.pid).sort((a, b) => a - b);
     expect(stoppable).toEqual([302, 303, 401, 402, 403, 404]);
-    expect(row(100)).toMatchObject({ owner: { kind: "paseo", label: "Paseo daemon" }, protectedReason: "Part of Paseo, so it can't be stopped here.", actionToken: null });
-    expect(row(200).protectedReason).toBe("This is Daemon Link itself.");
-    expect(row(201).owner.label).toBe("Paseo plugin");
+    expect(row(100)).toMatchObject({ owner: { kind: "paseo", label: "Paseo · daemon" }, protectedReason: "Part of Paseo, so it can't be stopped here.", actionToken: null });
+    expect(row(200).protectedReason).toBe("This is Hosts itself.");
+    expect(row(201).owner.label).toBe("Paseo · plugin host");
     expect(row(202).protectedReason).toMatch(/Started by a Paseo plugin/);
     expect(row(203).protectedReason).toMatch(/Started by a Paseo plugin/);
     expect(row(301).protectedReason).toMatch(/terminal's shell/);
@@ -235,7 +235,7 @@ describe("ask first, then stop", () => {
 
   it("says the guard's refusals in plain words", () => {
     expect(friendly({ ok: true, status: "already-exited", message: "", pid: 1, signaledCount: 0 })).toBe("It has already stopped.");
-    expect(friendly({ ok: false, status: "denied", message: "Refusing to signal: owned by another user.", pid: 1, signaledCount: 0 })).toBe("Daemon Link won't stop it: owned by another user.");
+    expect(friendly({ ok: false, status: "denied", message: "Refusing to signal: owned by another user.", pid: 1, signaledCount: 0 })).toBe("Hosts won't stop it: owned by another user.");
     expect(friendly({ ok: false, status: "denied", message: "Process identity changed since the snapshot (PID may have been reused).", pid: 1, signaledCount: 0 })).toMatch(/reused/);
   });
 });

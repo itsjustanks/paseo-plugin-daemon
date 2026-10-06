@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { TAB_IDS, resolveTab } from "../shared/tabs";
+import { TAB_IDS, resolveTab, tabTitle } from "../shared/tabs";
 
 describe("Hosts tabs (0.11.0)", () => {
   it("has four tabs at most, in the order people come to do things", () => {
@@ -20,15 +20,21 @@ describe("Hosts tabs (0.11.0)", () => {
 
   it("sends 0.8–0.10 tab ids where their content lives now", () => {
     expect(resolveTab("connect")).toEqual({ tab: "servers", fold: "private" });
-    expect(resolveTab("sync")).toEqual({ tab: "servers", fold: "sync" });
+    expect(resolveTab("sync")).toEqual({ tab: "overview", fold: "sync" });
     expect(resolveTab("health")).toEqual({ tab: "processes", fold: null });
     expect(resolveTab("ssh")).toEqual({ tab: "servers", fold: "ssh" });
     expect(resolveTab("guide")).toEqual({ tab: "help", fold: null });
   });
 
-  it("honours `open` on Dev servers only", () => {
+  it("names the header after the tab", () => {
+    expect(tabTitle("overview")).toBe("Hosts");
+    expect(tabTitle("servers")).toBe("Hosts · Dev servers");
+  });
+
+  it("honours `open` only on the tab its fold-out lives on", () => {
     expect(resolveTab("servers", "ssh")).toEqual({ tab: "servers", fold: "ssh" });
-    expect(resolveTab("connect", "sync")).toEqual({ tab: "servers", fold: "sync" });
+    expect(resolveTab("connect", "sync")).toEqual({ tab: "servers", fold: "private" });
+    expect(resolveTab("overview", "sync")).toEqual({ tab: "overview", fold: "sync" });
     expect(resolveTab("servers", "bogus")).toEqual({ tab: "servers", fold: null });
     expect(resolveTab("processes", "ssh")).toEqual({ tab: "processes", fold: null });
   });

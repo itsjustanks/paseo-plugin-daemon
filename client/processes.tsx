@@ -4,7 +4,7 @@ import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc } from "@getpaseo/plugin/client";
 import { Modal } from "@getpaseo/plugin/client/react-native";
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
-import { processPreview, processReport, processStop, type ActionLogEntry, type ProcessReport, type ProcessRow, type ReportSort, type StopPlan } from "../shared/processes";
+import { processPreview, processReport, processStop, sameness, twinKeys, type ActionLogEntry, type ProcessReport, type ProcessRow, type ReportSort, type StopPlan } from "../shared/processes";
 import { Accordion, AccordionItem, Banner, Button, Card, Chip, Divider, HostIcon, ItemTitle, Meta, Note, QuietLine, RADIUS, Row, SPACE, TYPE, tint, toneColor, type Tone } from "./kit";
 import { formatBytes, formatDuration, formatPercent } from "./ui";
 import { AskAgentButton } from "./ask";
@@ -77,11 +77,11 @@ function LoadCard({ theme, report }: { theme: Theme; report: ProcessReport }) {
     : `${report.host.cores} cores · load ${report.host.load1.toFixed(1)}`;
   const jobs = report.heavyJobs;
   return (
-    <Card theme={theme} title="This host's load" icon="Gauge" subtitle={report.memoryBasis === "container" ? `A container on a machine with ${formatBytes(report.host.memoryTotalBytes)} of memory` : "The whole machine"}>
+    <Card theme={theme} title="This host's load" icon="Gauge" subtitle={report.memoryBasis === "container" ? `A container on a machine with ${formatBytes(report.host.memoryTotalBytes)} of memory` : undefined}>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: SPACE.section }}>
         <Figure theme={theme} label="Memory" value={`${formatBytes(memory.used)} of ${formatBytes(memory.limit)}`} percent={memory.percent} tone={shareTone(memory.percent)} hint={`${formatPercent(memory.percent)} of ${memory.where}`} />
         <Figure theme={theme} label="CPU" value={report.sampling || report.host.cpuPercent === null ? "Measuring…" : formatPercent(report.host.cpuPercent)} percent={report.host.cpuPercent} tone={report.host.cpuPressure === "critical" ? "danger" : report.host.cpuPressure === "high" ? "warning" : "success"} hint={cpuHint} />
-        <Figure theme={theme} label="Heavy jobs" value={`${jobs.count} of ${jobs.limit}`} percent={Math.min(100, (jobs.count / Math.max(1, jobs.limit)) * 100)} tone={jobs.count > jobs.limit ? "warning" : "success"} hint="Builds, tests, type checks, installs and dev servers at once" />
+        <Figure theme={theme} label="Heavy jobs" value={`${jobs.count} of ${jobs.limit}`} percent={Math.min(100, (jobs.count / Math.max(1, jobs.limit)) * 100)} tone={jobs.count > jobs.limit ? "warning" : "success"} hint={`Builds, tests, type checks, installs and dev servers running now. ${jobs.limit} at once is the limit.`} />
       </View>
       <Meta theme={theme}>{`Paseo itself uses ${formatBytes(report.paseoBytes)}. ${report.total} processes in all.`}</Meta>
     </Card>
@@ -149,7 +149,7 @@ function Stat({ theme, label, value, tone }: { theme: Theme; label: string; valu
 }
 
 /** One process: name, what it is, whose it is, its figures; details and the stop control behind a press. */
-function ProcessItem({ theme, row, compact, byTree, selected, onSelect, onStop, first }: { theme: Theme; row: ProcessRow; compact: boolean; byTree: boolean; selected: boolean; onSelect(): void; onStop(): void; first: boolean }) {
+function ProcessItem({ theme, row, compact, byTree, selected, onSelect, onStop, first, twin }: { theme: Theme; row: ProcessRow; compact: boolean; byTree: boolean; selected: boolean; onSelect(): void; onStop(): void; first: boolean; twin: boolean }) {
   const [open, setOpen] = useState(false);
   const flagged = row.flags.length > 0;
   const cpu = byTree ? row.tree.cpuPercent : row.cpuPercent;
@@ -166,7 +166,7 @@ function ProcessItem({ theme, row, compact, byTree, selected, onSelect, onStop, 
               <ItemTitle theme={theme}>{row.name}</ItemTitle>
               {tag ? <Chip theme={theme} label={byTree && row.tree.count > 1 ? `${tag} · ${row.tree.count} processes` : tag} tone={flagged ? "warning" : "neutral"} /> : flagged ? <Chip theme={theme} label="Needs attention" tone="warning" /> : null}
             </View>
-            <Meta theme={theme}>{row.owner.label}{row.ports.length ? ` · ${row.ports.map((port) => `:${port}`).join(" ")}` : ""}</Meta>
+            <Meta theme={theme}>{row.owner.label}{row.ports.length ? ` · ${row.ports.map((port) => `:${port}`).join(" ")}` : ""}{twin ? ` · PID ${row.pid}` : ""}</Meta>
             {row.flags.map((flag) => <Text key={flag.code} style={{ ...TYPE.secondary, color: toneColor(theme, "warning") }}>{flag.text}</Text>)}
           </View>
           <View style={{ flexDirection: "row", gap: SPACE.row, flexWrap: "wrap" }}>
@@ -306,6 +306,7 @@ export function ProcessesTab({ theme, compact, hostId, say }: { theme: Theme; co
   const toggle = (pid: number) => setSelected((previous) => { const next = new Set(previous); if (next.has(pid)) next.delete(pid); else next.add(pid); return next; });
   const chosen = [...selected].filter((pid) => rows.some((row) => row.pid === pid && row.stoppable));
   const byTree = filter === "jobs";
+  const twins = twinKeys(rows);
   return (
     <>
       <RunawayBanner theme={theme} report={data} onReview={(pids) => ask.mutate(pids)} onJobs={() => { setFilter("jobs"); setLimit(PAGE); }} />
@@ -325,7 +326,7 @@ export function ProcessesTab({ theme, compact, hostId, say }: { theme: Theme; co
         {rows.length === 0 ? (
           <Note theme={theme}>{search ? `Nothing matches "${search}".` : filter === "jobs" ? "No builds, tests, type checks, installs or dev servers are running." : filter === "stoppable" ? "Nothing here can be stopped right now." : "No processes."}</Note>
         ) : (
-          <View>{rows.map((row, index) => <ProcessItem key={`${row.pid}-${row.name}`} theme={theme} row={row} compact={compact} byTree={byTree} first={index === 0} selected={selected.has(row.pid)} onSelect={() => toggle(row.pid)} onStop={() => ask.mutate([row.pid])} />)}</View>
+          <View>{rows.map((row, index) => <ProcessItem key={`${row.pid}-${row.name}`} theme={theme} row={row} compact={compact} byTree={byTree} first={index === 0} twin={twins.has(sameness(row))} selected={selected.has(row.pid)} onSelect={() => toggle(row.pid)} onStop={() => ask.mutate([row.pid])} />)}</View>
         )}
         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: SPACE.sm }}>
           <Meta theme={theme}>{`${rows.length} of ${data.matched}${data.matched !== data.total ? ` matching (${data.total} in all)` : ""} · updated ${new Date(data.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`}</Meta>
@@ -339,7 +340,7 @@ export function ProcessesTab({ theme, compact, hostId, say }: { theme: Theme; co
         </AccordionItem>
         <AccordionItem theme={theme} compact={compact} icon="ShieldCheck" title="What can be stopped here" summary="Only your own projects' jobs, and always after asking">
           <Note theme={theme}>Only processes started from Paseo or running inside your Paseo projects can be stopped here. Paseo itself, its plugins, agents, terminals and databases never are. Nothing is ever stopped without asking.</Note>
-          <Meta theme={theme}>A stop asks the process to finish first and forces it only if it is still running after the grace period. Each one is written to $PASEO_HOME/daemon-link/actions.jsonl, without command lines.</Meta>
+          <Meta theme={theme}>A stop asks the process to finish first and forces it only if it is still running after the grace period. Each one is logged, without command lines (where: Overview → Technical details).</Meta>
         </AccordionItem>
       </Accordion>
       <StopSheet theme={theme} plan={plan} busy={confirm.isPending} onCancel={() => setPlan(null)} onConfirm={() => confirm.mutate()} />

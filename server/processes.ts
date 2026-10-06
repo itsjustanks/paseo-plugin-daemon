@@ -18,7 +18,7 @@ import { HOSTS_SETTINGS_DEFAULTS } from "../shared/settings";
 import type { ActionLog } from "./action-log";
 import type { ClassifiedBase, Collector, ProcessDetail } from "./collector";
 import { formatBytes } from "./heuristics";
-import { classifyJob, isPaseoInternal, isPluginHost, isTerminalWorker, programName, type Job } from "./jobs";
+import { classifyJob, helperRole, isPaseoInternal, isPluginHost, isTerminalWorker, paseoRole, programName, type Job } from "./jobs";
 import type { Clock, PlatformAdapter, RawProcess } from "./platform";
 import { systemClock } from "./platform";
 import { hashArgv } from "./redaction";
@@ -65,6 +65,8 @@ export interface ProcessManagerOptions {
 
 interface Decision { stoppable: boolean; reason: string | null; owner: ProcessRow["owner"] }
 
+/** The last folder of a path, for "Agent · in website". */
+const folderName = (path: string) => path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
 const describeOwner = (kind: OwnerKind, label: string, project: string | null = null, workspace: string | null = null): ProcessRow["owner"] => ({ kind, label, project, workspace });
 
 export class ProcessManager {
@@ -111,22 +113,25 @@ export class ProcessManager {
     const place = project ? describeOwner("project", project.workspace ? `${project.name} · ${project.workspace}` : project.name, project.name, project.workspace) : null;
     const startedByPaseo = raw.ppid === this.daemonPid || ancestors.some((row) => row.pid === this.daemonPid);
     const deny = (owner: ProcessRow["owner"], reason: string): Decision => ({ stoppable: false, reason, owner });
+    // A browser's or desktop app's helpers all share its name; their role tells them apart.
+    const role = helperRole(raw.argv);
+    const withRole = (label: string) => (role ? `${label} · ${role}` : label);
 
-    if (raw.pid === this.selfPid) return deny(describeOwner("paseo", "Daemon Link"), "This is Daemon Link itself.");
+    if (raw.pid === this.selfPid) return deny(describeOwner("paseo", "Hosts (this plugin)"), "This is Hosts itself.");
     if (isPaseoInternal(raw) || raw.pid === this.daemonPid) {
-      const label = isPluginHost(raw) ? "Paseo plugin" : isTerminalWorker(raw) ? "Paseo terminals" : raw.pid === this.daemonPid ? "Paseo daemon" : "Paseo";
-      return deny(describeOwner("paseo", label), "Part of Paseo, so it can't be stopped here.");
+      // 0.12.1: say which part of Paseo, so a dozen "Paseo" rows can be told apart.
+      return deny(describeOwner("paseo", `Paseo · ${paseoRole(raw, raw.pid === this.daemonPid)}`), "Part of Paseo, so it can't be stopped here.");
     }
     if (ancestors.some(isPluginHost)) return deny(describeOwner("plugin", "Started by a Paseo plugin"), "Started by a Paseo plugin. Manage it in that plugin (browser links: the Dev servers tab).");
-    if (isAgentTool(raw)) return deny(place ? { ...place, kind: "agent", label: `Agent · ${place.label}` } : describeOwner("agent", "Agent"), "An agent. Stop it from its chat in Paseo.");
+    if (isAgentTool(raw)) return deny(place ? { ...place, kind: "agent", label: `Agent · ${place.label}` } : describeOwner("agent", raw.cwd && raw.cwd !== "/" ? `Agent · in ${folderName(raw.cwd)}` : "Agent"), "An agent. Stop it from its chat in Paseo.");
     if (isInfrastructure(raw)) return deny(describeOwner("infrastructure", "Database or system service"), "A database or system service. Stop it where it was started.");
     const parent = byPid.get(raw.ppid);
     if (parent && isTerminalWorker(parent)) return deny(place ?? describeOwner("terminal", "Paseo terminal"), "A Paseo terminal's shell. Close the terminal in Paseo instead.");
     const base = this.guard.evaluate(raw, byPid);
-    if (!base.actionable) return deny(place ?? describeOwner("other", startedByPaseo ? "Started from Paseo" : "Outside Paseo"), `Can't be stopped here: ${base.reason}.`);
+    if (!base.actionable) return deny(place ?? describeOwner("other", withRole(startedByPaseo ? "Started from Paseo" : "Outside Paseo")), `Can't be stopped here: ${base.reason}.`);
     if (place) return { stoppable: true, reason: null, owner: place };
-    if (startedByPaseo) return { stoppable: true, reason: null, owner: describeOwner("paseo-started", "Started from Paseo") };
-    return deny(describeOwner("other", "Outside Paseo"), "Started outside Paseo and outside your Paseo projects, so it can only be viewed here.");
+    if (startedByPaseo) return { stoppable: true, reason: null, owner: describeOwner("paseo-started", withRole("Started from Paseo")) };
+    return deny(describeOwner("other", withRole("Outside Paseo")), "Started outside Paseo and outside your Paseo projects, so it can only be viewed here.");
   }
 
   /** The guard's per-process check at action time: a fresh read, then the same rules. */
@@ -379,9 +384,9 @@ export function friendly(result: ActionResult): string {
   if (result.status === "already-exited") return "It has already stopped.";
   if (result.message.startsWith("Action token")) return "This list is out of date. Refresh and try again.";
   if (result.message.includes("identity changed")) return "That process ended and its number was reused. Refresh and try again.";
-  if (result.message.startsWith("Only a verified")) return "It is no longer something Daemon Link may stop (it changed, or projects can't be verified right now).";
+  if (result.message.startsWith("Only a verified")) return "It is no longer something Hosts may stop (it changed, or projects can't be verified right now).";
   if (result.status === "needs-graceful-first") return "It has to be asked to stop first.";
-  if (result.message.startsWith("Refusing to signal: ")) return `Daemon Link won't stop it: ${result.message.slice(20).replace(/\.$/, "")}.`;
+  if (result.message.startsWith("Refusing to signal: ")) return `Hosts won't stop it: ${result.message.slice(20).replace(/\.$/, "")}.`;
   return result.message;
 }
 

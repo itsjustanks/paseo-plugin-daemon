@@ -139,11 +139,13 @@ function TechnicalDetails({ theme, verdict, report }: { theme: Theme; verdict: H
  * services, setup checks and technical details fold out below it (0.11.0);
  * the teaching moved to Help.
  */
-export function OverviewTab({ theme, compact, hostId, verdict, report, devServers, liveLinks, setupDone, checks, go, say, onCheck, checking }: {
+export function OverviewTab({ theme, compact, hostId, verdict, report, devServers, liveLinks, setupDone, checks, go, say, sync }: {
   theme: Theme; compact: boolean; hostId: string;
   verdict: HealthVerdict | undefined; report: ProcessReport | undefined;
   devServers: number; liveLinks: number; setupDone: boolean; checks: readonly SetupCheck[];
-  go: Go; say: Say; onCheck(): void; checking: boolean;
+  go: Go; say: Say;
+  /** Project Sync's fold-out (0.12.1: it moved here from Dev servers). */
+  sync?: React.ReactNode;
 }) {
   const hero = heroState(verdict, setupDone);
   const watched = verdict?.watched ?? [];
@@ -154,13 +156,14 @@ export function OverviewTab({ theme, compact, hostId, verdict, report, devServer
   const watchedNow = watchedWords(watched);
   const pending = checks.filter((check) => check.state !== "ready" && check.state !== "optional").length;
   const last = report?.recentActions[0];
-  const primary: "processes" | "servers" | "check" = processIssue ? "processes" : slow.length ? "check" : devServers ? "servers" : "processes";
+  // One way to refresh (0.12.1): the header's Refresh link, so the hero offers where to go, not "Check again".
+  const primary: "processes" | "servers" = processIssue || !devServers ? "processes" : "servers";
   return (
     <>
       <HeroCard theme={theme} tone={hero.tone} icon={hero.icon} title={hero.title} lead={hero.lead ?? undefined}>
         <View style={{ gap: SPACE.xs }}>
-          {memory ? <StatusLine theme={theme} label="Memory" value={`${formatBytes(memory.used)} of ${formatBytes(memory.limit)}`} tone={shareTone(memory.percent)} hint={report?.memoryBasis === "container" ? "this container's limit" : "whole machine"} action={{ label: "Processes", onPress: () => go("processes") }} /> : null}
-          {jobs ? <StatusLine theme={theme} label="Heavy jobs" value={`${jobs.count} of ${jobs.limit}`} tone={jobs.count > jobs.limit ? "warning" : "success"} hint={jobs.count ? "builds, tests and dev servers" : null} /> : null}
+          {memory ? <StatusLine theme={theme} label="Memory" value={`${formatBytes(memory.used)} of ${formatBytes(memory.limit)}`} tone={shareTone(memory.percent)} action={{ label: "Processes", onPress: () => go("processes") }} /> : null}
+          {jobs ? <StatusLine theme={theme} label="Heavy jobs" value={`${jobs.count} of ${jobs.limit}`} tone={jobs.count > jobs.limit ? "warning" : "success"} hint={`builds, tests and dev servers running now; ${jobs.limit} at once is the limit`} /> : null}
           <StatusLine theme={theme} label="Dev servers" value={devServers ? `${devServers} running` : "None running"} tone={devServers ? "success" : "neutral"} hint={liveLinks ? `${liveLinks} browser link${liveLinks === 1 ? "" : "s"} open` : null} action={{ label: "Dev servers", onPress: () => go("servers") }} />
           {watched.length ? <StatusLine theme={theme} label="Watched services" value={watchedNow.value} tone={watchedNow.tone} /> : null}
         </View>
@@ -173,7 +176,6 @@ export function OverviewTab({ theme, compact, hostId, verdict, report, devServer
         <Row>
           {primary === "servers" ? <Button theme={theme} label="Open dev servers" icon="Server" primary onPress={() => go("servers")} /> : null}
           <Button theme={theme} label={processIssue ? "Review processes" : "See processes"} icon="Cpu" primary={primary === "processes"} onPress={() => go("processes")} />
-          {primary !== "servers" ? <Button theme={theme} label="Check again" icon="RefreshCw" primary={primary === "check"} busy={checking} onPress={onCheck} /> : null}
         </Row>
       </HeroCard>
       <Accordion theme={theme}>
@@ -189,8 +191,9 @@ export function OverviewTab({ theme, compact, hostId, verdict, report, devServer
           </AccordionItem>
         ) : null}
         <AccordionItem key={setupDone ? "done" : "todo"} theme={theme} compact={compact} icon="ListChecks" title="Setup checks" summary={pending ? `${pending} still to do` : "Everything Hosts needs is in place"} open={!setupDone}>
-          <Checks theme={theme} checks={checks} onRefresh={onCheck} />
+          <Checks theme={theme} checks={checks} />
         </AccordionItem>
+        {sync}
         <AccordionItem theme={theme} compact={compact} icon="SlidersHorizontal" title="Technical details" summary="How often it checks, the limits, and where it writes">
           <TechnicalDetails theme={theme} verdict={verdict} report={report} />
         </AccordionItem>

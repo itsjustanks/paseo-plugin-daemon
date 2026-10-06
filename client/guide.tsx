@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 import type { Fold, TabId } from "../shared/tabs";
-import { Accordion, AccordionItem, Button, Card, Divider, HostIcon, IconBadge, Link, Meta, RADIUS, Row, SectionTitle, SPACE, TYPE, tint, toneColor } from "./kit";
+import { Accordion, AccordionItem, Button, Divider, HostIcon, IconBadge, Link, Meta, RADIUS, Row, SectionTitle, SPACE, TYPE, tint, toneColor } from "./kit";
 
 type Theme = PluginTheme;
 type Go = (tab: TabId, fold?: Fold) => void;
@@ -125,7 +125,7 @@ const CHECK_ICON: Record<SetupCheck["state"], { icon: string; tone: "success" | 
 };
 
 /** This host's setup checks, for Overview's "Setup checks" fold-out. */
-export function Checks({ theme, checks, onRefresh }: { theme: Theme; checks: readonly SetupCheck[]; onRefresh(): void }) {
+export function Checks({ theme, checks }: { theme: Theme; checks: readonly SetupCheck[] }) {
   return (
     <>
       {checks.map((check) => (
@@ -137,7 +137,7 @@ export function Checks({ theme, checks, onRefresh }: { theme: Theme; checks: rea
           </View>
         </View>
       ))}
-      <Row><Button theme={theme} label="Run checks again" icon="RefreshCw" onPress={onRefresh} /></Row>
+      <Meta theme={theme}>Optional steps are only needed for what they say. Refresh at the top checks again.</Meta>
     </>
   );
 }
@@ -149,7 +149,7 @@ const WORDS = [
   { icon: "Flame", term: "Runaway", text: "A process stuck at a full CPU core for minutes, or holding a large share of memory." },
   { icon: "Globe", term: "Browser link", text: "A temporary public web address for one dev server. It works on any device and always expires." },
   { icon: "Laptop", term: "Private forward", text: "Makes a remote dev server answer at 127.0.0.1 on your own computer, over SSH or a paired host. Nothing is published." },
-  { icon: "Link", term: "Paired host", text: "Another computer running Paseo and Daemon Link that you've trusted with a pairing code." },
+  { icon: "Link", term: "Paired host", text: "Another computer running Paseo and Hosts that you've trusted with a pairing code." },
   { icon: "Activity", term: "Watched service", text: "A health address on another machine, such as OmniRoute's, that the daemon checks regularly." },
 ] as const;
 
@@ -231,7 +231,7 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
         "Pair the two computers first. On the one that has the project, allow that pairing to download it. Then, on this one, preview the project and receive it into a new folder.",
         "Only committed Git history is copied (up to 32 MiB). Uncommitted files, chats and Git LFS files are not.",
       ],
-      action: { label: "Copy a project", tab: "servers", fold: "sync" },
+      action: { label: "Copy a project", tab: "overview", fold: "sync" },
     },
     {
       icon: "Activity", question: "Can Hosts tell me when a service is slow or down?",
@@ -251,7 +251,7 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
       icon: "Zap", question: "Is there a quicker way to check?",
       answer: [
         "The dot beside Hosts in the sidebar is green when all is calm. Press it for a quick check without opening this page.",
-        `In the Command Center: Open Hosts, Show heavy processes, and Check host now.${shortcuts ? " In a chat's message box: /daemon-link opens this workspace's Hosts tab, /heavy-processes shows the heaviest jobs, and /check-host checks now." : ""}`,
+        `In the Command Center: Open Hosts, Show heavy processes, and Check host now.${shortcuts ? " In a chat's message box: /hosts opens this workspace's Hosts tab, /heavy-processes shows the heaviest jobs, and /check-host checks now." : ""}`,
       ],
     },
     {
@@ -265,23 +265,14 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
 }
 
 /**
- * The Help tab (0.11.0): plain questions first, each folded, then the
- * walkthrough that used to sit behind Overview's "New to Hosts? How it works".
+ * The Help tab: plain questions only, each folded (0.12.1). The walkthrough
+ * that used to sit unfolded below them is the first question, "How does
+ * Hosts work?".
  */
 export function HelpTab({ theme, compact, go, minutes, shortcuts }: { theme: Theme; compact: boolean; go: Go; minutes: string; shortcuts: boolean }) {
   return (
-    <View style={{ gap: SPACE.row }}>
-      <SectionTitle theme={theme} icon="CircleHelp">Common questions</SectionTitle>
-      <Accordion theme={theme}>
-        {helpQuestions(minutes, shortcuts).map((item) => (
-          <AccordionItem key={item.question} theme={theme} compact={compact} icon={item.icon} title={item.question}>
-            {item.answer.map((line) => <Text key={line} style={{ ...TYPE.body, color: theme.colors.foreground }}>{line}</Text>)}
-            {item.action ? <Row><Button theme={theme} label={item.action.label} onPress={() => go(item.action!.tab, item.action!.fold)} /></Row> : null}
-          </AccordionItem>
-        ))}
-      </Accordion>
-      <SectionTitle theme={theme} icon="BookOpen">How Hosts works</SectionTitle>
-      <Card theme={theme}>
+    <Accordion theme={theme}>
+      <AccordionItem theme={theme} compact={compact} icon="BookOpen" title="How does Hosts work?" summary="What it watches, what it does about it, and the words it uses">
         <WhatIs theme={theme} />
         <Divider theme={theme} />
         <HowItWorks theme={theme} compact={compact} />
@@ -289,7 +280,13 @@ export function HelpTab({ theme, compact, go, minutes, shortcuts }: { theme: The
         <HowToUse theme={theme} go={go} />
         <Divider theme={theme} />
         <Glossary theme={theme} />
-      </Card>
-    </View>
+      </AccordionItem>
+      {helpQuestions(minutes, shortcuts).map((item) => (
+        <AccordionItem key={item.question} theme={theme} compact={compact} icon={item.icon} title={item.question}>
+          {item.answer.map((line) => <Text key={line} style={{ ...TYPE.body, color: theme.colors.foreground }}>{line}</Text>)}
+          {item.action ? <Row><Button theme={theme} label={item.action.label} onPress={() => go(item.action!.tab, item.action!.fold)} /></Row> : null}
+        </AccordionItem>
+      ))}
+    </Accordion>
   );
 }

@@ -6,7 +6,7 @@ import { TUNNEL_MAX_LIFETIME_MS } from "../shared/tunnel-lease";
 const BOOTSTRAP = "/__daemon_link";
 const SCRIPT = `const token=location.hash.slice(1);history.replaceState(null,'','${BOOTSTRAP}');fetch('${BOOTSTRAP}/session',{method:'POST',headers:{'Content-Type':'text/plain'},body:token}).then(r=>{if(!r.ok)throw Error();location.replace('/')}).catch(()=>{document.getElementById('status').textContent='This link is unavailable or expired. Open a fresh link from Paseo.'});`;
 const SCRIPT_HASH = createHash("sha256").update(SCRIPT).digest("base64");
-const PAGE = `<!doctype html><meta name="viewport" content="width=device-width"><title>Daemon Link</title><p id="status">Connecting to your service…</p><script>${SCRIPT}</script>`;
+const PAGE = `<!doctype html><meta name="viewport" content="width=device-width"><title>Hosts</title><p id="status">Connecting to your service…</p><script>${SCRIPT}</script>`;
 const HOP = ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"];
 
 function safeHeaders(headers: OutgoingHttpHeaders): OutgoingHttpHeaders {
@@ -77,7 +77,7 @@ export async function createGate(options: {
 
   async function handle(req: IncomingMessage, res: ServerResponse) {
     const reject = (status: number, message: string) => { res.writeHead(status, { "cache-control": "no-store", "content-type": "text/plain" }); res.end(message); };
-    if (!active()) return reject(410, "Daemon Link expired.");
+    if (!active()) return reject(410, "This Hosts link expired.");
     if (!hostAllowed(req)) return reject(403, "Host rejected.");
     if (req.url === BOOTSTRAP && req.method === "GET") {
       res.writeHead(200, {
@@ -102,7 +102,7 @@ export async function createGate(options: {
       res.end(); return;
     }
     if (!req.url?.startsWith("/") || req.url.startsWith("//")) return reject(400, "Invalid path.");
-    if (!await allowed(req)) return reject(403, "Open this service through Daemon Link in Paseo.");
+    if (!await allowed(req)) return reject(403, "Open this service through Hosts in Paseo.");
     const upstream = request({ hostname: "127.0.0.1", port: options.port, method: req.method, path: req.url, headers: headers(req) }, (response) => {
       res.writeHead(response.statusCode || 502, responseHeaders(response.headers));
       response.pipe(res);

@@ -163,10 +163,10 @@ project access. Both plugins must remain running while you use a connection.
 
 | Tab | What to do here |
 | --- | --- |
-| **Overview** | The host's state in words and two buttons; watched services, setup checks and details fold out. |
+| **Overview** | The host's state in words; problems, watched services, setup, Project Sync and details fold out. |
 | **Processes** | Heaviest processes, runaways, memory against the limit, the ask-first stop; recent stops fold out. |
-| **Dev servers** | A card per app with Open; browser links, private links, SSH forwards and Project Sync fold out. |
-| **Help** | Plain questions, each folded, and how Hosts works. |
+| **Dev servers** | A card per app with Open; browser links, private links and SSH forwards fold out. |
+| **Help** | Plain questions, each folded, starting with how Hosts works. |
 
 Version 0.11.0 follows the design standard's update of 2026-10-06 (the layout of paseo-mcp 0.19):
 four tabs, no tab intros, and the technical or less-used parts in fold-out rows. 0.10's **Connect**
@@ -230,7 +230,7 @@ each dev server's card can **Open a terminal here** in its folder.
 
 The common actions are also commands. In the Command Center: **Open Hosts**, **Show heavy
 processes**, **Check host now** and **Configure Hosts**. In a chat's message box (when the app
-supports slash commands): `/daemon-link`, `/heavy-processes` and `/check-host`. There is no sidebar
+supports slash commands): `/hosts`, `/heavy-processes` and `/check-host`. There is no sidebar
 footer item: the sidebar row's dot already says the same thing on every app that has one.
 
 ### Settings: Hosts
@@ -307,7 +307,7 @@ passwords or wait on a hidden password prompt.
 This brings the Sync plugin's selected-project, preview, and history workflow into Hosts using
 its existing encrypted relay. Install this version on both hosts; no SSH credentials are needed.
 
-It lives under **Dev servers → Copy a project from another computer**.
+It lives under **Overview → Copy a project from another computer**.
 
 1. Pair the hosts under **Dev servers → Open privately on your own computer → Pair hosts**.
 2. Select the source in Paseo. Open **Copy a project from another computer → Share with a host** and
@@ -402,9 +402,11 @@ framework handling, pressure thresholds, and known limitations.
 
 ## Paseo compatibility
 
-Supports Paseo 0.7 through 0.11. Paseo 0.8 and newer run the current version; Paseo 0.7 hosts should
-stay on 0.4.0. Version 0.10.0 was built and checked on Paseo 0.11.0-beta.3 and keeps
-`requirements.paseo` at `>=0.8.0`: the 0.11 screen, sidebar row, status dot and popover, the 0.10
+Supports Paseo 0.7 through 0.11. Paseo 0.9 and newer run the current version. Version 0.12.1 needs
+Paseo 0.9: its manifest carries a `description` (shown in Settings → Plugins), and Paseo 0.8's strict
+manifest schema rejects that key, so a 0.8 host should stay on 0.12.0. Paseo 0.7 hosts should stay on
+0.4.0. Version 0.10.0 was built and checked on Paseo 0.11.0-beta.3 and kept `requirements.paseo` at
+`>=0.8.0`: the 0.11 screen, sidebar row, status dot and popover, the 0.10
 external-link opener and settings read/subscribe, and button-style composer chips are each detected at
 runtime, and older apps get exactly what 0.9 drew. No plugin file imports an SDK path that Paseo 0.9.1
 can't build (a test checks this).
@@ -416,7 +418,7 @@ settings screen, lifecycle hooks, health checks, composer pill, workspace resour
 Open, and the simplified four-tab surface on top of that layout. Paseo 0.7 hosts should stay on 0.4.0.
 
 Features depend on the selected host's actual capabilities, so a newer host never lends its APIs
-to an older one. The `/daemon-link` composer shortcut appears only when the host provides that API.
+to an older one. The `/hosts` composer shortcut appears only when the host provides that API.
 
 ## Troubleshooting
 

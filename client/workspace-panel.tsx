@@ -2,7 +2,7 @@ import { type PluginWorkspacePanelProps, useRpc, useSettings, useWorkspace } fro
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, ScrollView, Text, View } from "react-native";
-import { askSubjectFor, hostHealth, workspaceHealth, type HealthIssue, type HealthStatus } from "../shared/health";
+import { askSubjectFor, hostHealth, workspaceHealth, type HealthIssue } from "../shared/health";
 import type { WatchResult } from "../shared/watch";
 import type { PluginTheme } from "@getpaseo/plugin";
 import * as link from "../shared/link";
@@ -11,20 +11,19 @@ import { formatMinutes, type TunnelMinutes } from "../shared/tunnel-lease";
 import { filterWorkspaceProcesses, workspacePorts } from "../shared/workspace-filter";
 import { rollupResources, type ResourceRollup } from "../shared/workspace-resources";
 import { AskAgentButton, HostsNavigationProvider, OpenTerminalButton } from "./ask";
-import { DaemonSurface } from "./daemon";
+import { DaemonSurface, PageHeader } from "./daemon";
+import { Accordion, AccordionItem, Dot, Fact, Meta, Row, SectionTitle, SPACE, TYPE, toneColor, type Tone as KitTone } from "./kit";
 import { OpenRow } from "./open-row";
 import { useOpenService } from "./open-service";
 import { PROCESS_LIMIT, processKey, useMonitorRpc, type Process, type Snapshot } from "./rpc";
 import { ForceStopModal, ProcessRow, ServiceCard, errorText, usePendingStops, useProcessActions } from "./surface";
 import { TunnelCard } from "./tunnel-row";
-import { Button, Card, Facts, Grid, Meter, Notice, Section, StatusPill, Tag, TokensProvider, formatBytes, formatPercent, useTokens, useUi, type Tone } from "./ui";
+import { Button, Card, Facts, Grid, Meter, Notice, TokensProvider, formatBytes, formatPercent, useTokens, useUi } from "./ui";
 
 const QUERY_KEY = ["monitor", "workspace-snapshot"] as const;
 /** Enough rows to cover a busy workspace; the server bounds this too. */
 const WORKSPACE_LIMIT = PROCESS_LIMIT * 4;
 
-const HEALTH_TONE: Record<HealthStatus, Tone> = { ok: "ok", warning: "warning", critical: "danger", unknown: "neutral" };
-const HEALTH_LABEL: Record<HealthStatus, string> = { ok: "Healthy", warning: "Needs attention", critical: "Needs attention now", unknown: "Unknown" };
 /** Rows shown before "Show all": the heaviest first, so the list stays calm. */
 const ROWS_FOLDED = 8;
 
@@ -49,47 +48,18 @@ export function WorkspacePanel(props: PluginWorkspacePanelProps) {
   );
 }
 
-/** The verdict for this workspace first: status, when it was checked, and every issue that touches it. */
-function HealthCard({ theme, health, background, watched }: { theme: PluginTheme; health: ReturnType<typeof workspaceHealth>; background: boolean; watched: readonly WatchResult[] }) {
-  const t = useTokens();
-  const checked = new Date(health.checkedAt).toLocaleTimeString();
-  return (
-    <Card tone={health.status === "ok" ? undefined : HEALTH_TONE[health.status]}>
-      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: t.space.sm }}>
-        <Text style={t.text.heading}>Health</Text>
-        <StatusPill tone={HEALTH_TONE[health.status]} label={HEALTH_LABEL[health.status]} />
-      </View>
-      <Facts items={[
-        { value: `${health.services.length} dev server${health.services.length === 1 ? "" : "s"}` },
-        health.ports.length > 0 ? { value: `ports ${health.ports.map((port) => `:${port}`).join(" ")}` } : null,
-        { value: `checked ${checked}` },
-        { value: background ? "checks run on the daemon" : "background checks off" },
-      ]} />
-      {health.issues.length === 0 ? (
-        <Text style={t.text.caption}>Nothing wrong with this workspace's servers, browser links, or SSH forwards.</Text>
-      ) : (
-        health.issues.map((issue, index) => <IssueRow key={`${issue.code}-${issue.ports.join("-")}-${index}`} theme={theme} issue={issue} watched={watched} />)
-      )}
-    </Card>
-  );
-}
-
 /**
  * What this workspace costs the host right now: summed CPU and resident memory
  * of its processes, each as a share of the machine when the host total is
  * known. A metric the host has not measured yet reads as unknown, never 0.
  */
-function ResourceCard({ rollup, snapshot }: { rollup: ResourceRollup; snapshot: Snapshot }) {
+function ResourceBody({ rollup, snapshot }: { rollup: ResourceRollup; snapshot: Snapshot }) {
   const t = useTokens();
   const { cpu, memory } = snapshot.system;
   const cpuPending = rollup.processCount - rollup.cpuSampled;
   const memoryPending = rollup.processCount - rollup.memorySampled;
   return (
-    <Card>
-      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: t.space.sm }}>
-        <Text style={t.text.heading}>Resources</Text>
-        <Text style={t.text.caption}>{rollup.processCount} process{rollup.processCount === 1 ? "" : "es"} in this workspace</Text>
-      </View>
+    <>
       {rollup.processCount === 0 ? (
         <Text style={t.text.caption}>Nothing is running in this workspace, so it uses none of the host's CPU or memory.</Text>
       ) : (
@@ -118,7 +88,7 @@ function ResourceCard({ rollup, snapshot }: { rollup: ResourceRollup; snapshot: 
           />
         </Grid>
       )}
-    </Card>
+    </>
   );
 }
 
@@ -135,17 +105,16 @@ function ResourceFigure({ title, value, share, facts }: { title: string; value: 
   );
 }
 
-/** One issue; with "Ask an agent" (0.12.0) when an agent can help with it. */
+/** One issue, in its own words; with "Ask an agent" (0.12.0) when an agent can help with it. */
 function IssueRow({ theme, issue, watched }: { theme: PluginTheme; issue: HealthIssue; watched: readonly WatchResult[] }) {
-  const t = useTokens();
   const subject = askSubjectFor(issue, watched);
   return (
-    <View style={{ gap: t.space.sm }}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
-        <Tag tone={issue.severity === "critical" ? "danger" : "warning"} label={issue.scope === "host" ? "host" : issue.ports.length > 0 ? `:${issue.ports.join(" :")}` : "process"} />
-        <Text style={[t.text.body, { flex: 1 }]}>{issue.message}</Text>
+    <View style={{ gap: SPACE.sm }}>
+      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: SPACE.sm }}>
+        <View style={{ paddingTop: SPACE.sm }}><Dot color={toneColor(theme, issue.severity === "critical" ? "danger" : "warning")} /></View>
+        <Text style={{ ...TYPE.body, color: theme.colors.foreground, flex: 1 }}>{issue.message}</Text>
       </View>
-      {subject ? <View style={{ flexDirection: "row" }}><AskAgentButton theme={theme} subject={subject} /></View> : null}
+      {subject ? <View style={{ paddingLeft: SPACE.md }}><Row><AskAgentButton theme={theme} subject={subject} /></Row></View> : null}
     </View>
   );
 }
@@ -206,28 +175,47 @@ function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, s
     return snapshot.processes.items.filter((process) => !serviceKeys.has(processKey(process)));
   }, [snapshot]);
 
-  const status = snapshotQuery.isError ? { tone: "danger" as const, label: "Host unavailable" } : snapshot ? { tone: "ok" as const, label: `Every ${intervalSeconds}s` } : { tone: "neutral" as const, label: "Connecting" };
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshNow = () => {
+    setRefreshing(true);
+    void readHealth({ refresh: true }).then((verdict) => queryClient.setQueryData(["daemon-link", hostId, "health"], verdict)).catch(() => undefined).finally(() => setRefreshing(false));
+    refresh();
+  };
+  const tone: KitTone = snapshotQuery.isError ? "danger" : !health ? "neutral" : health.status === "critical" ? "danger" : health.status === "warning" ? "warning" : health.status === "ok" ? "success" : "neutral";
+  const line = snapshotQuery.isError ? "This host can't be read right now" : !health ? "Checking…" : health.issues.length ? `${health.issues.length} thing${health.issues.length === 1 ? "" : "s"} need${health.issues.length === 1 ? "s" : ""} attention` : "All good";
+  const checked = healthQuery.data ? new Date(healthQuery.data.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : null;
+  // Summed shares of one core read oddly past 100% ("610% CPU"); say cores instead.
+  const cpuWords = rollup?.cpuPercent == null ? "CPU measuring" : rollup.cpuPercent >= 100 ? `${(rollup.cpuPercent / 100).toFixed(1)} CPU cores` : `${formatPercent(rollup.cpuPercent, 1)} of a CPU core`;
+  const memoryWords = rollup?.rssBytes == null ? "unknown" : formatBytes(rollup.rssBytes);
 
+  // 0.12.1: the new Hosts style. The workspace's name and state up top with one Refresh link, its dev servers, then
+  // anything wrong; resources, other processes, links and the technical bits (folder, schedule) fold away.
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: t.color.surface0 }} contentContainerStyle={{ padding: t.compact ? t.space.lg : t.space.xl, paddingBottom: t.space.xl * 2, alignItems: "stretch" }}>
-      <View style={{ width: "100%", maxWidth: t.maxWidth, alignSelf: "center", gap: t.space.xl }}>
-        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: t.space.md }}>
-          <View style={{ gap: t.space.hair, flexShrink: 1 }}>
-            <Text style={t.text.title}>Hosts · {workspace?.name ?? "this workspace"}</Text>
-            <Text style={t.text.label} numberOfLines={1}>{workspace?.directory ?? "Workspace details are loading…"}</Text>
+    <ScrollView style={{ flex: 1, backgroundColor: t.color.surface0 }} contentContainerStyle={{ padding: t.compact ? SPACE.md : SPACE.section, paddingBottom: SPACE.section * 2, alignItems: "stretch" }}>
+      <View style={{ width: "100%", maxWidth: t.maxWidth, alignSelf: "center", gap: SPACE.section }}>
+        <PageHeader theme={theme} host={workspace?.name ?? "This workspace"} tone={tone} line={line} onRefresh={refreshNow} refreshing={refreshing} />
+        {snapshotQuery.isError ? (
+          <Notice icon="CircleAlert" tone="danger" action={<Button label="Try again" onPress={refreshNow} loading={snapshotQuery.isFetching} />}>
+            {snapshot ? `The latest reading failed: ${errorText(snapshotQuery.error)}. Showing the last good one.` : `This host can't be read: ${errorText(snapshotQuery.error)}`}
+          </Notice>
+        ) : null}
+        {host?.scope?.status === "unavailable" ? <Notice icon="ShieldAlert" tone="warning">{host.scope.message}</Notice> : null}
+        {!snapshot && snapshotQuery.isPending ? (
+          <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
+            <ActivityIndicator size="small" color={t.color.muted} />
+            <Text style={t.text.body}>Checking…</Text>
           </View>
-          <StatusPill tone={status.tone} label={status.label} />
-        </View>
-        {settingsLoading ? <Text style={t.text.caption}>Loading Hosts settings; using defaults until they arrive.</Text> : null}
+        ) : null}
         {snapshot ? (
-          <Section title="Dev servers in this workspace" trailing={<Text style={t.text.caption}>{snapshot.services.length > 0 ? `${snapshot.services.length} found · Open creates a ${formatMinutes(minutes)} browser link` : ""}</Text>}>
+          <View style={{ gap: SPACE.row }}>
+            <SectionTitle theme={theme} icon="Server">Dev servers</SectionTitle>
             {snapshot.services.length === 0 ? (
-              <Notice icon="Server" action={<Button label="Refresh" onPress={refresh} loading={snapshotQuery.isFetching} />}>No dev server is running in this workspace. Run its dev command in a terminal here and it appears with an Open button.</Notice>
+              <Text style={t.text.body}>No dev server is running in this workspace. Run its dev command in a terminal here and it appears with an Open button.</Text>
             ) : (
               <>
                 {!available && links.data ? (
                   <Notice icon="Globe" tone="warning" action={<Button label={opener.installing ? "Setting up…" : "Set up browser links"} variant="primary" loading={opener.installing} disabled={opener.installing} onPress={() => opener.installLinks()} />}>
-                    Open needs the link helper on this host once. No Cloudflare account, domain or SSH password is needed. To open it privately on your own computer instead, use Hosts → Dev servers → Open privately on your own computer.
+                    One-time setup for the Open button: install the link helper on this host. No account, domain or password is needed.
                   </Notice>
                 ) : null}
                 <Grid min={300}>
@@ -242,30 +230,22 @@ function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, s
                 </Grid>
               </>
             )}
-          </Section>
+          </View>
         ) : null}
-        {health ? <HealthCard theme={theme} health={health} background={healthQuery.data?.background ?? true} watched={healthQuery.data?.watched ?? []} /> : null}
-        {snapshot && rollup ? <ResourceCard rollup={rollup} snapshot={snapshot} /> : null}
-        {snapshotQuery.isError ? (
-          <Notice icon="CircleAlert" tone="danger" action={<Button label="Retry" onPress={refresh} loading={snapshotQuery.isFetching} />}>
-            {snapshot ? `Latest sample failed: ${errorText(snapshotQuery.error)}. Showing the last good data.` : `Could not read the host: ${errorText(snapshotQuery.error)}`}
-          </Notice>
+        {health && health.issues.length ? (
+          <View style={{ gap: SPACE.row }}>
+            <SectionTitle theme={theme} icon="TriangleAlert">What needs attention</SectionTitle>
+            {health.issues.map((issue, index) => <IssueRow key={`${issue.code}-${issue.ports.join("-")}-${index}`} theme={theme} issue={issue} watched={healthQuery.data?.watched ?? []} />)}
+          </View>
         ) : null}
-        {host?.scope?.status === "unavailable" ? <Notice icon="ShieldAlert" tone="warning">{host.scope.message}</Notice> : null}
-        {!snapshot && snapshotQuery.isPending ? (
-          <Card>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
-              <ActivityIndicator size="small" color={t.color.muted} />
-              <Text style={t.text.body}>Reading the host…</Text>
-            </View>
-          </Card>
-        ) : null}
-
-        {snapshot ? (
-          <>
-            <Section title="Other workspace processes" trailing={<Text style={t.text.caption}>{rows.length > 0 ? `${rows.length} running` : ""}</Text>}>
+        {snapshot && rollup ? (
+          <Accordion theme={theme}>
+            <AccordionItem theme={theme} compact={t.compact} icon="Gauge" title="What this workspace uses" summary={rollup.processCount ? `${cpuWords} · ${memoryWords} memory · ${rollup.processCount} process${rollup.processCount === 1 ? "" : "es"}` : "Nothing running"}>
+              <ResourceBody rollup={rollup} snapshot={snapshot} />
+            </AccordionItem>
+            <AccordionItem theme={theme} compact={t.compact} icon="ListOrdered" title="Other processes in this workspace" summary={rows.length ? `${rows.length} running` : "None"}>
               {rows.length === 0 ? (
-                <Notice icon="Activity">No other processes are running in this workspace.{snapshot.processes.truncated ? " The host's list was cut short; Hosts → Processes has everything." : ""}</Notice>
+                <Text style={t.text.body}>No other processes are running in this workspace.{snapshot.processes.truncated ? " The host's list was cut short; Hosts → Processes has everything." : ""}</Text>
               ) : (
                 <>
                   <Card padded={false}>
@@ -276,16 +256,23 @@ function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, s
                   {rows.length > ROWS_FOLDED ? <View style={{ flexDirection: "row" }}><Button label={showAll ? "Show the heaviest only" : `Show all ${rows.length}`} onPress={() => setShowAll(!showAll)} /></View> : null}
                 </>
               )}
-            </Section>
-            <Section title="Browser links for this workspace" trailing={ports.length > 0 ? <View style={{ flexDirection: "row", gap: t.space.sm }}>{ports.map((port) => <Tag key={port} label={`:${port}`} />)}</View> : undefined}>
+            </AccordionItem>
+            <AccordionItem theme={theme} compact={t.compact} icon="Globe" title="Browser links" summary={tunnels.length ? `${tunnels.length} open · Open adds ${formatMinutes(minutes)}` : "None open"}>
               {tunnels.length === 0 ? (
-                <Notice icon="Globe">No temporary browser link points at this workspace. Press Open beside a dev server above to create one.</Notice>
+                <Text style={t.text.body}>No temporary browser link points at this workspace. Press Open beside a dev server to make one.</Text>
               ) : (
                 tunnels.map((tunnel) => <TunnelCard key={tunnel.id} tunnel={tunnel} minutes={minutes} onExtend={opener.extendLink} onClose={opener.closeLink} busy={opener.extending || opener.closing} />)
               )}
-            </Section>
-            <Text style={t.text.caption}>Only dev servers, processes and links in this workspace's folder are listed. Heavy processes for the whole host, with a safe stop for any job Paseo started, are in the Hosts screen → Processes. To show the whole host here instead, use Settings → Hosts → Panel shows.</Text>
-          </>
+            </AccordionItem>
+            <AccordionItem theme={theme} compact={t.compact} icon="SlidersHorizontal" title="Technical details" summary="Its folder, ports and how often Hosts checks">
+              {workspace?.directory ? <Fact theme={theme} label="Folder" value={workspace.directory} /> : null}
+              {ports.length ? <Fact theme={theme} label="Ports" value={ports.map((port) => `:${port}`).join(" ")} /> : null}
+              <Fact theme={theme} label="Checks every" value={`${intervalSeconds} seconds${healthQuery.data?.background === false ? ", while Hosts is open" : ", even with Paseo closed"}`} />
+              {checked ? <Fact theme={theme} label="Last checked" value={checked} /> : null}
+              {settingsLoading ? <Meta theme={theme}>Loading Hosts settings; using the defaults until they arrive.</Meta> : null}
+              <Meta theme={theme}>Only what runs in this workspace's folder is listed. The whole host, with a safe stop for any job Paseo started, is on the Hosts screen → Processes. To show the whole host here instead: Settings → Hosts → Panel shows.</Meta>
+            </AccordionItem>
+          </Accordion>
         ) : null}
       </View>
       <ForceStopModal target={liveForceTarget} busy={forceMutation.isPending} onCancel={() => setForceTarget(null)} onConfirm={(process) => forceMutation.mutate(process)} />

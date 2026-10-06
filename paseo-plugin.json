@@ -1,5 +1,6 @@
 {
   "id": "daemon-link",
-  "requirements": { "paseo": ">=0.8.0" },
+  "description": "Hosts: see what's slowing this computer down and stop runaway jobs safely, open your dev servers in a browser, and ask an agent to fix what breaks.",
+  "requirements": { "paseo": ">=0.9.0" },
   "build": [["npm", "ci", "--ignore-scripts"]]
 }

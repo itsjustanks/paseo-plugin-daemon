@@ -2,6 +2,7 @@ import type { PluginClientContext, PluginSurfaceProps } from "@getpaseo/plugin/c
 import { hostHealth } from "./shared/health";
 import { hostsAttachmentSearch } from "./shared/attachments";
 import { DaemonSurface } from "./client/daemon";
+import { resolveTab, tabTitle } from "./shared/tabs";
 import { openMainScreen, registerMainScreen } from "./client/native";
 import { registerHealthPills } from "./client/pill";
 import { makeQuickHealth, makeStatusTrailing } from "./client/quick";
@@ -15,7 +16,7 @@ export default function contribute(client: PluginClientContext) {
   const Surface = (props: PluginSurfaceProps & { params?: Record<string, string> }) => <DaemonSurface {...props} shortcuts={shortcuts} />;
   // A screen and the app's own sidebar row on Paseo 0.11 apps; the surface and sidebar item before.
   // On 0.11 the row also carries a status dot; pressing it opens a quick health check.
-  registerMainScreen(client, { id: MAIN_SCREEN, title: "Hosts", icon: "Network", Component: Surface, Trailing: makeStatusTrailing(makeQuickHealth(MAIN_SCREEN)) });
+  registerMainScreen(client, { id: MAIN_SCREEN, title: "Hosts", screenTitle: (params) => tabTitle(resolveTab(params.tab, params.open).tab), icon: "Network", Component: Surface, Trailing: makeStatusTrailing(makeQuickHealth(MAIN_SCREEN)) });
   client.addWorkspacePanel({
     id: "daemon-link", title: "Hosts", icon: "Network", context: "workspace",
     // `locations` defaults to ["workspace"] alone; without "explorer" the tab never shows in Projects.
@@ -30,7 +31,7 @@ export default function contribute(client: PluginClientContext) {
   });
   client.addCommandCenterItem({
     id: "open-daemon-link", title: "Open Hosts", icon: "Network", context: "global",
-    keywords: ["hosts", "sync", "daemon link", "monitor", "ports", "dev server", "tunnel", "ssh"],
+    keywords: ["hosts", "sync", "daemon link", "daemon-link", "monitor", "ports", "dev server", "tunnel", "ssh"],
     onSelect(command) { openMainScreen(command, MAIN_SCREEN); },
   });
   client.addCommandCenterItem({
@@ -48,8 +49,9 @@ export default function contribute(client: PluginClientContext) {
   });
   // Slash commands (feature-detected): the same common actions from a chat's message box.
   if (shortcuts) {
+    // 0.12.1: named after what people see ("Hosts"). The SDK has no hidden aliases, so `/daemon-link` is gone.
     client.addSlashCommand({
-      name: "daemon-link", description: "Open Hosts for this workspace: its dev servers, links and problems",
+      name: "hosts", description: "Open Hosts for this workspace: its dev servers, links and problems",
       argumentHint: "", context: "workspace",
       onSubmit({ openPanel }) { openPanel("daemon-link"); },
     });
