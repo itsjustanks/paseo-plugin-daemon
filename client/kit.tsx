@@ -312,6 +312,67 @@ export function Disclosure({ theme, label, openLabel, initiallyOpen = false, qui
   );
 }
 
+/**
+ * A card of fold-out rows (0.11.0, from paseo-mcp 0.19.0's `client/ui.tsx`):
+ * the technical or less-used parts of a tab sit here, each one press away,
+ * so the tab itself stays plain. Children are AccordionItems (null ones are
+ * skipped); the card draws the rule between them.
+ */
+export function Accordion({ theme, children }: { theme: Theme; children: React.ReactNode }) {
+  const items = React.Children.toArray(children).filter(Boolean);
+  if (items.length === 0) return null;
+  return (
+    <View style={{ backgroundColor: theme.colors.surface1, borderRadius: RADIUS.card, borderWidth: 1, borderColor: theme.colors.border, overflow: "hidden", marginBottom: SPACE.section }}>
+      {items.map((child, index) => (
+        <View key={index} style={index > 0 ? { borderTopWidth: 1, borderTopColor: theme.colors.border } : undefined}>
+          {child}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** One row of an Accordion: an icon, a title, a one-line summary and a chevron; its content opens below it. */
+export function AccordionItem({ theme, compact, icon, title, summary, tone, open: initial = false, children }: {
+  theme: Theme;
+  compact?: boolean;
+  icon?: string;
+  title: string;
+  /** One line under the title, so the row says what's inside before it's opened. */
+  summary?: string;
+  tone?: Tone;
+  open?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(initial);
+  const pad = compact ? SPACE.md : SPACE.card;
+  return (
+    <View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={title}
+        accessibilityState={{ expanded: open }}
+        // react-native-web 0.21 ignores accessibilityState; say it the web way too.
+        {...({ "aria-expanded": open } as object)}
+        onPress={() => setOpen((value) => !value)}
+        style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: SPACE.row, paddingHorizontal: pad, paddingVertical: SPACE.row + SPACE.hair, minHeight: 56, opacity: pressed ? 0.7 : 1 })}
+      >
+        {icon ? <IconBadge theme={theme} name={icon} tone={tone && tone !== "neutral" ? tone : "accent"} size={32} /> : null}
+        <View style={{ flex: 1, gap: SPACE.hair, minWidth: 0 }}>
+          <Text style={{ ...TYPE.item, color: tone === "danger" ? theme.colors.statusDanger : theme.colors.foreground }}>{title}</Text>
+          {summary ? <Text style={{ ...TYPE.secondary, color: theme.colors.foregroundMuted }} numberOfLines={2}>{summary}</Text> : null}
+        </View>
+        {HostIcon ? (
+          <HostIcon name={open ? "ChevronUp" : "ChevronDown"} size={18} color={theme.colors.foregroundMuted} />
+        ) : (
+          <Text style={{ ...TYPE.body, color: theme.colors.foregroundMuted }}>{open ? "▴" : "▾"}</Text>
+        )}
+      </Pressable>
+      {open ? <View style={{ paddingHorizontal: pad, paddingBottom: pad, gap: SPACE.row }}>{children}</View> : null}
+    </View>
+  );
+}
+
 /** A heading inside a card, for one part of a longer explanation. */
 export function SectionTitle({ theme, icon, children }: { theme: Theme; icon?: string; children: React.ReactNode }) {
   return (

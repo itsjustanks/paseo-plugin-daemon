@@ -10,12 +10,18 @@ const verdict = (over: Partial<HealthVerdict> = {}): HealthVerdict => ({
   services: [{ name: "next", cwd: "~/app", ports: [3000], project: { path: "~/app", workspace: null } }],
   ...over,
 });
+/** The app workspace's dev server on :3000 has stopped: the kind of thing that earns a chip. */
+const stopped = (over: Partial<HealthVerdict> = {}): HealthVerdict => verdict({
+  status: "warning", services: [],
+  issues: [{ code: "port-gone", severity: "warning", scope: "process", message: "The dev server on :3000 stopped.", ports: [3000], cwd: "~/app" }],
+  ...over,
+});
 const targets: Record<string, { directory: string; projectRootPath: string; name: string }> = {
   app: { directory: "/home/alice/app", projectRootPath: "/home/alice/app", name: "App" },
   quiet: { directory: "/home/alice/quiet", projectRootPath: "/home/alice/quiet", name: "Quiet" },
 };
 
-function harness(initial = verdict(), settings = { showComposerPill: true, snapshotIntervalSeconds: 30 }) {
+function harness(initial = stopped(), settings = { showComposerPill: true, snapshotIntervalSeconds: 30 }) {
   let current = initial;
   const added: Array<{ agent: string; face: PillFace }> = [];
   const updates: Array<{ agent: string; face: PillFace }> = [];
@@ -37,24 +43,41 @@ function harness(initial = verdict(), settings = { showComposerPill: true, snaps
 }
 
 describe("composer pill registry", () => {
-  it("adds a chip only for agents whose workspace has something to report, as a button face", async () => {
+  it("adds a chip only for agents whose workspace needs attention, as a button face", async () => {
     const h = harness();
     h.registry.start();
     h.registry.replaceAll([{ id: "a1", workspaceId: "app" }, { id: "a2", workspaceId: "quiet" }, { id: "", workspaceId: "app" }]);
     await h.settle();
-    expect(h.registry.shown()).toEqual({ a1: "1 dev server :3000" });
-    expect(h.added).toEqual([{ agent: "a1", face: { label: "1 dev server :3000", icon: "Server" } }]);
+    expect(h.registry.shown()).toEqual({ a1: "Dev server :3000 stopped" });
+    expect(h.added).toEqual([{ agent: "a1", face: { label: "Dev server :3000 stopped", icon: "TriangleAlert" } }]);
+  });
+
+  it("never shows a chip for healthy dev servers or host-wide trouble (0.11.0: that is the sidebar dot's job)", async () => {
+    const hostWide = verdict({ status: "critical", issues: [
+      { code: "memory-pressure", severity: "critical", scope: "host", message: "Memory is nearly full.", ports: [], cwd: null },
+      { code: "service-down", severity: "critical", scope: "host", message: "OmniRoute is down.", ports: [], cwd: null, subject: "OmniRoute" },
+      { code: "host-unreachable", severity: "critical", scope: "host", message: "x", ports: [], cwd: null },
+    ] });
+    for (const calm of [verdict(), hostWide]) {
+      const h = harness(calm);
+      h.registry.replaceAll([{ id: "a1", workspaceId: "app" }, { id: "a2", workspaceId: "quiet" }]);
+      await h.settle();
+      expect(h.registry.shown()).toEqual({});
+    }
   });
 
   it("pushes a new label when the verdict changes, and removes chips that have nothing left to say", async () => {
     const h = harness();
     h.registry.upsert({ id: "a1", workspaceId: "app" });
     await h.settle();
-    h.setVerdict(verdict({ status: "warning", issues: [{ code: "service-slow", severity: "warning", scope: "host", message: "OmniRoute is slow: 4.2 s, usually 0.1 s.", ports: [], cwd: null, subject: "OmniRoute" }] }));
+    h.setVerdict(stopped({ status: "critical", issues: [
+      { code: "tunnel-failed", severity: "critical", scope: "process", message: "The browser link for :3000 failed.", ports: [3000], cwd: "~/app" },
+      ...stopped().issues,
+    ] }));
     h.timers.shift()!();
     await h.settle();
-    expect(h.updates).toEqual([{ agent: "a1", face: { label: "OmniRoute slow", icon: "TriangleAlert" } }]);
-    h.setVerdict(verdict({ services: [] }));
+    expect(h.updates).toEqual([{ agent: "a1", face: { label: "Browser link :3000 failed +1", icon: "CircleAlert" } }]);
+    h.setVerdict(verdict());
     h.timers.shift()!();
     await h.settle();
     expect(h.removed).toEqual(["a1"]);
@@ -92,7 +115,7 @@ describe("composer pill registry", () => {
     const registry = createPillRegistry({
       addPill(agent) { if (refuse) throw new Error("unknown workspace"); added.push(agent.id); return { update() {}, remove() {} }; },
       readSettings: async () => ({ showComposerPill: true, snapshotIntervalSeconds: 30 }),
-      readVerdict: async () => verdict(),
+      readVerdict: async () => stopped(),
       target: async (id) => targets[id] ?? null,
       schedule: (run) => { timers.push(run); return 1; },
       cancel: () => undefined,
@@ -108,7 +131,10 @@ describe("composer pill registry", () => {
 
   it("faces: a warning icon carries the tone, so colour is never the only channel", () => {
     expect(pillFace(verdict({ services: [] }), targets.app!)).toBeNull();
-    expect(pillFace(verdict({ status: "critical", issues: [{ code: "host-unreachable", severity: "critical", scope: "host", message: "x", ports: [], cwd: null }] }), targets.quiet!)).toEqual({ label: "Host unreachable", icon: "CircleAlert" });
+    expect(pillFace(verdict(), targets.app!)).toBeNull();
+    expect(pillFace(stopped(), targets.app!)).toEqual({ label: "Dev server :3000 stopped", icon: "TriangleAlert" });
+    expect(pillFace(stopped(), targets.quiet!)).toBeNull();
+    expect(pillFace(verdict({ status: "critical", issues: [{ code: "runaway", severity: "critical", scope: "process", message: "tsc is stuck at full CPU.", ports: [], cwd: "~/app", subject: "tsc" }] }), targets.app!)).toEqual({ label: "Runaway: tsc", icon: "CircleAlert" });
   });
 });
 

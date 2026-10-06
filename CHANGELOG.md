@@ -1,5 +1,50 @@
 # Changelog
 
+## 0.11.0 — 2026-10-06
+
+The theme of this release: Hosts for someone who has never heard of a port. The user found the
+nesting "a bit weird… too technical… it just needs to work for dummies", and asked for fewer composer
+chips. This follows the design standard's update of 2026-10-06 and copies paseo-mcp 0.19.0's
+fold-out rows, so the plugins look like one family. Every option is still reachable.
+
+- **Four tabs, by what you came to do.** Overview (is this computer fine?), Processes (what is making
+  it slow?), Dev servers (open my app) and Help (how does this work?). 0.10's Connect and Project
+  Sync tabs were both about other computers, so they now fold out under Dev servers, beside the
+  apps they reach.
+- **Fold-out rows for the technical parts** (`Accordion` / `AccordionItem` in `client/kit.tsx`, from
+  paseo-mcp 0.19.0). Overview: Watched services, Setup checks (open until setup is done) and
+  Technical details (check interval, limits, link length, where the stop log and host summary are
+  written). Processes: Recent stops and What can be stopped here. Dev servers: Browser links you've
+  opened, Open privately on your own computer (pairing, paired computers' apps, access), Use your
+  SSH keys instead, and Copy a project from another computer (Project Sync).
+- **No tab intros.** One plain sentence under Processes and Dev servers, none elsewhere. "What you
+  can do here", the troubleshooting list and the "New to Hosts? How it works" guide became the Help
+  tab: ten plain questions, each folded with a button to the right place, then how Hosts works.
+- **Dev servers is simpler.** Each card's Open button is the main path; the "Browser link / Private
+  forward" switch is gone, and the private route per port (with its forward status) sits inside
+  Open privately on your own computer. Each card still offers "Private forward…".
+- **Old links still work.** `shared/tabs.ts` maps every old tab id: `connect` and `pair` open Dev
+  servers with the private fold-out open, `ssh` the SSH one, `sync` Project Sync, `health` opens
+  Processes and `guide` opens Help. Screens also accept `params.open` for a Dev servers fold-out.
+  The sidebar screen, status-dot popover, workspace panel and composer chip are unchanged entry
+  points.
+- **A composer chip only when a chat needs attention.** It now appears only when that workspace's
+  dev server stopped, a browser link or forward to it failed, or one of its jobs drives the host's
+  load (`chipText`, `CHIP_CODES` in `shared/health.ts`). It never counts healthy dev servers, and
+  host-wide trouble (memory, CPU, watched services, an unreachable host) stays on the sidebar dot
+  and its quick check instead of appearing in every chat. The setting is now "Show a chip when a
+  chat needs attention".
+- **Commands for the common actions.** Command Center: Open Hosts, Show heavy processes (renamed
+  from "Heavy processes on this host"), and the new Check host now, which runs a fresh check and
+  opens Overview. Slash commands, where the app has them: `/daemon-link` (as before),
+  `/heavy-processes` and `/check-host`. No sidebar footer item: on every app that offers one, the
+  sidebar row's dot and popover already show the same thing.
+- **Tests.** New `tests/tabs.test.ts` (four tabs, every old id, `open`, and every deep link in the
+  client resolving to itself); the chip tests now cover attention-only faces and the cases that
+  must stay quiet.
+- `requirements.paseo` is unchanged and every newer API is still feature-detected. No new
+  dependencies, and nothing new on the server.
+
 ## 0.10.0 — 2026-10-05
 
 The theme of this release: manage the large running processes behind the outages (OmniRoute pegging

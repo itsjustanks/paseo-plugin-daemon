@@ -3,7 +3,7 @@ import { Icon } from "@getpaseo/plugin/client/react-native";
 import { settingsRpc } from "@getpaseo/plugin";
 import React, { useEffect, useState } from "react";
 import { Text } from "react-native";
-import { hostHealth, pillText, workspaceHealth, type HealthStatus, type HealthVerdict } from "../shared/health";
+import { chipIssues, chipText, hostHealth, workspaceHealth, type HealthVerdict } from "../shared/health";
 import { canObserveAgents, supportsButtonPills } from "../shared/host-features";
 import { createPillRegistry, type PillAgent } from "../shared/pills";
 import { HOSTS_SETTINGS_DEFAULTS, HostsSettingsSchema, type HostsSettings } from "../shared/settings";
@@ -13,13 +13,12 @@ import type { WorkspaceTarget } from "../shared/workspace-filter";
  * Composer pills for host health, one per live agent.
  *
  * The client entry polls the cached host verdict once per interval and decides
- * for every agent whether its workspace has anything worth a chip: a verified
- * dev server running inside it, or an issue that touches it. Only then does
- * the pill exist; a quiet workspace gets no chip at all. The pill component
+ * for every agent whether its chat needs attention: a dev server in its
+ * workspace stopped, a link to it failed, or a job in it drives the host's
+ * load (0.11.0). Only then does the pill exist; a calm workspace, even with
+ * dev servers running, gets no chip. Host-wide health is the sidebar dot's. The pill component
  * itself just renders the latest verdict from a shared store.
  */
-
-const ICONS: Record<HealthStatus, string> = { ok: "Server", warning: "TriangleAlert", critical: "CircleAlert", unknown: "Server" };
 
 /** Latest verdict plus a change signal; every pill subscribes instead of calling RPC. */
 class VerdictStore {
@@ -40,11 +39,12 @@ export function createHealthPill(store: VerdictStore) {
     const target = useWorkspace(workspaceId, ({ directory, projectRootPath, name }) => ({ directory, projectRootPath, name }));
     const verdict = useVerdict(store);
     const health = target && verdict ? workspaceHealth(verdict, target) : null;
-    const text = health ? pillText(health) : null;
-    const color = health?.status === "critical" ? theme.colors.statusDanger : health?.status === "warning" ? theme.colors.statusWarning : theme.colors.foregroundMuted;
+    const text = health ? chipText(health) : null;
+    const critical = health ? chipIssues(health).some((issue) => issue.severity === "critical") : false;
+    const color = critical ? theme.colors.statusDanger : text ? theme.colors.statusWarning : theme.colors.foregroundMuted;
     return (
       <>
-        <Icon name={ICONS[health?.status ?? "unknown"]} size={14} color={color} />
+        <Icon name={critical ? "CircleAlert" : text ? "TriangleAlert" : "Server"} size={14} color={color} />
         <Text numberOfLines={1} style={{ color: theme.colors.foregroundMuted, flexShrink: 1 }}>{text ?? "Hosts"}</Text>
       </>
     );
@@ -99,7 +99,7 @@ type AgentObservation = {
 const pillAgent = (agent: AgentLike | undefined): PillAgent | null => (agent?.id && agent.workspaceId ? { id: agent.id, workspaceId: agent.workspaceId } : null);
 
 /**
- * One Hosts chip per live agent whose workspace has something to report.
+ * One Hosts chip per live agent whose workspace needs attention.
  * The registry (shared/pills.ts) decides which chips exist and what they
  * say; this wires it to the app.
  *

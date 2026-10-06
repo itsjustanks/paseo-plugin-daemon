@@ -55,11 +55,12 @@ an isolated preview: no real accounts, host addresses, project names, credential
 - **What this workspace costs.** The workspace tab sums the CPU and memory of the workspace's own
   processes and shows each as a share of the host, so you can tell a loaded machine from a loaded
   workspace.
-- **A composer pill that knows your workspace.** Under each agent's composer, a chip counts that
-  workspace's dev servers or names its problem, and opens the Hosts tab for it. Quiet workspaces get
-  no chip. (Fixed in 0.10.0: on Paseo 0.9 and 0.11 the chip never appeared.)
-- **Guidance where you need it.** Five tabs with plain intros, one "New to Hosts? How it works" guide
-  with live setup checks, clear empty states, and recovery steps.
+- **A chip only when a chat needs you.** Under an agent's message box, a chip appears only when that
+  workspace's dev server stopped, a link to it failed, or one of its jobs drives the host's load. It
+  opens the Hosts tab for that workspace. A calm chat shows nothing; host-wide health is the sidebar
+  dot's job.
+- **Guidance where you need it.** Four tabs, technical parts folded into rows you open in place, and
+  a Help tab of plain questions with live setup checks on Overview.
 
 Agent Browser is not required. Daemon Link forwards traffic; your normal browser renders the app. The
 app cannot be rendered inside Paseo itself: the plugin SDK has no WebView and no plugin HTTP route,
@@ -131,7 +132,8 @@ The plugin discovers an existing server; opening the panel does not start your p
 
 ### 2. Pair the two hosts
 
-On the development server, open **Hosts → Connect → Private localhost → Pair hosts → Create pairing code**.
+On the development server, open **Hosts → Dev servers → Open privately on your own computer → Pair
+hosts → Create pairing code**.
 Use Paseo's host picker to select your **laptop's daemon**, then paste the code under **Pair host**.
 
 Pairing establishes permission for one host to discover and access the other's eligible project
@@ -161,15 +163,15 @@ project access. Both plugins must remain running while you use a connection.
 
 | Tab | What to do here |
 | --- | --- |
-| **Overview** | The host's state in words, up to four status rows, two buttons, and the "How it works" guide. |
-| **Processes** | Heaviest processes, runaways, memory against the container's limit, and the ask-first stop. |
-| **Dev servers** | A card per running app with Open, link state, Extend, private routes. |
-| **Connect** | Pair hosts for private localhost links, manage browser links, or save an SSH forward. |
-| **Project Sync** | Share selected Git projects, review a transfer, and inspect receive history. |
+| **Overview** | The host's state in words and two buttons; watched services, setup checks and details fold out. |
+| **Processes** | Heaviest processes, runaways, memory against the limit, the ask-first stop; recent stops fold out. |
+| **Dev servers** | A card per app with Open; browser links, private links, SSH forwards and Project Sync fold out. |
+| **Help** | Plain questions, each folded, and how Hosts works. |
 
-Version 0.10.0 follows the shared Paseo plugin design standard (the same layout as AI Router 0.15).
-The 0.9 **Daemon Health** tab is now **Processes**, and the setup guide and checks moved into
-Overview's "New to Hosts? How it works". Nothing was removed.
+Version 0.11.0 follows the design standard's update of 2026-10-06 (the layout of paseo-mcp 0.19):
+four tabs, no tab intros, and the technical or less-used parts in fold-out rows. 0.10's **Connect**
+and **Project Sync** tabs now fold out under **Dev servers**, and links to them still land there.
+"What you can do here" and the troubleshooting list became Help's questions. Nothing was removed.
 
 Each workspace also gets a **Hosts** tab, in the workspace view and in the Projects explorer; what it
 shows depends on the panel scope setting described below.
@@ -209,12 +211,17 @@ pill reads the same result instead of probing the host. A host or workspace is f
   pressure. This is the only way a workspace is blamed for host load: a busy process on a quiet
   host, or a quiet workspace on a busy host, never triggers it.
 
-Each agent's composer gets a small pill while its workspace has something to report: `2 dev servers
-:3000 :4000` when things are fine, `Dev server :3000 stopped`, `Driving host pressure`, or `Host
-unreachable` when they are not. A problem inside the workspace leads the chip ahead of a host-wide
-one. Pressing it opens the Hosts tab for that workspace. When a workspace has no verified dev server
-and no issue, the pill is not shown at all. The chip never shows CPU or memory figures; those live in
-the Resources card. The verdict never carries tokens, link URLs, or raw command lines.
+An agent's composer gets a small chip only when its workspace needs attention: `Dev server :3000
+stopped`, `Browser link :3000 failed`, `Forward :3000 down`, `Runaway: tsc` or `Driving host load`.
+Pressing it opens the Hosts tab for that workspace. Healthy dev servers never earn a chip, and
+neither does host-wide trouble (memory, CPU, a watched service, an unreachable host): that shows on
+the dot beside **Hosts** in the sidebar, whose quick check opens on a press. The chip never shows
+CPU or memory figures. The verdict never carries tokens, link URLs, or raw command lines.
+
+The common actions are also commands. In the Command Center: **Open Hosts**, **Show heavy
+processes**, **Check host now** and **Configure Hosts**. In a chat's message box (when the app
+supports slash commands): `/daemon-link`, `/heavy-processes` and `/check-host`. There is no sidebar
+footer item: the sidebar row's dot already says the same thing on every app that has one.
 
 ### Settings: Hosts
 
@@ -226,7 +233,7 @@ Center. Settings are saved per host and shared by every client of that host.
 | Panel shows | This workspace only | Workspace tab lists only the workspace's processes, or the whole host. |
 | Refresh interval | 30 seconds | How often health is checked and the workspace tab re-reads the host (5–120 seconds). |
 | Check host health in the background | On | The daemon re-checks on the refresh interval; off means only on demand. |
-| Show the composer pill | On | Show the per-agent health chip described above. |
+| Show a chip when a chat needs attention | On | Show the attention-only chip described above. |
 | Link duration | 2 hours | How long Open keeps a new browser link alive, and what each Extend adds (15 min–8 h). |
 | Close browser links on archive | On | Archiving a workspace stops browser links that point at its dev servers. |
 | Heavy jobs at once | 4 | More builds, tests and dev servers than this is flagged; nothing stops on its own. |
@@ -253,9 +260,12 @@ are deliberately not offered: the URL is public for as long as the link lives.
 
 ![Dev servers with fictional running apps, each with Open.](docs/screenshots/dev-servers.png)
 
-### Connect: choose an access method
+### Reaching a dev server from another computer
 
-![Connect explains private localhost access between fictional hosts.](docs/screenshots/dev-relay.png)
+Under **Dev servers**, three rows fold out: **Open privately on your own computer** (pairing),
+**Use your SSH keys instead**, and **Browser links you've opened**.
+
+![Private localhost access between fictional hosts.](docs/screenshots/dev-relay.png)
 
 | Method | Best fit | What it requires |
 | --- | --- | --- |
@@ -287,8 +297,11 @@ passwords or wait on a hidden password prompt.
 This brings the Sync plugin's selected-project, preview, and history workflow into Hosts using
 its existing encrypted relay. Install this version on both hosts; no SSH credentials are needed.
 
-1. Pair the hosts under **Connect → Private localhost → Pair hosts**.
-2. Select the source in Paseo. Open **Project Sync → Share with a host** and allow a project for
+It lives under **Dev servers → Copy a project from another computer**.
+
+1. Pair the hosts under **Dev servers → Open privately on your own computer → Pair hosts**.
+2. Select the source in Paseo. Open **Copy a project from another computer → Share with a host** and
+   allow a project for
    the intended pairing code. Existing pairings start with **no project access**.
 3. Select the receiving host. Under **Receive a project**, choose the source and preview a project.
 4. Review its commit, history count, and size. Press **Receive into a new checkout** when ready.
@@ -336,8 +349,9 @@ the moment of each signal, and every step is written to `$PASEO_HOME/daemon-link
 ![The quick health check opened from the sidebar dot.](docs/screenshots/popover.png)
 
 Overview says the state in words, with up to four rows (memory, heavy jobs, dev servers, watched
-services), the last stop and two buttons. "New to Hosts? How it works" holds the walkthrough, this
-host's setup checks, troubleshooting and a glossary; it is open until setup is done. On Paseo 0.11,
+services), the last stop and two buttons. Below it, **Watched services**, **Setup checks** (open
+until setup is done) and **Technical details** fold out; the walkthrough and glossary are on Help.
+On Paseo 0.11,
 the dot beside **Hosts** in the sidebar opens the same check without leaving your chat.
 
 ### For other plugins: the host summary

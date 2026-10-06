@@ -1,4 +1,5 @@
 import type { PluginClientContext, PluginSurfaceProps } from "@getpaseo/plugin/client";
+import { hostHealth } from "./shared/health";
 import { DaemonSurface } from "./client/daemon";
 import { openMainScreen, registerMainScreen } from "./client/native";
 import { registerHealthPills } from "./client/pill";
@@ -32,16 +33,48 @@ export default function contribute(client: PluginClientContext) {
     onSelect(command) { openMainScreen(command, MAIN_SCREEN); },
   });
   client.addCommandCenterItem({
-    id: "open-heavy-processes", title: "Heavy processes on this host", icon: "Cpu", context: "global",
-    keywords: ["processes", "cpu", "memory", "runaway", "kill", "stop", "slow", "build", "limit", "container"],
+    id: "open-heavy-processes", title: "Show heavy processes", icon: "Cpu", context: "global",
+    keywords: ["processes", "cpu", "memory", "runaway", "kill", "stop", "slow", "build", "limit", "container", "hosts"],
     onSelect(command) { openMainScreen(command, MAIN_SCREEN, { tab: "processes" }); },
   });
-  if (shortcuts) client.addSlashCommand({
-    name: "daemon-link", description: "Open services, localhost links, and host monitoring",
-    argumentHint: "", context: "workspace",
-    onSubmit({ openPanel }) { openPanel("daemon-link"); },
+  client.addCommandCenterItem({
+    id: "check-host-now", title: "Check host now", icon: "RefreshCw", context: "global",
+    keywords: ["hosts", "health", "check", "memory", "cpu", "status", "watched", "omniroute"],
+    async onSelect(command) {
+      await checkNow(command);
+      openMainScreen(command, MAIN_SCREEN, { tab: "overview" });
+    },
   });
-  // One chip per live agent, present only while its workspace has a dev server or an issue to report.
+  // Slash commands (feature-detected): the same common actions from a chat's message box.
+  if (shortcuts) {
+    client.addSlashCommand({
+      name: "daemon-link", description: "Open Hosts for this workspace: its dev servers, links and problems",
+      argumentHint: "", context: "workspace",
+      onSubmit({ openPanel }) { openPanel("daemon-link"); },
+    });
+    client.addSlashCommand({
+      name: "heavy-processes", description: "Show what is using this host's CPU and memory",
+      argumentHint: "", context: "workspace",
+      onSubmit(command) { openMainScreen(command, MAIN_SCREEN, { tab: "processes" }); },
+    });
+    client.addSlashCommand({
+      name: "check-host", description: "Check this host's health now, then show this workspace's Hosts tab",
+      argumentHint: "", context: "workspace",
+      async onSubmit(command) {
+        await checkNow(command);
+        command.openPanel("daemon-link");
+      },
+    });
+  }
+  // A chip only when a chat needs attention (0.11.0). Host health at a glance is the sidebar row's dot and
+  // popover; no sidebar footer item, since on every app that has one the row already shows the same thing.
   const removePills = registerHealthPills(client);
   return () => { removePills(); };
+}
+
+/** Asks the daemon for a fresh health check; the screen, panel and sidebar dot then read it. A failure just opens the page as it is. */
+async function checkNow(command: { rpc?: unknown }): Promise<void> {
+  if (typeof command.rpc !== "function") return;
+  const rpc = command.rpc as (contract: typeof hostHealth, input: { refresh: boolean }) => Promise<unknown>;
+  try { await rpc.call(command, hostHealth, { refresh: true }); } catch { /* Shown on the page instead. */ }
 }

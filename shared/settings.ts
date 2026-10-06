@@ -25,7 +25,7 @@ export const HostsSettingsSchema = z.object({
   snapshotIntervalSeconds: z.number().int().min(SNAPSHOT_INTERVAL_MIN).max(SNAPSHOT_INTERVAL_MAX).default(SNAPSHOT_INTERVAL_DEFAULT),
   /** Re-check host health on the daemon on the snapshot interval, even when no app is open. */
   backgroundHealthChecks: z.boolean().default(true),
-  /** Show the per-agent composer pill summarising the workspace's dev servers and problems. */
+  /** Show a composer chip when an agent's workspace needs attention (a stopped dev server, a failed link, a job driving the load). */
   showComposerPill: z.boolean().default(true),
   /** How long a temporary browser link lives when Open creates one, and how much Extend adds. */
   tunnelMinutes: TunnelMinutesSchema.default(TUNNEL_MINUTES_DEFAULT),

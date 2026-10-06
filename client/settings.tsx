@@ -124,8 +124,8 @@ function HostsControls({ settings }: { settings: Ready }) {
             onValueChange={(backgroundHealthChecks) => save({ backgroundHealthChecks })}
           />
           <SettingsSwitch
-            label="Show the composer pill"
-            hint="A small chip under each agent's message box that counts the workspace's dev servers and flags problems. It hides itself when there is nothing to report."
+            label="Show a chip when a chat needs attention"
+            hint="A small chip under a chat's message box, only when that workspace needs you: its dev server stopped, a link failed, or one of its jobs is slowing the host down. A calm chat shows nothing."
             value={settings.values.showComposerPill}
             disabled={settings.saving}
             onValueChange={(showComposerPill) => save({ showComposerPill })}

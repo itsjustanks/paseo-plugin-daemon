@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { HealthChecker, type HealthRuntime } from "../server/health";
 import type { Snapshot } from "../shared/contracts";
-import { EMPTY_HEALTH_MEMORY, HealthVerdictSchema, PORT_GONE_TTL_MS, evaluateHealth, pillText, trackPorts, workspaceHealth, type HealthInput, type HealthVerdict } from "../shared/health";
+import { EMPTY_HEALTH_MEMORY, HealthVerdictSchema, PORT_GONE_TTL_MS, chipText, evaluateHealth, pillText, trackPorts, workspaceHealth, type HealthInput, type HealthVerdict } from "../shared/health";
 import type { LinkState, Tunnel } from "../shared/link";
 import { HOSTS_SETTINGS_DEFAULTS } from "../shared/settings";
 
@@ -127,6 +127,18 @@ describe("workspaceHealth and pillText", () => {
     // The workspace's own driver outranks the host-wide code in the chip; both stay counted.
     expect(pillText(workspaceHealth(verdict([issue("cpu-pressure", [], null, "host"), issue("pressure-driver", [3000], "~/app/.worktrees/feature")]), target))).toBe("Driving host pressure +1");
     expect(pillText(workspaceHealth(verdict([issue("pressure-driver", [3001], "~/app/.worktrees/other")]), target))).toBeNull();
+  });
+  it("chipText: attention only, never a count of healthy dev servers or a host-wide issue", () => {
+    const here = "~/app/.worktrees/feature";
+    expect(chipText(workspaceHealth(verdict([], [{ name: "next", cwd: here, ports: [3000], project: null }]), target))).toBeNull();
+    expect(chipText(workspaceHealth(verdict([issue("cpu-pressure", [], null, "host"), issue("memory-pressure", [], null, "host", "critical"), issue("projects-unavailable", [], null, "host")]), target))).toBeNull();
+    expect(chipText(workspaceHealth(verdict([issue("host-unreachable", [], null, "host", "critical")]), target))).toBeNull();
+    expect(chipText(workspaceHealth(verdict([issue("port-gone", [3000], here)]), target))).toBe("Dev server :3000 stopped");
+    expect(chipText(workspaceHealth(verdict([issue("port-gone", [3000], here), issue("tunnel-failed", [3000], null, "process", "critical")]), target))).toBe("Browser link :3000 failed +1");
+    expect(chipText(workspaceHealth(verdict([issue("link-retrying", [3000], here)]), target))).toBe("Forward :3000 down");
+    expect(chipText(workspaceHealth(verdict([issue("cpu-pressure", [], null, "host"), issue("pressure-driver", [3000], here)]), target))).toBe("Driving host load");
+    expect(chipText(workspaceHealth(verdict([issue("process-zombie", [3000], here)]), target))).toBeNull();
+    expect(chipText(workspaceHealth(verdict([issue("pressure-driver", [3001], "~/app/.worktrees/other")]), target))).toBeNull();
   });
 });
 

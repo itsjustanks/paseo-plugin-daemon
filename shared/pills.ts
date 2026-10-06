@@ -2,28 +2,31 @@
  * The Hosts chip on each live agent's composer, as a registry with
  * everything it touches passed in, so it can be tested without an app.
  *
- * A chip exists only while the agent's workspace has something to report (a
- * verified dev server, or an issue that touches it). Paseo 0.8.0 stable and
+ * A chip exists only while the agent's workspace needs attention: its dev
+ * server stopped, a link to it failed, or a job in it drives the host's load. Paseo 0.8.0 stable and
  * later take a chip as a `button` and hand back `{ update, remove }`; the old
  * shape (a React `Component`, from the 0.8.0-beta.1 SDK) throws there, so on
  * 0.9 and 0.11 apps no chip ever showed. With buttons the label is a string
  * this registry pushes; on an app that still takes the component, the
  * component draws its own label and `update` does nothing.
  */
-import { pillText, workspaceHealth, type HealthStatus, type HealthVerdict } from "./health";
+import { chipIssues, chipText, workspaceHealth, type HealthVerdict } from "./health";
 import type { WorkspaceTarget } from "./workspace-filter";
 
 export type PillAgent = { id: string; workspaceId: string };
 export type PillFace = { label: string; icon: string };
 export type PillHandle = { update(face: PillFace): void; remove(): void };
 
-const ICONS: Record<HealthStatus, string> = { ok: "Server", warning: "TriangleAlert", critical: "CircleAlert", unknown: "Server" };
-
-/** What the chip says and shows for one workspace, or null when there is nothing worth a chip. */
+/**
+ * What the chip says and shows for one workspace, or null when the chat needs
+ * no attention (0.11.0: a calm workspace, even one with dev servers running,
+ * gets no chip; host-wide trouble is the sidebar dot's job).
+ */
 export function pillFace(verdict: HealthVerdict, target: WorkspaceTarget): PillFace | null {
   const health = workspaceHealth(verdict, target);
-  const label = pillText(health);
-  return label === null ? null : { label, icon: ICONS[health.status] };
+  const label = chipText(health);
+  if (label === null) return null;
+  return { label, icon: chipIssues(health).some((issue) => issue.severity === "critical") ? "CircleAlert" : "TriangleAlert" };
 }
 
 export type PillDeps = {

@@ -217,7 +217,7 @@ function WorkspaceBody({ hostId, workspaceId, intervalSeconds, minutes, settings
               <>
                 {!available && links.data ? (
                   <Notice icon="Globe" tone="warning" action={<Button label={opener.installing ? "Setting up…" : "Set up browser links"} variant="primary" loading={opener.installing} disabled={opener.installing} onPress={() => opener.installLinks()} />}>
-                    Open needs the link helper on this host once. No Cloudflare account, domain or SSH password is needed. For a private route instead, use Hosts → Connect.
+                    Open needs the link helper on this host once. No Cloudflare account, domain or SSH password is needed. To open it privately on your own computer instead, use Hosts → Dev servers → Open privately on your own computer.
                   </Notice>
                 ) : null}
                 <Grid min={300}>

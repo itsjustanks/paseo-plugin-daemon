@@ -7,14 +7,15 @@ import type { HealthVerdict } from "../shared/health";
 import type { ProcessReport } from "../shared/processes";
 import { hostsSettings } from "../shared/settings";
 import { seconds, watchId, watchSuggestions, type WatchResult } from "../shared/watch";
-import { OverviewGuide, type SetupCheck } from "./guide";
-import { Button, Disclosure, Dot, HeroCard, HostIcon, Meta, QuietLine, Row, SPACE, StatusLine, TYPE, toneColor, type Tone } from "./kit";
-import type { TabId } from "./navigation";
+import type { Fold, TabId } from "../shared/tabs";
+import { formatMinutes } from "../shared/tunnel-lease";
+import { Checks, type SetupCheck } from "./guide";
+import { Accordion, AccordionItem, Button, Dot, Fact, HeroCard, HostIcon, Meta, QuietLine, Row, SPACE, StatusLine, TYPE, toneColor, type Tone } from "./kit";
 import { memoryWords, shareTone, type Say } from "./processes";
 import { formatBytes } from "./ui";
 
 type Theme = PluginTheme;
-type Go = (tab: TabId) => void;
+type Go = (tab: TabId, fold?: Fold) => void;
 
 const WATCH_TONE: Record<WatchResult["state"], Tone> = { up: "success", slow: "warning", down: "danger", unknown: "neutral" };
 const PROCESS_CODES = new Set(["memory-pressure", "cpu-pressure", "too-many-jobs", "runaway", "pressure-driver", "process-zombie"]);
@@ -79,13 +80,41 @@ function WatchSuggestion({ theme, hostId, say }: { theme: Theme; hostId: string;
   );
 }
 
+/** One word for how the watched services are doing, for the hero row and its fold-out. */
+function watchedWords(watched: readonly WatchResult[]): { value: string; tone: Tone } {
+  const slow = watched.filter((service) => service.state === "slow" || service.state === "down");
+  if (slow.length) return { value: `${slow.map((service) => service.name).join(", ")} ${slow.length === 1 ? (slow[0]!.state === "down" ? "down" : "slow") : "need attention"}`, tone: slow.some((service) => service.state === "down") ? "danger" : "warning" };
+  if (watched.every((service) => service.state === "up")) return { value: `All ${watched.length} answering`, tone: "success" };
+  return { value: "Checking…", tone: "neutral" };
+}
+
+/** Overview's "Technical details": the schedule, limits and where things are written. */
+function TechnicalDetails({ theme, verdict, report }: { theme: Theme; verdict: HealthVerdict | undefined; report: ProcessReport | undefined }) {
+  const settings = useSettings(hostsSettings);
+  const values = settings.status === "ready" ? settings.values : null;
+  return (
+    <>
+      {values ? <Fact theme={theme} label="Checks every" value={`${values.snapshotIntervalSeconds} seconds${values.backgroundHealthChecks ? ", even with Paseo closed" : ", while Hosts is open"}`} /> : null}
+      {values ? <Fact theme={theme} label="Heavy-job limit" value={`${values.maxHeavyJobs} at once`} /> : null}
+      {values ? <Fact theme={theme} label="Browser links last" value={formatMinutes(values.tunnelMinutes)} /> : null}
+      {report ? <Fact theme={theme} label="Memory measured" value={report.memoryBasis === "container" ? "against this container's limit" : "against the whole machine"} /> : null}
+      {report ? <Fact theme={theme} label="Processes" value={`${report.total} running · Paseo uses ${formatBytes(report.paseoBytes)}`} /> : null}
+      {verdict ? <Fact theme={theme} label="Last checked" value={new Date(verdict.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })} /> : null}
+      <Fact theme={theme} label="Stop log" value="$PASEO_HOME/daemon-link/actions.jsonl" />
+      <Fact theme={theme} label="Summary for other plugins" value="$PASEO_HOME/daemon-link/host-summary.json" />
+      <Meta theme={theme}>Change the schedule and limits under Settings → Hosts.</Meta>
+    </>
+  );
+}
+
 /**
  * Overview is live status and actions only: the hero says the state in
- * words, then at most four rows, the last stop, and two buttons. The teaching
- * lives in one "How it works" disclosure under it, open until setup is done.
+ * words, then at most four rows, the last stop, and two buttons. Watched
+ * services, setup checks and technical details fold out below it (0.11.0);
+ * the teaching moved to Help.
  */
-export function OverviewTab({ theme, compact, hostId, host, verdict, report, devServers, liveLinks, setupDone, checks, go, say, onCheck, checking }: {
-  theme: Theme; compact: boolean; hostId: string; host: string;
+export function OverviewTab({ theme, compact, hostId, verdict, report, devServers, liveLinks, setupDone, checks, go, say, onCheck, checking }: {
+  theme: Theme; compact: boolean; hostId: string;
   verdict: HealthVerdict | undefined; report: ProcessReport | undefined;
   devServers: number; liveLinks: number; setupDone: boolean; checks: readonly SetupCheck[];
   go: Go; say: Say; onCheck(): void; checking: boolean;
@@ -96,6 +125,8 @@ export function OverviewTab({ theme, compact, hostId, host, verdict, report, dev
   const memory = report ? memoryWords(report) : null;
   const jobs = report?.heavyJobs;
   const slow = watched.filter((service) => service.state === "slow" || service.state === "down");
+  const watchedNow = watchedWords(watched);
+  const pending = checks.filter((check) => check.state !== "ready" && check.state !== "optional").length;
   const last = report?.recentActions[0];
   const primary: "processes" | "servers" | "check" = processIssue ? "processes" : slow.length ? "check" : devServers ? "servers" : "processes";
   return (
@@ -105,9 +136,8 @@ export function OverviewTab({ theme, compact, hostId, host, verdict, report, dev
           {memory ? <StatusLine theme={theme} label="Memory" value={`${formatBytes(memory.used)} of ${formatBytes(memory.limit)}`} tone={shareTone(memory.percent)} hint={report?.memoryBasis === "container" ? "this container's limit" : "whole machine"} action={{ label: "Processes", onPress: () => go("processes") }} /> : null}
           {jobs ? <StatusLine theme={theme} label="Heavy jobs" value={`${jobs.count} of ${jobs.limit}`} tone={jobs.count > jobs.limit ? "warning" : "success"} hint={jobs.count ? "builds, tests and dev servers" : null} /> : null}
           <StatusLine theme={theme} label="Dev servers" value={devServers ? `${devServers} running` : "None running"} tone={devServers ? "success" : "neutral"} hint={liveLinks ? `${liveLinks} browser link${liveLinks === 1 ? "" : "s"} open` : null} action={{ label: "Dev servers", onPress: () => go("servers") }} />
-          {watched.length ? <StatusLine theme={theme} label="Watched services" value={slow.length ? `${slow.map((service) => service.name).join(", ")} ${slow.length === 1 ? (slow[0]!.state === "down" ? "down" : "slow") : "need attention"}` : watched.every((service) => service.state === "up") ? `All ${watched.length} answering` : "Checking…"} tone={slow.some((service) => service.state === "down") ? "danger" : slow.length ? "warning" : watched.every((service) => service.state === "up") ? "success" : "neutral"} /> : null}
+          {watched.length ? <StatusLine theme={theme} label="Watched services" value={watchedNow.value} tone={watchedNow.tone} /> : null}
         </View>
-        {watched.length ? <Disclosure theme={theme} quiet label="Show each watched service" openLabel="Hide watched services"><WatchedList theme={theme} watched={watched} /></Disclosure> : null}
         {last ? (
           <Row>
             {HostIcon ? <HostIcon name="History" size={16} color={theme.colors.foregroundMuted} /> : null}
@@ -120,7 +150,20 @@ export function OverviewTab({ theme, compact, hostId, host, verdict, report, dev
           {primary !== "servers" ? <Button theme={theme} label="Check again" icon="RefreshCw" primary={primary === "check"} busy={checking} onPress={onCheck} /> : null}
         </Row>
       </HeroCard>
-      <OverviewGuide theme={theme} compact={compact} go={go} host={host} checks={checks} onRefresh={onCheck} open={!setupDone} />
+      <Accordion theme={theme}>
+        {watched.length ? (
+          <AccordionItem theme={theme} compact={compact} icon="Activity" title="Watched services" summary={`${watched.length} watched · ${watchedNow.value.toLowerCase()}`} tone={watchedNow.tone === "success" ? undefined : watchedNow.tone} open={slow.length > 0}>
+            <WatchedList theme={theme} watched={watched} />
+            <Meta theme={theme}>Add or remove them under Settings → Hosts → Watched services.</Meta>
+          </AccordionItem>
+        ) : null}
+        <AccordionItem key={setupDone ? "done" : "todo"} theme={theme} compact={compact} icon="ListChecks" title="Setup checks" summary={pending ? `${pending} still to do` : "Everything Hosts needs is in place"} open={!setupDone}>
+          <Checks theme={theme} checks={checks} onRefresh={onCheck} />
+        </AccordionItem>
+        <AccordionItem theme={theme} compact={compact} icon="SlidersHorizontal" title="Technical details" summary="How often it checks, the limits, and where it writes">
+          <TechnicalDetails theme={theme} verdict={verdict} report={report} />
+        </AccordionItem>
+      </Accordion>
       {!watched.some((service) => /\/api\/health\/ping$/.test(service.target)) ? <WatchSuggestion theme={theme} hostId={hostId} say={say} /> : null}
     </>
   );

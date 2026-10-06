@@ -23,8 +23,10 @@ const SHOTS = {
   "processes-busy": { query: "busy", press: ["Processes"] },
   "processes-confirm": { query: "busy", press: ["Processes"], after: "confirm" },
   servers: { query: "", press: ["Dev servers"] },
-  connect: { query: "", press: ["Connect"] },
-  sync: { query: "", press: ["Project Sync"] },
+  help: { query: "", press: ["Help"] },
+  // 0.10's Connect and Project Sync tabs: old links land on Dev servers with that fold-out open.
+  "link-connect": { query: "tab=connect", press: [] },
+  "link-sync": { query: "tab=sync", press: [] },
   "overview-mac": { query: "mac", press: [] },
   panel: { query: "view=panel", press: [] },
   "panel-busy": { query: "view=panel&busy", press: [] },

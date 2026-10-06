@@ -5,7 +5,7 @@ import { useRpc } from "@getpaseo/plugin/client";
 import { Modal } from "@getpaseo/plugin/client/react-native";
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
 import { processPreview, processReport, processStop, type ActionLogEntry, type ProcessReport, type ProcessRow, type ReportSort, type StopPlan } from "../shared/processes";
-import { Banner, Button, Card, Chip, Disclosure, Divider, HostIcon, ItemTitle, Meta, Note, QuietLine, RADIUS, Row, SPACE, TYPE, tint, toneColor, type Tone } from "./kit";
+import { Accordion, AccordionItem, Banner, Button, Card, Chip, Divider, HostIcon, ItemTitle, Meta, Note, QuietLine, RADIUS, Row, SPACE, TYPE, tint, toneColor, type Tone } from "./kit";
 import { formatBytes, formatDuration, formatPercent } from "./ui";
 
 type Theme = PluginTheme;
@@ -191,23 +191,19 @@ function ProcessItem({ theme, row, compact, byTree, selected, onSelect, onStop, 
 
 const ACTION_WORD: Record<ActionLogEntry["action"], string> = { stop: "Asked to stop", "force-stop": "Force stopped", "auto-force-stop": "Stopped forcefully" };
 
-/** Every stop, newest first, from this host's action log. */
+/** Every stop, newest first, from this host's action log: the content of the "Recent stops" fold-out. */
 function RecentStops({ theme, entries }: { theme: Theme; entries: readonly ActionLogEntry[] }) {
-  if (entries.length === 0) return null;
+  if (entries.length === 0) return <Note theme={theme}>Nothing has been stopped from Hosts yet.</Note>;
   return (
-    <View style={{ marginBottom: SPACE.section }}>
-      <Disclosure theme={theme} quiet label={`Recent stops (${entries.length})`} openLabel="Hide recent stops">
-        <Card theme={theme} flush>
-          {entries.map((entry, index) => (
-            <View key={`${entry.at}-${index}`} style={{ gap: SPACE.hair }}>
-              {index > 0 ? <Divider theme={theme} /> : null}
-              <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${ACTION_WORD[entry.action]}: ${entry.name}${entry.pid ? ` (PID ${entry.pid})` : ""}`}</Text>
-              <Meta theme={theme}>{[new Date(entry.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }), entry.owner, entry.status === "signaled" ? `${entry.signaled} process${entry.signaled === 1 ? "" : "es"} signalled` : entry.status.replace(/-/g, " ")].filter(Boolean).join(" · ")}</Meta>
-            </View>
-          ))}
-        </Card>
-      </Disclosure>
-    </View>
+    <>
+      {entries.map((entry, index) => (
+        <View key={`${entry.at}-${index}`} style={{ gap: SPACE.hair }}>
+          {index > 0 ? <Divider theme={theme} /> : null}
+          <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${ACTION_WORD[entry.action]}: ${entry.name}${entry.pid ? ` (PID ${entry.pid})` : ""}`}</Text>
+          <Meta theme={theme}>{[new Date(entry.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }), entry.owner, entry.status === "signaled" ? `${entry.signaled} process${entry.signaled === 1 ? "" : "es"} signalled` : entry.status.replace(/-/g, " ")].filter(Boolean).join(" · ")}</Meta>
+        </View>
+      ))}
+    </>
   );
 }
 
@@ -330,9 +326,16 @@ export function ProcessesTab({ theme, compact, hostId, say }: { theme: Theme; co
           {data.matched > rows.length ? <Button theme={theme} label="Show more" onPress={() => setLimit(limit + PAGE)} /> : null}
         </View>
       </Card>
-      <RecentStops theme={theme} entries={data.recentActions} />
       {!data.projectsVerified ? <QuietLine theme={theme} icon="ShieldAlert">Paseo projects aren't verified on this host right now, so workspace names are missing and only processes started from Paseo can be stopped.</QuietLine> : null}
-      <QuietLine theme={theme} icon="ShieldCheck">Only processes started from Paseo or running inside your Paseo projects can be stopped here. Paseo itself, its plugins, agents, terminals and databases never are. Nothing is ever stopped without asking.</QuietLine>
+      <Accordion theme={theme}>
+        <AccordionItem theme={theme} compact={compact} icon="History" title="Recent stops" summary={data.recentActions.length ? `${data.recentActions.length} logged · last: ${data.recentActions[0]!.name}` : "None yet"}>
+          <RecentStops theme={theme} entries={data.recentActions} />
+        </AccordionItem>
+        <AccordionItem theme={theme} compact={compact} icon="ShieldCheck" title="What can be stopped here" summary="Only your own projects' jobs, and always after asking">
+          <Note theme={theme}>Only processes started from Paseo or running inside your Paseo projects can be stopped here. Paseo itself, its plugins, agents, terminals and databases never are. Nothing is ever stopped without asking.</Note>
+          <Meta theme={theme}>A stop asks the process to finish first and forces it only if it is still running after the grace period. Each one is written to $PASEO_HOME/daemon-link/actions.jsonl, without command lines.</Meta>
+        </AccordionItem>
+      </Accordion>
       <StopSheet theme={theme} plan={plan} busy={confirm.isPending} onCancel={() => setPlan(null)} onConfirm={() => confirm.mutate()} />
     </>
   );

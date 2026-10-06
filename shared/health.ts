@@ -257,3 +257,32 @@ export function pillText(health: WorkspaceHealth): string | null {
   const ports = health.ports.length > 0 ? ` :${health.ports.slice(0, 3).join(" :")}${health.ports.length > 3 ? "…" : ""}` : "";
   return `${health.services.length} dev server${health.services.length === 1 ? "" : "s"}${ports}`;
 }
+
+/**
+ * What makes one workspace's chat need attention (0.11.0): its dev server
+ * stopped, a link to it failed, or a job in it is driving the host's load.
+ * Host-wide trouble (memory, CPU, a watched service, an unreachable host)
+ * belongs to the sidebar row's dot, so it never puts a chip in every chat.
+ */
+export const CHIP_CODES: ReadonlySet<HealthIssueCode> = new Set<HealthIssueCode>(["port-gone", "tunnel-failed", "link-retrying", "link-down", "pressure-driver", "runaway"]);
+
+/** The issues that earn this workspace a chip, most urgent first. */
+export function chipIssues(health: WorkspaceHealth): HealthIssue[] {
+  return health.issues
+    .filter((issue) => issue.scope === "process" && CHIP_CODES.has(issue.code))
+    .sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "critical" ? -1 : 1));
+}
+
+/** The chip's words, or null when the workspace is calm. Never a count of healthy dev servers. */
+export function chipText(health: WorkspaceHealth): string | null {
+  const issues = chipIssues(health);
+  const first = issues[0];
+  if (!first) return null;
+  const more = issues.length > 1 ? ` +${issues.length - 1}` : "";
+  const port = first.ports[0] !== undefined ? ` :${first.ports[0]}` : "";
+  if (first.code === "port-gone") return `Dev server${port} stopped${more}`;
+  if (first.code === "tunnel-failed") return `Browser link${port} failed${more}`;
+  if (first.code === "link-retrying" || first.code === "link-down") return `Forward${port} down${more}`;
+  if (first.code === "runaway") return `Runaway: ${first.subject ?? "process"}${more}`;
+  return `Driving host load${more}`;
+}

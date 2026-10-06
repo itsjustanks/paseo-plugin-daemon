@@ -1,11 +1,11 @@
 import React, { useState } from "react";
 import { Text, View, type LayoutChangeEvent } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
-import type { TabId } from "./navigation";
-import { Bullets, Button, Card, Disclosure, Divider, HostIcon, IconBadge, Link, Meta, RADIUS, Row, SectionTitle, SPACE, TYPE, tint, toneColor } from "./kit";
+import type { Fold, TabId } from "../shared/tabs";
+import { Accordion, AccordionItem, Button, Card, Divider, HostIcon, IconBadge, Link, Meta, RADIUS, Row, SectionTitle, SPACE, TYPE, tint, toneColor } from "./kit";
 
 type Theme = PluginTheme;
-type Go = (tab: TabId) => void;
+type Go = (tab: TabId, fold?: Fold) => void;
 
 export interface SetupCheck { state: "ready" | "pending" | "optional" | "error"; title: string; detail: string }
 
@@ -124,9 +124,10 @@ const CHECK_ICON: Record<SetupCheck["state"], { icon: string; tone: "success" | 
   ready: { icon: "CircleCheck", tone: "success" }, error: { icon: "CircleAlert", tone: "danger" }, pending: { icon: "Circle", tone: "neutral" }, optional: { icon: "Circle", tone: "neutral" },
 };
 
-function Checks({ theme, host, checks, onRefresh }: { theme: Theme; host: string; checks: readonly SetupCheck[]; onRefresh(): void }) {
+/** This host's setup checks, for Overview's "Setup checks" fold-out. */
+export function Checks({ theme, checks, onRefresh }: { theme: Theme; checks: readonly SetupCheck[]; onRefresh(): void }) {
   return (
-    <Part theme={theme} title={`Checks for ${host}`} icon="ListChecks">
+    <>
       {checks.map((check) => (
         <View key={check.title} style={{ flexDirection: "row", alignItems: "flex-start", gap: SPACE.row }}>
           {HostIcon ? <View style={{ paddingTop: SPACE.hair }}><HostIcon name={CHECK_ICON[check.state].icon} size={18} color={CHECK_ICON[check.state].tone === "neutral" ? theme.colors.foregroundMuted : toneColor(theme, CHECK_ICON[check.state].tone)} /></View> : null}
@@ -137,20 +138,7 @@ function Checks({ theme, host, checks, onRefresh }: { theme: Theme; host: string
         </View>
       ))}
       <Row><Button theme={theme} label="Run checks again" icon="RefreshCw" onPress={onRefresh} /></Row>
-    </Part>
-  );
-}
-
-function Troubleshooting({ theme }: { theme: Theme }) {
-  return (
-    <Part theme={theme} title="If something doesn't appear" icon="LifeBuoy">
-      <Bullets theme={theme} icon="ChevronRight" items={[
-        "A dev server shows only when it runs inside a project registered in Paseo, from that project's folder. A custom server needs a Paseo service script with its port.",
-        "Register each project folder separately: your home folder or the whole disk is too broad and is ignored.",
-        "After the daemon restarts, open Hosts on that host once so it can read its projects again.",
-        "A private link needs both hosts online with Daemon Link running. If it won't connect, use a browser link or your SSH keys instead.",
-      ]} />
-    </Part>
+    </>
   );
 }
 
@@ -183,30 +171,116 @@ function Glossary({ theme }: { theme: Theme }) {
   );
 }
 
+type Question = { icon: string; question: string; answer: readonly string[]; action?: { label: string; tab: TabId; fold?: Fold } };
+
+/** Help's plain questions (0.11.0), each folded; what "What you can do here" and the troubleshooting list used to say. */
+export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
+  return [
+    {
+      icon: "Globe", question: "How do I open my app in a browser?",
+      answer: [
+        "Start its dev command (such as npm run dev) in that project's terminal in Paseo. It appears under Dev servers with an Open button.",
+        `Open makes a temporary web address that works on any device, including your phone, with nothing to install. It lasts ${minutes} and can be extended; anyone with the address can see the app until then. The first time, Hosts asks to set up the link helper once. No account is needed.`,
+      ],
+      action: { label: "Open Dev servers", tab: "servers" },
+    },
+    {
+      icon: "Laptop", question: "Can I open it privately, only on my own computer?",
+      answer: [
+        "Yes. Pair this host with your own computer once (both need Paseo and Hosts), and its dev servers open at 127.0.0.1 on your computer. Nothing is published.",
+        "Already reach this host with SSH keys? Save an SSH forward instead. Both live under Dev servers.",
+      ],
+      action: { label: "Pair my computer", tab: "servers", fold: "private" },
+    },
+    {
+      icon: "SearchX", question: "My dev server isn't listed",
+      answer: [
+        "It shows only when it runs inside a project registered in Paseo, from that project's folder. A custom server needs a Paseo service script with its port.",
+        "Register each project folder on its own: your home folder or the whole disk is too broad and is ignored.",
+        "After the daemon restarts, open Hosts on that host once so it can read its projects again. Overview's Setup checks show what's missing.",
+      ],
+      action: { label: "See setup checks", tab: "overview" },
+    },
+    {
+      icon: "Gauge", question: "This computer feels slow. What's going on?",
+      answer: [
+        "Open Processes. The heaviest jobs are at the top, with the workspace or dev server that started each one. A job stuck at full CPU, memory near the limit, or too many builds at once are flagged in plain words.",
+        "To stop one, select it and press Stop. You see exactly what will stop, children included, before anything happens.",
+      ],
+      action: { label: "See processes", tab: "processes" },
+    },
+    {
+      icon: "ShieldCheck", question: "What can and can't be stopped?",
+      answer: [
+        "Only processes started from Paseo or running inside your Paseo projects. Paseo itself, its plugins, agents, terminals and databases never can be. Nothing is ever stopped automatically.",
+        "A stop asks first, waits a few seconds, and only then forces it. Every stop is listed under Processes → Recent stops.",
+      ],
+    },
+    {
+      icon: "FolderSync", question: "How do I copy a project from another computer?",
+      answer: [
+        "Pair the two computers first. On the one that has the project, allow that pairing to download it. Then, on this one, preview the project and receive it into a new folder.",
+        "Only committed Git history is copied (up to 32 MiB). Uncommitted files, chats and Git LFS files are not.",
+      ],
+      action: { label: "Copy a project", tab: "servers", fold: "sync" },
+    },
+    {
+      icon: "Activity", question: "Can Hosts tell me when a service is slow or down?",
+      answer: [
+        "Yes. Add its health address under Settings → Hosts → Watched services. Hosts checks it on its schedule; a slow or failing answer turns the sidebar dot amber or red.",
+        "When the AI Router plugin is set up here, Overview offers to watch its OmniRoute in one press.",
+      ],
+    },
+    {
+      icon: "MessageSquareWarning", question: "What's the small chip under my message box?",
+      answer: [
+        "It appears only when that chat's workspace needs you: its dev server stopped, a browser link or forward failed, or one of its jobs is slowing the host down. Press it to see the details. A calm chat shows nothing.",
+        "Turn it off under Settings → Hosts.",
+      ],
+    },
+    {
+      icon: "Zap", question: "Is there a quicker way to check?",
+      answer: [
+        "The dot beside Hosts in the sidebar is green when all is calm. Press it for a quick check without opening this page.",
+        `In the Command Center: Open Hosts, Show heavy processes, and Check host now.${shortcuts ? " In a chat's message box: /daemon-link opens this workspace's Hosts tab, /heavy-processes shows the heaviest jobs, and /check-host checks now." : ""}`,
+      ],
+    },
+    {
+      icon: "WifiOff", question: "A private link won't connect",
+      answer: [
+        "Both computers must be online with Hosts running. If it still won't connect, use a browser link or your SSH keys instead.",
+      ],
+      action: { label: "Open private links", tab: "servers", fold: "private" },
+    },
+  ];
+}
+
 /**
- * Everything Overview teaches, in one card behind "New to Hosts? How it
- * works": what it is, how it works, how to use it, this host's checks,
- * troubleshooting and the words. Open while setup is unfinished; folded once
- * everything works.
+ * The Help tab (0.11.0): plain questions first, each folded, then the
+ * walkthrough that used to sit behind Overview's "New to Hosts? How it works".
  */
-export function OverviewGuide({ theme, compact, go, host, checks, onRefresh, open }: { theme: Theme; compact: boolean; go: Go; host: string; checks: readonly SetupCheck[]; onRefresh(): void; open: boolean }) {
+export function HelpTab({ theme, compact, go, minutes, shortcuts }: { theme: Theme; compact: boolean; go: Go; minutes: string; shortcuts: boolean }) {
   return (
-    <View style={{ marginBottom: SPACE.section }}>
-      <Disclosure key={open ? "open" : "closed"} theme={theme} label="New to Hosts? How it works" openLabel="Hide how Hosts works" initiallyOpen={open}>
-        <Card theme={theme} flush>
-          <WhatIs theme={theme} />
-          <Divider theme={theme} />
-          <HowItWorks theme={theme} compact={compact} />
-          <Divider theme={theme} />
-          <HowToUse theme={theme} go={go} />
-          <Divider theme={theme} />
-          <Checks theme={theme} host={host} checks={checks} onRefresh={onRefresh} />
-          <Divider theme={theme} />
-          <Troubleshooting theme={theme} />
-          <Divider theme={theme} />
-          <Glossary theme={theme} />
-        </Card>
-      </Disclosure>
+    <View style={{ gap: SPACE.row }}>
+      <SectionTitle theme={theme} icon="CircleHelp">Common questions</SectionTitle>
+      <Accordion theme={theme}>
+        {helpQuestions(minutes, shortcuts).map((item) => (
+          <AccordionItem key={item.question} theme={theme} compact={compact} icon={item.icon} title={item.question}>
+            {item.answer.map((line) => <Text key={line} style={{ ...TYPE.body, color: theme.colors.foreground }}>{line}</Text>)}
+            {item.action ? <Row><Button theme={theme} label={item.action.label} onPress={() => go(item.action!.tab, item.action!.fold)} /></Row> : null}
+          </AccordionItem>
+        ))}
+      </Accordion>
+      <SectionTitle theme={theme} icon="BookOpen">How Hosts works</SectionTitle>
+      <Card theme={theme}>
+        <WhatIs theme={theme} />
+        <Divider theme={theme} />
+        <HowItWorks theme={theme} compact={compact} />
+        <Divider theme={theme} />
+        <HowToUse theme={theme} go={go} />
+        <Divider theme={theme} />
+        <Glossary theme={theme} />
+      </Card>
     </View>
   );
 }
