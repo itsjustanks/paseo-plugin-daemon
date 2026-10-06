@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.12.0 — 2026-10-06
+
+The theme of this release: from "something is wrong" to "an agent is on it" in two presses, because
+the user's aim for Hosts is fixing the outages they have had before. Everything is feature-detected
+and sits in the existing rows; there are no new tabs.
+
+- **Ask an agent.** Beside a runaway process (the Processes banner, and any flagged row), a dev
+  server that stopped serving, or a watched service that is slow or down (Overview's new "What needs
+  attention" row, and the workspace panel's Health card), "Ask an agent" opens a sheet. Pick a chat
+  in that workspace (it is offered first), another recent chat, or start a new chat there with the
+  provider and model of your latest one. The sheet shows the exact message before anything is sent:
+  what's wrong, CPU, memory, how long it has run, the command, the host's load, the last 50 lines of
+  the dev server's output when Hosts can find them, and a suggested next step. It asks the agent to
+  check before stopping, restarting or deleting anything. Nothing is sent until Send.
+- **Busy agents are steered, not interrupted.** Messages go with `activeTurnBehavior: "steer"`. Every
+  client since 0.8 forwards that option; only the handle's type gained it in 0.11.0-beta.1, so it is
+  passed through a local type.
+- **Finding the output, without guessing.** A Paseo service script on that port names its own
+  terminal; otherwise a terminal in the server's folder is used only if its recent output names the
+  port or the program. When neither is found the message says so rather than guess.
+- **No secrets.** The daemon builds the message (`daemon-link.ask.context`). Commands are the
+  Processes tab's redacted ones, and every output line passes the new `redactText` (secret flags and
+  env names, URL credentials, secret query parameters, JSON properties, headers, known token formats,
+  home paths as `~`). Tested against the synthetic credentials suite.
+- **Hosts attachments** (`addAttachmentSource`, Paseo 0.8+). "Hosts" in the message box's attach menu
+  offers Heavy processes now, What needs attention, each dev server's recent output, each stopped dev
+  server, and each watched service's recent checks (`daemon-link.attachments.search`, searchable by
+  word). Output is read for at most four dev servers per search.
+- **Open a terminal here.** Each dev server's card (Dev servers tab and workspace panel) can open a
+  Paseo terminal in its folder, inside its workspace, and then show that workspace
+  (`daemon-link.terminal.open`). Never outside a Paseo workspace.
+- **Help** gains "Can an agent help fix it?". Health issues carry the process `pid` they are about
+  (optional, so older readers are unaffected). Fixed: the Watched services row no longer lowercases
+  service names.
+- **Tests.** `tests/ask.test.ts`: the message, every next step, output tails, output redaction, the
+  context for a runaway, a stopped server (terminal found, service script preferred, an unrelated
+  terminal ignored) and a watched service, attachments, and terminals only inside a workspace.
+  `tests/ask-preview.mjs` drives the sheet in the preview: steer to a busy chat, a new chat, Cancel,
+  and both buttons absent without a Paseo session.
+- `requirements.paseo` is unchanged and no dependencies were added.
+
 ## 0.11.0 — 2026-10-06
 
 The theme of this release: Hosts for someone who has never heard of a port. The user found the

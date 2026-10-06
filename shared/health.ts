@@ -53,6 +53,8 @@ export const HealthIssueSchema = z.object({
   cwd: z.string().nullable(),
   /** A short name for chips: the watched service or process the issue is about. */
   subject: z.string().nullable().optional(),
+  /** The process the issue is about, when it is about one (0.12.0: "Ask an agent" finds it by this). */
+  pid: z.number().int().nullable().optional(),
 });
 export type HealthIssue = z.infer<typeof HealthIssueSchema>;
 
@@ -133,7 +135,7 @@ export function evaluateHealth(input: HealthInput, memory: HealthMemory = EMPTY_
     else if (snapshot.memory.pressure === "critical") issues.push(host("memory-pressure", "warning", "Memory pressure on the host is critical."));
     for (const runaway of runaways) {
       if (runaway.code === "too-many-jobs") issues.push(host("too-many-jobs", "warning", runaway.title));
-      if (runaway.code === "cpu-runaway" || runaway.code === "memory-heavy") issues.push({ ...process_("runaway", runaway.severity, runaway.title, [], runaway.cwd), subject: runaway.title.split(" (PID")[0] ?? null });
+      if (runaway.code === "cpu-runaway" || runaway.code === "memory-heavy") issues.push({ ...process_("runaway", runaway.severity, runaway.title, [], runaway.cwd), subject: runaway.title.split(" (PID")[0] ?? null, pid: runaway.pids[0] ?? null });
     }
     services = snapshot.services.map((service) => ({ name: service.name, cwd: service.cwd, ports: service.ports, project: service.project ? { path: service.project.path, workspace: service.project.workspace } : null }));
     // A dev server is in both lists; report each process once.
@@ -142,12 +144,12 @@ export function evaluateHealth(input: HealthInput, memory: HealthMemory = EMPTY_
       const key = `${process.pid}:${process.name}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      if (process.state === "zombie") issues.push(process_("process-zombie", "warning", `${process.name} (PID ${process.pid}) is a zombie process.`, process.ports, process.cwd));
+      if (process.state === "zombie") issues.push({ ...process_("process-zombie", "warning", `${process.name} (PID ${process.pid}) is a zombie process.`, process.ports, process.cwd), pid: process.pid });
       // The collector only awards `pressure-driver` to a top-3 CPU or memory user while the host
       // is under matching pressure, so this is attribution, not a busy host's echo.
       if (process.impact === "pressure-driver") {
         const kind = process.reasons.some((reason) => reason.startsWith("top memory")) ? "memory" : "CPU";
-        issues.push(process_("pressure-driver", "warning", `${process.name} (PID ${process.pid}) is a top ${kind} user while the host is under ${kind} pressure.`, process.ports, process.cwd));
+        issues.push({ ...process_("pressure-driver", "warning", `${process.name} (PID ${process.pid}) is a top ${kind} user while the host is under ${kind} pressure.`, process.ports, process.cwd), pid: process.pid });
       }
     }
     if (snapshot.scope?.status !== "unavailable") next = trackPorts(snapshot, memory, now);
@@ -274,6 +276,17 @@ export function chipIssues(health: WorkspaceHealth): HealthIssue[] {
 }
 
 /** The chip's words, or null when the workspace is calm. Never a count of healthy dev servers. */
+/** Issues an agent can be asked about (0.12.0), and how to point at them. */
+export function askSubjectFor(issue: HealthIssue, watched: readonly { id: string; name: string }[] = []): { kind: "process"; pid: number } | { kind: "port"; port: number } | { kind: "service"; id: string } | null {
+  if ((issue.code === "runaway" || issue.code === "pressure-driver") && issue.pid) return { kind: "process", pid: issue.pid };
+  if (issue.code === "port-gone" && issue.ports[0] !== undefined) return { kind: "port", port: issue.ports[0] };
+  if (issue.code === "service-slow" || issue.code === "service-down") {
+    const service = watched.find((item) => item.name === issue.subject);
+    return service ? { kind: "service", id: service.id } : null;
+  }
+  return null;
+}
+
 export function chipText(health: WorkspaceHealth): string | null {
   const issues = chipIssues(health);
   const first = issues[0];

@@ -7,6 +7,7 @@ import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
 import { processPreview, processReport, processStop, type ActionLogEntry, type ProcessReport, type ProcessRow, type ReportSort, type StopPlan } from "../shared/processes";
 import { Accordion, AccordionItem, Banner, Button, Card, Chip, Divider, HostIcon, ItemTitle, Meta, Note, QuietLine, RADIUS, Row, SPACE, TYPE, tint, toneColor, type Tone } from "./kit";
 import { formatBytes, formatDuration, formatPercent } from "./ui";
+import { AskAgentButton } from "./ask";
 
 type Theme = PluginTheme;
 export type Say = (message: { text: string; tone: Tone } | null) => void;
@@ -98,8 +99,11 @@ function RunawayBanner({ theme, report, onReview, onJobs }: { theme: Theme; repo
         <View key={`${runaway.code}-${index}`} style={{ gap: SPACE.sm }}>
           <Note theme={theme}>{runaway.title}</Note>
           {runaway.code === "too-many-jobs" ? <Row><Button theme={theme} label="Show the heavy jobs" icon="ListFilter" onPress={onJobs} /></Row> : null}
-          {(runaway.code === "cpu-runaway" || runaway.code === "memory-heavy") && runaway.pids.some((pid) => stoppable.has(pid)) ? (
-            <Row><Button theme={theme} label="Review and stop…" icon="OctagonX" danger onPress={() => onReview(runaway.pids.filter((pid) => stoppable.has(pid)))} /></Row>
+          {(runaway.code === "cpu-runaway" || runaway.code === "memory-heavy") && runaway.pids.length ? (
+            <Row>
+              <AskAgentButton theme={theme} subject={{ kind: "process", pid: runaway.pids[0]! }} />
+              {runaway.pids.some((pid) => stoppable.has(pid)) ? <Button theme={theme} label="Review and stop…" icon="OctagonX" danger onPress={() => onReview(runaway.pids.filter((pid) => stoppable.has(pid)))} /> : null}
+            </Row>
           ) : null}
         </View>
       ))}
@@ -178,11 +182,13 @@ function ProcessItem({ theme, row, compact, byTree, selected, onSelect, onStop, 
             <Text selectable style={{ ...TYPE.mono, color: theme.colors.foreground }}>{row.command}</Text>
           </View>
           <Meta theme={theme}>{[`PID ${row.pid}`, `parent ${row.ppid}`, row.cwd ? `in ${row.cwd}` : null, row.tree.count > 1 ? `${row.tree.count - 1} child process${row.tree.count === 2 ? "" : "es"}, ${formatBytes(row.tree.rssBytes)} together` : null].filter(Boolean).join(" · ")}</Meta>
-          {row.stoppable ? (
-            <Row><Button theme={theme} label="Stop…" icon="OctagonX" danger accessibilityLabel={`Stop ${row.name} (PID ${row.pid})…`} onPress={onStop} /></Row>
-          ) : (
-            <Note theme={theme}>{row.protectedReason ?? "It can't be stopped here."}</Note>
-          )}
+          {row.stoppable || row.flags.length ? (
+            <Row>
+              {row.flags.length ? <AskAgentButton theme={theme} subject={{ kind: "process", pid: row.pid }} /> : null}
+              {row.stoppable ? <Button theme={theme} label="Stop…" icon="OctagonX" danger accessibilityLabel={`Stop ${row.name} (PID ${row.pid})…`} onPress={onStop} /> : null}
+            </Row>
+          ) : null}
+          {!row.stoppable ? <Note theme={theme}>{row.protectedReason ?? "It can't be stopped here."}</Note> : null}
         </View>
       ) : null}
     </View>

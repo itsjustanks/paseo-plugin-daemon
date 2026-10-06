@@ -5,6 +5,8 @@ export function defineSettings<T>(definition: T) { return definition; }
 export function settingsRpc(id: string) { return { read: { name: `settings.${id}.read` }, write: { name: `settings.${id}.write` }, reset: { name: `settings.${id}.reset` } }; }
 const peer = { id: "7b5dccce-8405-4681-8278-466501de93c0", label: "Development server" };
 let forwards: { id: string; peerId: string; remotePort: number; localPort: number }[] = [];
+import { createPortal } from "react-dom";
+import { composeAskMessage } from "../../shared/ask";
 const params = new URLSearchParams(location.search);
 const empty = params.has("empty"), failed = params.has("error"), unverified = params.has("unverified"), tunnelFail = params.has("tunnelfail"), busy = params.has("busy"), mac = params.has("mac");
 const projects = [{ id: "website", name: "Website", path: "~/projects/website" }, { id: "api", name: "API service", path: "~/projects/api" }];
@@ -130,7 +132,8 @@ const stub = async (name: string, input: any) => {
     const issues = busy ? [
       { code: "memory-pressure", severity: "critical", scope: "host", message: r.runaways[0]!.title, ports: [], cwd: null },
       { code: "too-many-jobs", severity: "warning", scope: "host", message: r.runaways[1]!.title, ports: [], cwd: null },
-      { code: "runaway", severity: "warning", scope: "process", message: r.runaways[2]!.title, ports: [], cwd: "~/projects/website", subject: "tsc" },
+      { code: "runaway", severity: "warning", scope: "process", message: r.runaways[2]!.title, ports: [], cwd: "~/projects/website", subject: "tsc", pid: 4402 },
+      { code: "port-gone", severity: "warning", scope: "process", message: "storybook on port 6006 stopped serving.", ports: [6006], cwd: "~/projects/website" },
       { code: "service-slow", severity: "warning", scope: "host", message: watched()[0]!.message, ports: [], cwd: null, subject: "OmniRoute (AI Router)" },
     ] : [];
     return { status: busy ? "critical" : "ok", checkedAt: Date.now(), background: true, issues, watched: watched(),
@@ -138,6 +141,14 @@ const stub = async (name: string, input: any) => {
       services: processes.filter((p) => p.service).map((p) => ({ name: p.name, cwd: p.cwd, ports: p.ports, project: { path: p.project.path, workspace: p.project.workspace } })) };
   }
   if (name === "daemon-link.processes.report") return report(input);
+  if (name === "daemon-link.ask.context") {
+    const port = input.subject.kind === "port";
+    const text = composeAskMessage(port
+      ? { code: "port-gone", problem: "storybook on port 6006 stopped serving.", hostLine: "memory 6.9 GB of 7.3 GB (container limit), CPU 91%, 5 of 4 heavy jobs", devServer: { name: "storybook", port: 6006, cwd: "~/projects/website", stoppedMinutesAgo: 2 }, where: "Website · main", output: { from: "the terminal \"storybook\"", lines: ["info => Starting manager..", "info => Starting preview..", "ERR! Error: Cannot find module './preview.ts'", "ERR!     at Module._resolveFilename (node:internal/modules/cjs/loader:1145:15)", "WARN Broken build, fix the error above."] } }
+      : { code: "cpu-runaway", problem: "tsc (PID 4402): has used a full CPU core for 4 min.", hostLine: "memory 6.9 GB of 7.3 GB (container limit), CPU 91%, 5 of 4 heavy jobs", where: "Website · main", process: { name: "tsc", pid: 4402, job: "TypeScript", owner: "Website · main", cwd: "~/projects/website", cpuPercent: 99.4, rssBytes: 2100 * MB, memoryPercent: 27, memoryWhere: "this container's limit", ageSeconds: 420, command: "node ~/projects/website/node_modules/.bin/tsc --noEmit", ports: [] } });
+    return { title: port ? "storybook on :6006 stopped" : "tsc is stuck at full CPU", text, workspaceId: "ws-fixture", workspaceName: "main", outputFrom: port ? "the terminal \"storybook\"" : null };
+  }
+  if (name === "daemon-link.terminal.open") return { ok: true, message: "Opened a terminal in ~/projects/website, in main.", workspaceId: "ws-fixture", terminalId: "term-1" };
   if (name === "daemon-link.processes.preview") return { graceSeconds: 10, targets: processRows().filter((row) => row.stoppable).slice(0, input.tokens.length).map((row) => ({ pid: row.pid, name: row.name, ok: true, reason: null, rssBytes: row.rssBytes, cpuPercent: row.cpuPercent, children: row.tree.count > 1 ? Array.from({ length: row.tree.count - 1 }, (_, i) => ({ pid: row.pid + i + 1, name: i === 0 ? "node" : "esbuild" })) : [] })) };
   if (name === "daemon-link.processes.stop") { actions = [{ at: Date.now(), action: "stop", source: "processes", pid: 4402, name: "tsc", owner: "Website · main", status: "signaled", signaled: 1, message: "" }, ...actions]; return { escalateAfterSeconds: 10, results: [{ pid: 4402, name: "tsc", ok: true, status: "signaled", signaled: 1, message: "Asked tsc to stop. Anything still running in 10 seconds is stopped forcefully." }] }; }
   if (name === "daemon-link.processes.log") return { entries: actions };
@@ -168,13 +179,28 @@ const stub = async (name: string, input: any) => {
   }
   return { ok: true };
 };
+/** A fake Paseo session for "Ask an agent": three chats, one busy in this workspace. ?noagents hides the feature, as on an app without it. */
+const fakeAgents = [
+  { id: "a1", title: "Fix the checkout flow", status: "running", provider: "claude", model: "opus-5.5", workspaceId: "ws-fixture", updatedAt: "2026-10-06T06:00:00Z", archivedAt: null },
+  { id: "a2", title: "Tidy the API tests", status: "idle", provider: "codex", model: "gpt-6.1-sol", workspaceId: "ws-fixture", updatedAt: "2026-10-06T05:00:00Z", archivedAt: null },
+  { id: "a3", title: "Release notes", status: "idle", provider: "claude", model: "opus-5.5", workspaceId: "ws-other", updatedAt: "2026-10-06T04:00:00Z", archivedAt: null },
+];
+const sent: unknown[] = [];
+(window as any).__fixtureSent = sent;
+const paseo = params.has("noagents") ? null : {
+  agents: { list: async () => ({ entries: fakeAgents.map((agent) => ({ agent })), pageInfo: { hasMore: false } }), ref: (id: string) => ({ send: async (text: string, options: unknown) => { sent.push({ id, text, options }); } }) },
+  workspaces: { ref: (id: string) => ({ agents: { create: async (input: unknown) => { sent.push({ workspace: id, input }); return { id: "new" }; } } }) },
+  terminals: { create: async () => ({ id: "term-1" }) },
+};
+export function usePaseo() { return paseo; }
 export function useRpc(contract: { name: string }) { return useCallback((input: unknown) => stub(contract.name, input), [contract.name]); }
 const toasts: string[] = [];
 (window as any).__fixtureToasts = toasts;
 const toast = { show: (message: string) => { toasts.push(message); console.info(message); }, error: (message: string) => { toasts.push(`error: ${message}`); console.info(message); } };
 export function useToast() { return toast; }
 export function Icon({ color, name }: { color: string; name: string }) { return <Text style={{ color }}>{({ FolderCode: "▣", Network: "⇄", Activity: "⌁", BookOpen: "▤", Laptop: "▱", Globe: "◎", Terminal: ">_", CircleCheck: "✓", Circle: "○", Server: "▥", TimerReset: "↻", ChevronDown: "▾", ChevronRight: "▸" } as Record<string, string>)[name] || "◇"}</Text>; }
-export const Modal = Object.assign(({ children, open, title }: any) => open ? <View style={{ position: "absolute" as any, top: 80, left: 0, right: 0, alignItems: "center", zIndex: 10 }}><View style={{ width: "100%", maxWidth: 520, backgroundColor: params.has("light") ? "#ffffff" : "#1a2029", borderWidth: 1, borderColor: "#8886", borderRadius: 16, boxShadow: "0 12px 40px rgba(0,0,0,0.35)" as any }}><Text style={{ padding: 16, paddingBottom: 0, fontSize: 17, fontWeight: "700", color: "inherit" as any }}>{title}</Text>{children}</View></View> : null, { Content: ({ children }: any) => <View>{children}</View> });
+/** Like Paseo's own Modal, a sheet above the page (a portal), so later rows never paint over it. */
+export const Modal = Object.assign(({ children, open, title }: any) => open ? createPortal(<View style={{ position: "fixed" as any, top: 0, left: 0, right: 0, bottom: 0, alignItems: "center", paddingTop: 48, paddingHorizontal: 12, backgroundColor: "rgba(0,0,0,0.35)", zIndex: 10 }}><View style={{ width: "100%", maxWidth: 560, maxHeight: "90vh" as any, overflow: "auto" as any, backgroundColor: params.has("light") ? "#ffffff" : "#1a2029", borderWidth: 1, borderColor: "#8886", borderRadius: 16, boxShadow: "0 12px 40px rgba(0,0,0,0.35)" as any }}><Text style={{ padding: 16, paddingBottom: 0, fontSize: 17, fontWeight: "700", color: params.has("light") ? "#20252d" : "#eef1f6" }}>{title}</Text>{children}</View></View>, document.body) : null, { Content: ({ children }: any) => <View>{children}</View> });
 /** Settings hook: reads the fixture document through the same stub the pill uses, saves synchronously. */
 export function useSettings() {
   const [state, setState] = useState<any>({ status: "loading", saving: false, saveError: null });

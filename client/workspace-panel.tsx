@@ -2,12 +2,15 @@ import { type PluginWorkspacePanelProps, useRpc, useSettings, useWorkspace } fro
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, ScrollView, Text, View } from "react-native";
-import { hostHealth, workspaceHealth, type HealthIssue, type HealthStatus } from "../shared/health";
+import { askSubjectFor, hostHealth, workspaceHealth, type HealthIssue, type HealthStatus } from "../shared/health";
+import type { WatchResult } from "../shared/watch";
+import type { PluginTheme } from "@getpaseo/plugin";
 import * as link from "../shared/link";
 import { HOSTS_SETTINGS_DEFAULTS, hostsSettings } from "../shared/settings";
 import { formatMinutes, type TunnelMinutes } from "../shared/tunnel-lease";
 import { filterWorkspaceProcesses, workspacePorts } from "../shared/workspace-filter";
 import { rollupResources, type ResourceRollup } from "../shared/workspace-resources";
+import { AskAgentButton, HostsNavigationProvider, OpenTerminalButton } from "./ask";
 import { DaemonSurface } from "./daemon";
 import { OpenRow } from "./open-row";
 import { useOpenService } from "./open-service";
@@ -39,13 +42,15 @@ export function WorkspacePanel(props: PluginWorkspacePanelProps) {
   if (values.panelScope === "host") return <DaemonSurface {...props} />;
   return (
     <TokensProvider value={tokens}>
-      <WorkspaceBody key={`${props.host.id}:${props.workspaceId}`} hostId={props.host.id} workspaceId={props.workspaceId} intervalSeconds={values.snapshotIntervalSeconds} minutes={values.tunnelMinutes} settingsLoading={settings.status === "loading"} />
+      <HostsNavigationProvider navigation={props.navigation}>
+      <WorkspaceBody key={`${props.host.id}:${props.workspaceId}`} theme={props.theme} hostId={props.host.id} workspaceId={props.workspaceId} intervalSeconds={values.snapshotIntervalSeconds} minutes={values.tunnelMinutes} settingsLoading={settings.status === "loading"} />
+      </HostsNavigationProvider>
     </TokensProvider>
   );
 }
 
 /** The verdict for this workspace first: status, when it was checked, and every issue that touches it. */
-function HealthCard({ health, background }: { health: ReturnType<typeof workspaceHealth>; background: boolean }) {
+function HealthCard({ theme, health, background, watched }: { theme: PluginTheme; health: ReturnType<typeof workspaceHealth>; background: boolean; watched: readonly WatchResult[] }) {
   const t = useTokens();
   const checked = new Date(health.checkedAt).toLocaleTimeString();
   return (
@@ -63,7 +68,7 @@ function HealthCard({ health, background }: { health: ReturnType<typeof workspac
       {health.issues.length === 0 ? (
         <Text style={t.text.caption}>Nothing wrong with this workspace's servers, browser links, or SSH forwards.</Text>
       ) : (
-        health.issues.map((issue, index) => <IssueRow key={`${issue.code}-${issue.ports.join("-")}-${index}`} issue={issue} />)
+        health.issues.map((issue, index) => <IssueRow key={`${issue.code}-${issue.ports.join("-")}-${index}`} theme={theme} issue={issue} watched={watched} />)
       )}
     </Card>
   );
@@ -130,17 +135,22 @@ function ResourceFigure({ title, value, share, facts }: { title: string; value: 
   );
 }
 
-function IssueRow({ issue }: { issue: HealthIssue }) {
+/** One issue; with "Ask an agent" (0.12.0) when an agent can help with it. */
+function IssueRow({ theme, issue, watched }: { theme: PluginTheme; issue: HealthIssue; watched: readonly WatchResult[] }) {
   const t = useTokens();
+  const subject = askSubjectFor(issue, watched);
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
-      <Tag tone={issue.severity === "critical" ? "danger" : "warning"} label={issue.scope === "host" ? "host" : issue.ports.length > 0 ? `:${issue.ports.join(" :")}` : "process"} />
-      <Text style={[t.text.body, { flex: 1 }]}>{issue.message}</Text>
+    <View style={{ gap: t.space.sm }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
+        <Tag tone={issue.severity === "critical" ? "danger" : "warning"} label={issue.scope === "host" ? "host" : issue.ports.length > 0 ? `:${issue.ports.join(" :")}` : "process"} />
+        <Text style={[t.text.body, { flex: 1 }]}>{issue.message}</Text>
+      </View>
+      {subject ? <View style={{ flexDirection: "row" }}><AskAgentButton theme={theme} subject={subject} /></View> : null}
     </View>
   );
 }
 
-function WorkspaceBody({ hostId, workspaceId, intervalSeconds, minutes, settingsLoading }: { hostId: string; workspaceId: string; intervalSeconds: number; minutes: TunnelMinutes; settingsLoading: boolean }) {
+function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, settingsLoading }: { theme: PluginTheme; hostId: string; workspaceId: string; intervalSeconds: number; minutes: TunnelMinutes; settingsLoading: boolean }) {
   const t = useTokens();
   const queryClient = useQueryClient();
   const rpc = useMonitorRpc();
@@ -223,7 +233,10 @@ function WorkspaceBody({ hostId, workspaceId, intervalSeconds, minutes, settings
                 <Grid min={300}>
                   {snapshot.services.map((process) => (
                     <ServiceCard key={processKey(process)} process={process} actions={actions} footer={
-                      <OpenRow ports={process.ports} tunnels={links.data?.tunnels ?? []} minutes={minutes} available={available} opener={opener} onSetup={() => opener.installLinks()} installing={opener.installing} />
+                      <>
+                        <OpenRow ports={process.ports} tunnels={links.data?.tunnels ?? []} minutes={minutes} available={available} opener={opener} onSetup={() => opener.installLinks()} installing={opener.installing} />
+                        <OpenTerminalButton theme={theme} pid={process.pid} />
+                      </>
                     } />
                   ))}
                 </Grid>
@@ -231,7 +244,7 @@ function WorkspaceBody({ hostId, workspaceId, intervalSeconds, minutes, settings
             )}
           </Section>
         ) : null}
-        {health ? <HealthCard health={health} background={healthQuery.data?.background ?? true} /> : null}
+        {health ? <HealthCard theme={theme} health={health} background={healthQuery.data?.background ?? true} watched={healthQuery.data?.watched ?? []} /> : null}
         {snapshot && rollup ? <ResourceCard rollup={rollup} snapshot={snapshot} /> : null}
         {snapshotQuery.isError ? (
           <Notice icon="CircleAlert" tone="danger" action={<Button label="Retry" onPress={refresh} loading={snapshotQuery.isFetching} />}>

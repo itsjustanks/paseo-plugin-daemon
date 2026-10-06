@@ -3,7 +3,7 @@ import { Text, View } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc, useSettings } from "@getpaseo/plugin/client";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import type { HealthVerdict } from "../shared/health";
+import { askSubjectFor, type HealthVerdict } from "../shared/health";
 import type { ProcessReport } from "../shared/processes";
 import { hostsSettings } from "../shared/settings";
 import { seconds, watchId, watchSuggestions, type WatchResult } from "../shared/watch";
@@ -13,6 +13,7 @@ import { Checks, type SetupCheck } from "./guide";
 import { Accordion, AccordionItem, Button, Dot, Fact, HeroCard, HostIcon, Meta, QuietLine, Row, SPACE, StatusLine, TYPE, toneColor, type Tone } from "./kit";
 import { memoryWords, shareTone, type Say } from "./processes";
 import { formatBytes } from "./ui";
+import { AskAgentButton } from "./ask";
 
 type Theme = PluginTheme;
 type Go = (tab: TabId, fold?: Fold) => void;
@@ -52,6 +53,31 @@ function WatchedList({ theme, watched }: { theme: Theme; watched: readonly Watch
           <Meta theme={theme}>{[service.target, service.usualMs !== null ? `usually ${seconds(service.usualMs)}` : null, service.checkedAt ? `checked ${new Date(service.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : null].filter(Boolean).join(" · ")}</Meta>
         </View>
       ))}
+    </View>
+  );
+}
+
+/**
+ * Each thing that's wrong, in its own words, with "Ask an agent" where an
+ * agent can help (0.12.0): a runaway or a job loading the host, a dev server
+ * that stopped, a watched service that is slow or down.
+ */
+function AttentionList({ theme, verdict }: { theme: Theme; verdict: HealthVerdict }) {
+  const issues = verdict.issues.filter((issue) => issue.code !== "projects-unavailable");
+  return (
+    <View style={{ gap: SPACE.row }}>
+      {issues.map((issue, index) => {
+        const subject = askSubjectFor(issue, verdict.watched ?? []);
+        return (
+          <View key={`${issue.code}-${index}`} style={{ gap: SPACE.sm }}>
+            <View style={{ flexDirection: "row", alignItems: "flex-start", gap: SPACE.sm }}>
+              <View style={{ paddingTop: SPACE.sm }}><Dot color={toneColor(theme, issue.severity === "critical" ? "danger" : "warning")} /></View>
+              <Text style={{ ...TYPE.body, color: theme.colors.foreground, flex: 1 }}>{issue.message}</Text>
+            </View>
+            {subject ? <View style={{ paddingLeft: SPACE.md }}><Row><AskAgentButton theme={theme} subject={subject} /></Row></View> : null}
+          </View>
+        );
+      })}
     </View>
   );
 }
@@ -151,8 +177,13 @@ export function OverviewTab({ theme, compact, hostId, verdict, report, devServer
         </Row>
       </HeroCard>
       <Accordion theme={theme}>
+        {verdict && verdict.issues.some((issue) => issue.code !== "projects-unavailable") ? (
+          <AccordionItem key={`attention-${verdict.issues.length}`} theme={theme} compact={compact} icon="TriangleAlert" tone={hero.tone === "danger" ? "danger" : "warning"} title="What needs attention" summary="Each problem, and an agent to ask about it" open>
+            <AttentionList theme={theme} verdict={verdict} />
+          </AccordionItem>
+        ) : null}
         {watched.length ? (
-          <AccordionItem theme={theme} compact={compact} icon="Activity" title="Watched services" summary={`${watched.length} watched · ${watchedNow.value.toLowerCase()}`} tone={watchedNow.tone === "success" ? undefined : watchedNow.tone} open={slow.length > 0}>
+          <AccordionItem theme={theme} compact={compact} icon="Activity" title="Watched services" summary={`${watched.length} watched · ${watchedNow.value}`} tone={watchedNow.tone === "success" ? undefined : watchedNow.tone} open={slow.length > 0}>
             <WatchedList theme={theme} watched={watched} />
             <Meta theme={theme}>Add or remove them under Settings → Hosts → Watched services.</Meta>
           </AccordionItem>

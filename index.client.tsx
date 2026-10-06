@@ -1,5 +1,6 @@
 import type { PluginClientContext, PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { hostHealth } from "./shared/health";
+import { hostsAttachmentSearch } from "./shared/attachments";
 import { DaemonSurface } from "./client/daemon";
 import { openMainScreen, registerMainScreen } from "./client/native";
 import { registerHealthPills } from "./client/pill";
@@ -66,10 +67,17 @@ export default function contribute(client: PluginClientContext) {
       },
     });
   }
+  // 0.12.0: "Hosts" in the message box's attach menu (Paseo 0.8+, feature-detected).
+  const removeAttachments = typeof client.addAttachmentSource === "function"
+    ? client.addAttachmentSource({
+      id: "hosts", title: "Hosts", icon: "Network", pickerTitle: "Attach from Hosts",
+      searchPlaceholder: "Heavy processes, a dev server's output, a watched service…", search: hostsAttachmentSearch,
+    })
+    : () => {};
   // A chip only when a chat needs attention (0.11.0). Host health at a glance is the sidebar row's dot and
   // popover; no sidebar footer item, since on every app that has one the row already shows the same thing.
   const removePills = registerHealthPills(client);
-  return () => { removePills(); };
+  return () => { removePills(); void removeAttachments(); };
 }
 
 /** Asks the daemon for a fresh health check; the screen, panel and sidebar dot then read it. A failure just opens the page as it is. */

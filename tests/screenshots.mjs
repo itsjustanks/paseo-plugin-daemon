@@ -22,6 +22,9 @@ const SHOTS = {
   processes: { query: "", press: ["Processes"] },
   "processes-busy": { query: "busy", press: ["Processes"] },
   "processes-confirm": { query: "busy", press: ["Processes"], after: "confirm" },
+  // 0.12.0: the "Ask an agent" sheet, from the runaway banner and from Overview's stopped dev server.
+  "ask-runaway": { query: "busy", press: ["Processes"], after: "ask" },
+  "ask-stopped": { query: "busy", press: [], after: "ask-last" },
   servers: { query: "", press: ["Dev servers"] },
   help: { query: "", press: ["Help"] },
   // 0.10's Connect and Project Sync tabs: old links land on Dev servers with that fold-out open.
@@ -58,6 +61,11 @@ try {
         if (shot.after === "confirm") {
           const stop = page.getByRole("button", { name: /^Stop .*heav|^Review and stop/i }).first();
           if (await stop.count()) { await stop.click(); await page.waitForTimeout(700); } else missing = "stop button";
+        }
+        if (shot.after === "ask" || shot.after === "ask-last") {
+          const asks = page.getByRole("button", { name: "Ask an agent about this" });
+          const ask = shot.after === "ask" ? asks.first() : asks.nth(1);
+          if (await ask.count()) { await ask.click(); await page.waitForTimeout(900); } else missing = "Ask an agent";
         }
         if (missing) { console.log(`skip ${name}-${theme}-${size} — no "${missing}"`); await page.close(); continue; }
         const height = await page.evaluate(() => Math.max(...[...document.querySelectorAll("div")].map((el) => el.scrollHeight)));

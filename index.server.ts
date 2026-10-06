@@ -14,6 +14,9 @@ import { readHostsSettings, registerHooks } from "./server/hooks";
 import { HealthChecker } from "./server/health";
 import { summaryWriter } from "./server/summary-file";
 import { suggestions } from "./server/watch";
+import { askContext, terminalOpen } from "./shared/ask";
+import { hostsAttachmentSearch } from "./shared/attachments";
+import { createAsk } from "./server/ask";
 
 type SettingsHandle = { read?: () => Promise<{ status: string; values?: unknown }>; subscribe?: (listener: () => void) => () => void } | undefined;
 
@@ -47,6 +50,11 @@ export default function contribute(server: PluginServerContext) {
   server.handle(processPreview, ({ tokens }, context) => runtime.withContext(context, () => runtime.processes.preview(tokens)));
   server.handle(processStop, ({ tokens }, context) => runtime.withContext(context, () => runtime.processes.stop(tokens)));
   server.handle(processLog, async ({ limit }) => ({ entries: await runtime.log.recent(limit) }));
+  // 0.12.0: "Ask an agent", the Hosts attach menu and "Open a terminal here". Each reads through the handler's own Paseo session.
+  const ask = createAsk({ report: (input) => runtime.processes.report(input), verdict: () => health.read(), lost: (port) => health.lost(port) });
+  server.handle(askContext, ({ subject }, context) => runtime.withContext(context, async () => { await health.read(context); return ask.context(subject, context.paseo); }));
+  server.handle(hostsAttachmentSearch, ({ query }, context) => runtime.withContext(context, async () => { await health.read(context); return ask.attachments(query, context.paseo); }));
+  server.handle(terminalOpen, ({ pid }, context) => runtime.withContext(context, () => ask.openTerminal(pid, context.paseo)));
   server.handle(watchSuggestions, async () => ({ suggestions: await suggestions((await readSettings().catch(() => HOSTS_SETTINGS_DEFAULTS)).watchedServices) }));
   server.handle(sync.syncStatus, (_input, context) => runtime!.withContext(context, async () => {
     await runtime!.scope.refresh(); return { projects: runtime!.scope.status().projects.map((p) => ({ id: p.id, name: p.name })), history: await runtime!.transfers.history(), grants: await runtime!.peers.projectGrants() };

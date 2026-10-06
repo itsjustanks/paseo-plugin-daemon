@@ -10,6 +10,7 @@ import { processReport } from "../shared/processes";
 import { hostsSettings } from "../shared/settings";
 import { TUNNEL_MINUTES_DEFAULT, formatMinutes, type TunnelMinutes } from "../shared/tunnel-lease";
 import { resolveTab, type Fold } from "../shared/tabs";
+import { HostsNavigationProvider, OpenTerminalButton } from "./ask";
 import { HelpTab, type SetupCheck } from "./guide";
 import { OverviewTab } from "./home";
 import { Accordion, AccordionItem, IconBadge, MessageBar, QuietLine, SPACE, TYPE, type Tone } from "./kit";
@@ -38,7 +39,7 @@ type Message = { text: string; tone: Tone } | null;
 type DaemonProps = PluginSurfaceProps & { shortcuts?: boolean; params?: Record<string, string>; initialTab?: string };
 
 export function DaemonSurface(props: DaemonProps) {
-  return <TokensProvider value={useUi(props.theme, props.layout.compact)}><DaemonBody key={props.host.id} {...props} /></TokensProvider>;
+  return <TokensProvider value={useUi(props.theme, props.layout.compact)}><HostsNavigationProvider navigation={props.navigation}><DaemonBody key={props.host.id} {...props} /></HostsNavigationProvider></TokensProvider>;
 }
 
 /** The page header: the plugin's icon and name, and one line on this host with a coloured dot. */
@@ -151,7 +152,10 @@ function DaemonBody(props: DaemonProps) {
           <Grid min={330}>
             {visible.map((app) => (
               <ServiceCard key={processKey(app)} process={app} actions={actions} footer={
-                <OpenRow ports={app.ports} tunnels={tunnels} minutes={minutes} available={available} opener={opener} onSetup={() => opener.installLinks()} installing={opener.installing} onPrivate={privateRoute} />
+                <>
+                  <OpenRow ports={app.ports} tunnels={tunnels} minutes={minutes} available={available} opener={opener} onSetup={() => opener.installLinks()} installing={opener.installing} onPrivate={privateRoute} />
+                  <OpenTerminalButton theme={theme} pid={app.pid} />
+                </>
               } />
             ))}
           </Grid>

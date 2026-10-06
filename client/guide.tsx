@@ -210,6 +210,15 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
       action: { label: "See processes", tab: "processes" },
     },
     {
+      icon: "Bot", question: "Can an agent help fix it?",
+      answer: [
+        "Yes. Beside a runaway process, a dev server that stopped, or a slow or down watched service, press Ask an agent. Pick a chat in that workspace, or start a new one, and read exactly what will be sent first: what's wrong, the figures, the last lines of the dev server's output when Hosts can find them, and a suggested next step.",
+        "Passwords, tokens and keys are removed from commands and output before you see the text. A chat that is busy gets it added to what it's doing; it isn't interrupted. The message asks the agent to check with you before stopping or restarting anything.",
+        "You can also attach Hosts information to any message yourself: choose Hosts in the message box's attach menu, then heavy processes, what needs attention, a dev server's recent output or a watched service.",
+      ],
+      action: { label: "See what needs attention", tab: "overview" },
+    },
+    {
       icon: "ShieldCheck", question: "What can and can't be stopped?",
       answer: [
         "Only processes started from Paseo or running inside your Paseo projects. Paseo itself, its plugins, agents, terminals and databases never can be. Nothing is ever stopped automatically.",

@@ -54,6 +54,12 @@ export class HealthChecker {
   /** The cached verdict, or null before the first check. */
   current(): HealthVerdict | null { return this.verdict; }
 
+  /** When and where a dev server's port stopped serving, while it is still reported (0.12.0, for "Ask an agent"). */
+  lost(port: number): { name: string; cwd: string | null; lostAt: number } | null {
+    const record = this.memory.lost[port];
+    return record ? { name: record.name, cwd: record.cwd, lostAt: record.lostAt } : null;
+  }
+
   /**
    * Serve the cache when it is younger than the interval, otherwise check now.
    * The first call with a context also arms the background timer.

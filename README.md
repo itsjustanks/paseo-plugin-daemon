@@ -218,6 +218,16 @@ neither does host-wide trouble (memory, CPU, a watched service, an unreachable h
 the dot beside **Hosts** in the sidebar, whose quick check opens on a press. The chip never shows
 CPU or memory figures. The verdict never carries tokens, link URLs, or raw command lines.
 
+### Ask an agent to fix it
+
+Beside a runaway process, a dev server that stopped, or a watched service that is slow or down,
+**Ask an agent** writes a plain message for a chat in that workspace (or a new chat there): what's
+wrong, the figures, the last 50 lines of the dev server's output when Hosts can find them, and a
+suggested next step. You see the exact text before it is sent. Secrets are removed on the daemon
+first, and a busy chat is steered rather than interrupted. **Hosts** is also in the message box's
+attach menu (heavy processes, what needs attention, a dev server's output, a watched service), and
+each dev server's card can **Open a terminal here** in its folder.
+
 The common actions are also commands. In the Command Center: **Open Hosts**, **Show heavy
 processes**, **Check host now** and **Configure Hosts**. In a chat's message box (when the app
 supports slash commands): `/daemon-link`, `/heavy-processes` and `/check-host`. There is no sidebar

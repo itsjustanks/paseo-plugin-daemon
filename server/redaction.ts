@@ -260,3 +260,17 @@ export function displayName(argv: readonly string[], comm: string): string {
   const candidate = base && !base.startsWith("-") ? base : comm;
   return truncate(redactValue(candidate) || "unknown", 64);
 }
+
+/**
+ * Redact free text, such as a dev server's terminal output, line by line
+ * (0.12.0). Each line is treated like a command line (`--token x`,
+ * `API_KEY=x`) and then scanned whole for URLs with credentials, secret query
+ * parameters, JSON properties, headers and known credential formats. Home
+ * paths collapse to `~`.
+ */
+export function redactText(lines: readonly string[], home: string): string[] {
+  return lines.map((line) => {
+    const words = redactArgv(line.split(" "), home);
+    return redactValue(homeRelative(words.join(" "), home));
+  });
+}

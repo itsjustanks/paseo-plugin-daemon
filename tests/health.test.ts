@@ -40,8 +40,8 @@ describe("evaluateHealth", () => {
     const { verdict } = evaluateHealth(base({ snapshot: snapshot([driver], [driver, hog, busy], { cpu: pressure("critical") }) }));
     expect(verdict.issues).toEqual([
       expect.objectContaining({ code: "cpu-pressure", scope: "host" }),
-      { code: "pressure-driver", severity: "warning", scope: "process", message: "vite (PID 3) is a top CPU user while the host is under CPU pressure.", ports: [3000], cwd: "~/app/web" },
-      { code: "pressure-driver", severity: "warning", scope: "process", message: "worker (PID 4) is a top memory user while the host is under memory pressure.", ports: [], cwd: "~/app/api" },
+      { code: "pressure-driver", severity: "warning", scope: "process", message: "vite (PID 3) is a top CPU user while the host is under CPU pressure.", ports: [3000], cwd: "~/app/web", pid: 3 },
+      { code: "pressure-driver", severity: "warning", scope: "process", message: "worker (PID 4) is a top memory user while the host is under memory pressure.", ports: [], cwd: "~/app/api", pid: 4 },
     ]);
     // A merely busy process on a busy host is not blamed, and a quiet host never produces the code.
     expect(evaluateHealth(base({ snapshot: snapshot([], [busy], { cpu: pressure("critical") }) })).verdict.issues.map((issue) => issue.code)).toEqual(["cpu-pressure"]);
