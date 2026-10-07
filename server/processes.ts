@@ -15,6 +15,7 @@ import {
   type StopPlan,
 } from "../shared/processes";
 import { HOSTS_SETTINGS_DEFAULTS } from "../shared/settings";
+import { runawaySentence, runawayVerdict, formatGB, type AutoStop, type JobWord, type MemoryLevel } from "../shared/guard";
 import type { ActionLog } from "./action-log";
 import type { ClassifiedBase, Collector, ProcessDetail } from "./collector";
 import { formatBytes } from "./heuristics";
@@ -61,7 +62,15 @@ export interface ProcessManagerOptions {
   graceMs?: number;
   readSettings?: () => Promise<{ maxHeavyJobs: number }>;
   setTimer?: (fn: () => void, ms: number) => unknown;
+  /** 0.13.0: bytes a process added over the last 5 minutes, from the check loop; null when unknown. */
+  growth?: (pid: number, startId: string) => number | null;
+  /** 0.13.0: memory pressure as the check loop last measured it. */
+  memoryLevel?: () => MemoryLevel;
 }
+
+/** Who did a stop, for the log: a person (Processes) or the optional memory guard. */
+type StopSource = { action: "stop" | "auto-stop"; source: "processes" | "guard" };
+const BY_PERSON: StopSource = { action: "stop", source: "processes" };
 
 interface Decision { stoppable: boolean; reason: string | null; owner: ProcessRow["owner"] }
 
@@ -187,12 +196,17 @@ export class ProcessManager {
 
     const limit = settings.maxHeavyJobs;
     const basis = base.memoryBasisBytes;
+    const growthByPid = new Map<number, number | null>();
     const rows: ProcessRow[] = base.details.map((detail) => {
       const decision = this.decide(detail, byPid, detail.view.ports);
       const job = jobs.get(detail.raw.pid) ?? null;
       const flags: ProcessRow["flags"] = [];
       if (detail.hotSeconds >= RUNAWAY_CPU_SECONDS) flags.push({ code: "cpu-runaway", text: `Has used a full CPU core for ${minutes(detail.hotSeconds)}` });
-      if (detail.view.memoryPercent >= MEMORY_HEAVY_PERCENT) flags.push({ code: "memory-heavy", text: `Uses ${Math.round(detail.view.memoryPercent)}% of ${base.container?.memoryLimitBytes ? "this container's memory limit" : "the machine's memory"}` });
+      const grew = this.options.growth?.(detail.raw.pid, detail.raw.startId) ?? null;
+      const memory = runawayVerdict(detail.raw.rssBytes, basis, grew, this.options.memoryLevel?.() ?? "normal");
+      if (detail.view.memoryPercent >= MEMORY_HEAVY_PERCENT) flags.push({ code: "memory-heavy", text: `Uses ${formatGB(detail.raw.rssBytes)}, ${Math.round(detail.view.memoryPercent)}% of this computer's memory` });
+      else if (memory.growing && grew !== null) flags.push({ code: "memory-growing", text: `Grew by ${formatGB(grew)} in the last 5 minutes` });
+      growthByPid.set(detail.raw.pid, grew);
       if (detail.view.impact === "pressure-driver") flags.push({ code: "pressure-driver", text: "One of the biggest users while the host is under pressure" });
       return {
         pid: detail.raw.pid, ppid: detail.raw.ppid, name: programName(detail.raw.argv, detail.view.name), command: detail.view.command, cwd: detail.view.cwd, state: detail.view.state,
@@ -204,7 +218,7 @@ export class ProcessManager {
     });
 
     const roots = rows.filter((row) => row.jobRoot);
-    const runaways = this.runaways(base, rows, roots, limit);
+    const runaways = this.runaways(base, rows, roots, limit, growthByPid);
     const query = input.query.trim().toLowerCase();
     const matched = rows.filter((row) => {
       if (input.filter === "jobs" && !row.jobRoot) return false;
@@ -244,7 +258,7 @@ export class ProcessManager {
     };
   }
 
-  private runaways(base: ClassifiedBase, rows: readonly ProcessRow[], roots: readonly ProcessRow[], limit: number): Runaway[] {
+  private runaways(base: ClassifiedBase, rows: readonly ProcessRow[], roots: readonly ProcessRow[], limit: number, growthByPid: ReadonlyMap<number, number | null> = new Map()): Runaway[] {
     const out: Runaway[] = [];
     const container = base.container;
     if (container && container.pressure !== "normal") {
@@ -259,11 +273,20 @@ export class ProcessManager {
     }
     for (const row of rows) {
       const hot = row.flags.find((flag) => flag.code === "cpu-runaway");
-      if (hot) out.push({ code: "cpu-runaway", severity: "warning", title: `${row.name} (PID ${row.pid}) has used a full CPU core for ${minutes(row.hotSeconds)}.`, pids: [row.pid], cwd: row.cwd });
-      const heavy = row.flags.find((flag) => flag.code === "memory-heavy");
-      if (heavy) out.push({ code: "memory-heavy", severity: row.memoryPercent >= 70 ? "critical" : "warning", title: `${row.name} (PID ${row.pid}) uses ${formatBytes(row.rssBytes)}, ${Math.round(row.memoryPercent)}% of ${container?.memoryLimitBytes ? "this container's limit" : "the machine's memory"}.`, pids: [row.pid], cwd: row.cwd });
+      if (hot) out.push({ code: "cpu-runaway", severity: "warning", title: `${row.name} (PID ${row.pid}) has used a full CPU core for ${minutes(row.hotSeconds)}.`, pids: [row.pid], cwd: row.cwd, stoppable: row.stoppable });
+      // 0.13.0: a big share of memory, or fast growth, said the way a person would say it.
+      const heavy = row.flags.find((flag) => flag.code === "memory-heavy" || flag.code === "memory-growing");
+      if (heavy) {
+        const grew = growthByPid.get(row.pid) ?? null;
+        const level = this.options.memoryLevel?.() ?? (base.memory.pressure === "critical" ? "critical" : base.memory.pressure === "high" ? "high" : "normal");
+        const verdict = runawayVerdict(row.rssBytes, base.memoryBasisBytes, grew, level);
+        const job = (row.job?.kind ?? null) as JobWord | null;
+        const title = runawaySentence({ job, name: row.name, rssBytes: row.rssBytes, percent: row.memoryPercent, growthBytes: verdict.growing ? grew : null, level });
+        out.push({ code: "memory-heavy", severity: verdict.severity, title, pids: [row.pid], cwd: row.cwd, stoppable: row.stoppable });
+      }
     }
-    return out.slice(0, 12);
+    const rank = (runaway: Runaway) => (runaway.code === "memory-heavy" ? (runaway.severity === "critical" ? 0 : 1) : runaway.code === "memory-near-limit" ? 2 : 3);
+    return out.map((runaway, index) => ({ runaway, index })).sort((a, b) => rank(a.runaway) - rank(b.runaway) || a.index - b.index).map(({ runaway }) => runaway).slice(0, 12);
   }
 
   // --------------------------------------------------------------- actions
@@ -300,7 +323,7 @@ export class ProcessManager {
   }
 
   /** SIGTERM now; SIGKILL survivors after the grace period. Returns at once. */
-  async stop(tokens: readonly string[]): Promise<StopOutcome> {
+  async stop(tokens: readonly string[], by: StopSource = BY_PERSON): Promise<StopOutcome> {
     this.fresh = null;
     const names = await this.names();
     const results: StopOutcome["results"] = [];
@@ -309,14 +332,14 @@ export class ProcessManager {
       const known = payload ? names.get(payload.pid) : undefined;
       const name = known?.name ?? "Process";
       const { result, children } = await this.guard.stopTree(token);
-      await this.record("stop", result, name, known?.owner ?? null);
+      await this.record(by.action, result, name, known?.owner ?? null, by.source);
       results.push({ pid: result.pid, name, ok: result.ok, status: result.status, message: plain(result, name, this.graceMs), signaled: result.signaledCount });
-      if (result.status === "signaled") this.escalate(token, payload?.startId ?? null, result.pid!, children, name, known?.owner ?? null);
+      if (result.status === "signaled") this.escalate(token, payload?.startId ?? null, result.pid!, children, name, known?.owner ?? null, by.source);
     }
     return { results, escalateAfterSeconds: Math.round(this.graceMs / 1000) };
   }
 
-  private escalate(token: string, startId: string | null, pid: number, children: Parameters<ProcessGuard["forceSurvivors"]>[0], name: string, owner: string | null) {
+  private escalate(token: string, startId: string | null, pid: number, children: Parameters<ProcessGuard["forceSurvivors"]>[0], name: string, owner: string | null, source: StopSource["source"] = "processes") {
     const set = this.options.setTimer ?? ((fn: () => void, ms: number) => { const timer = setTimeout(fn, ms); (timer as { unref?: () => void }).unref?.(); return timer; });
     const timer = set(() => {
       this.timers.delete(timer);
@@ -340,14 +363,44 @@ export class ProcessManager {
           status = "signaled";
           message = `${message} ${survivors} child process${survivors === 1 ? "" : "es"} still running ${survivors === 1 ? "was" : "were"} stopped forcefully.`;
         }
-        if (alive || survivors > 0) await this.record("auto-force-stop", { ok: status === "signaled", status, message, pid, signaledCount: signaled }, name, owner);
+        if (alive || survivors > 0) await this.record("auto-force-stop", { ok: status === "signaled", status, message, pid, signaledCount: signaled }, name, owner, source);
       })().catch((error) => console.error("daemon-link: automatic force stop failed", error instanceof Error ? error.name : "unknown"));
     }, this.graceMs);
     this.timers.add(timer);
   }
 
-  private record(action: ActionLogEntry["action"], result: ActionResult, name: string, owner: string | null) {
-    return this.options.log.append({ at: this.clock.now(), action, source: "processes", pid: result.pid, name, owner, status: result.status, signaled: result.signaledCount, message: result.message });
+  private record(action: ActionLogEntry["action"], result: ActionResult, name: string, owner: string | null, source: ActionLogEntry["source"] = "processes") {
+    return this.options.log.append({ at: this.clock.now(), action, source, pid: result.pid, name, owner, status: result.status, signaled: result.signaledCount, message: result.message });
+  }
+
+  /**
+   * The optional memory guard's one move (0.13.0): the biggest process that a
+   * person could stop here with the Stop button, holding at least
+   * `minPercent` of memory, stopped through exactly the same checked path
+   * (fresh read, signed token, SIGTERM then SIGKILL after the grace period),
+   * logged as an automatic stop. Null when nothing qualifies.
+   */
+  async autoStopBiggest(minPercent: number): Promise<AutoStop | null> {
+    this.fresh = null;
+    this.options.collector.invalidate();
+    // The project list comes through the daemon, which may be starved right now: without it only Paseo-started jobs qualify.
+    if (this.options.scope) await Promise.race([this.options.scope.refresh().catch(() => undefined), new Promise((resolve) => { const timer = setTimeout(resolve, 5000); (timer as { unref?: () => void }).unref?.(); })]);
+    const base = await this.options.collector.collect();
+    const byPid = new Map(base.details.map((detail) => [detail.raw.pid, detail.raw]));
+    const floor = (base.memoryBasisBytes * minPercent) / 100;
+    const candidates = base.details
+      .filter((detail) => detail.raw.rssBytes >= floor && this.decide(detail, byPid, detail.view.ports).stoppable)
+      .sort((a, b) => b.raw.rssBytes - a.raw.rssBytes || a.raw.pid - b.raw.pid);
+    const target = candidates[0];
+    if (!target) return null;
+    const token = this.guard.mint(target.raw, hashArgv(target.raw.argv), base.at);
+    const job = classifyJob(target.raw.argv, target.view.ports);
+    const name = programName(target.raw.argv, target.view.name);
+    const outcome = await this.stop([token], { action: "auto-stop", source: "guard" });
+    const result = outcome.results[0];
+    if (!result?.ok) return null;
+    const what = job?.kind === "test" ? "a test run" : job?.kind === "build" ? "a build" : job?.kind === "typecheck" ? "a type check" : job?.kind === "install" ? "a package install" : job?.kind === "dev-server" ? "a dev server" : name;
+    return { at: this.clock.now(), pid: target.raw.pid, name, rssBytes: target.raw.rssBytes, message: `Hosts stopped ${what} (${name}, ${formatGB(target.raw.rssBytes)}) because memory was nearly full.` };
   }
 
   close() {

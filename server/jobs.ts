@@ -71,11 +71,24 @@ const RULES: Array<{ kind: JobKind; label: string; test: (w: readonly string[]) 
  */
 export function classifyJob(argv: readonly string[], ports: readonly number[] = []): Job | null {
   if (argv.length === 0 || isPaseoInternal({ argv, comm: "" })) return null;
+  if (isScriptTestRun(argv)) return { kind: "test", label: "Tests" };
   const w = words(argv);
   const rule = RULES.find((entry) => entry.test(w));
   if (rule) return { kind: rule.kind, label: rule.label };
   const service = detectService(argv, ports);
   return service?.kind === "dev-server" ? { kind: "dev-server", label: service.label } : null;
+}
+
+/**
+ * A runtime running tests directly (0.13.0): `node --test …`, `bun test`, or
+ * a runtime given a `*.test.*` / `*.spec.*` file. The 36 GB runaway that took
+ * a daemon down was `node --test scripts/…test.mjs`, which no rule caught.
+ */
+export function isScriptTestRun(argv: readonly string[]): boolean {
+  if (!/^(node|nodejs|bun|deno)$/.test(base(argv[0]))) return false;
+  const args = argv.slice(1, 12);
+  if (args.includes("--test") || (base(argv[0]) !== "node" && args[0] === "test")) return true;
+  return args.some((arg) => !arg.startsWith("-") && /\.(test|spec)\.[cm]?[jt]sx?$/.test(arg));
 }
 
 /** Paseo's own processes: the daemon, its supervisor, plugin hosts, terminal workers and its bundled tools. */

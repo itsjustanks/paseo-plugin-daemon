@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { Snapshot } from "./contracts";
 import type { ProcessReport } from "./processes";
 import { WatchResultSchema, type WatchResult } from "./watch";
+import { AUTO_STOP_NOTICE_MINUTES, type GuardState } from "./guard";
 import type { LinkState, Profile, Tunnel } from "./link";
 import { cwdWithinDirectory, filterWorkspaceProcesses, workspacePorts, type WorkspaceProcessLike, type WorkspaceTarget } from "./workspace-filter";
 
@@ -26,6 +27,8 @@ import { cwdWithinDirectory, filterWorkspaceProcesses, workspacePorts, type Work
  *    once, or a process has held a full CPU core for minutes (the process
  *    report's runaways)
  *  - a watched service on another machine is slow or down
+ *  - (0.13.0) a Paseo plugin isn't answering, memory pressure is rising (the
+ *    check loop's reading), or the optional guard just stopped a runaway
  * Nothing here contains tokens, URLs, or raw command lines; issues carry only
  * ports, a home-relative cwd, and fixed copy.
  */
@@ -39,6 +42,8 @@ export type HealthStatus = z.infer<typeof HealthStatusSchema>;
 export const HealthIssueCodeSchema = z.enum([
   "host-unreachable", "host-unsupported", "projects-unavailable", "port-gone", "tunnel-failed", "link-retrying", "link-down", "process-zombie", "cpu-pressure", "memory-pressure", "pressure-driver",
   "too-many-jobs", "runaway", "service-slow", "service-down",
+  // 0.13.0
+  "plugin-stuck", "auto-stopped",
 ]);
 export type HealthIssueCode = z.infer<typeof HealthIssueCodeSchema>;
 
@@ -55,6 +60,12 @@ export const HealthIssueSchema = z.object({
   subject: z.string().nullable().optional(),
   /** The process the issue is about, when it is about one (0.12.0: "Ask an agent" finds it by this). */
   pid: z.number().int().nullable().optional(),
+  /** 0.13.0: Hosts may stop that process (Stop is offered next to it). */
+  stoppable: z.boolean().optional(),
+  /** 0.13.0, plugin-stuck: the plugin's id, whether Restart can be offered, and why not. */
+  plugin: z.string().optional(),
+  restartable: z.boolean().optional(),
+  restartReason: z.string().nullable().optional(),
 });
 export type HealthIssue = z.infer<typeof HealthIssueSchema>;
 
@@ -99,6 +110,8 @@ export interface HealthInput {
   /** The process report, for runaways and load; null when it couldn't be read. */
   report?: Pick<ProcessReport, "runaways" | "container" | "host" | "memoryBasis" | "memoryBasisBytes" | "heavyJobs"> | null;
   watched?: readonly WatchResult[];
+  /** 0.13.0: the check loop's latest reading; absent in tests and on unsupported hosts. */
+  guard?: GuardState | null;
 }
 
 const host = (code: HealthIssueCode, severity: HealthIssue["severity"], message: string): HealthIssue => ({ code, severity, scope: "host", message, ports: [], cwd: null });
@@ -133,9 +146,12 @@ export function evaluateHealth(input: HealthInput, memory: HealthMemory = EMPTY_
     const near = runaways.find((runaway) => runaway.code === "memory-near-limit");
     if (near) issues.push(host("memory-pressure", near.severity, near.title));
     else if (snapshot.memory.pressure === "critical") issues.push(host("memory-pressure", "warning", "Memory pressure on the host is critical."));
+    // 0.13.0: the check loop measures pressure every 10 seconds, even while the app can't reach the daemon.
+    const loop = input.guard?.memory;
+    if (!near && loop && loop.level !== "normal" && loop.sentence && !issues.some((issue) => issue.code === "memory-pressure")) issues.push(host("memory-pressure", loop.level === "critical" ? "critical" : "warning", loop.sentence));
     for (const runaway of runaways) {
       if (runaway.code === "too-many-jobs") issues.push(host("too-many-jobs", "warning", runaway.title));
-      if (runaway.code === "cpu-runaway" || runaway.code === "memory-heavy") issues.push({ ...process_("runaway", runaway.severity, runaway.title, [], runaway.cwd), subject: runaway.title.split(" (PID")[0] ?? null, pid: runaway.pids[0] ?? null });
+      if (runaway.code === "cpu-runaway" || runaway.code === "memory-heavy") issues.push({ ...process_("runaway", runaway.severity, runaway.title, [], runaway.cwd), subject: runawaySubject(runaway.title), pid: runaway.pids[0] ?? null, ...(runaway.stoppable === undefined ? {} : { stoppable: runaway.stoppable }) });
     }
     services = snapshot.services.map((service) => ({ name: service.name, cwd: service.cwd, ports: service.ports, project: service.project ? { path: service.project.path, workspace: service.project.workspace } : null }));
     // A dev server is in both lists; report each process once.
@@ -172,6 +188,15 @@ export function evaluateHealth(input: HealthInput, memory: HealthMemory = EMPTY_
     }
   }
 
+  for (const plugin of input.guard?.plugins ?? []) {
+    const message = plugin.stopping
+      ? `${plugin.name} is stuck: it began stopping and never finished, so Paseo can't add, update or reload plugins.`
+      : `${plugin.name} isn't answering (${plugin.timeouts} timeout${plugin.timeouts === 1 ? "" : "s"} in ${plugin.windowMinutes} min).`;
+    issues.push({ ...host("plugin-stuck", plugin.severity, message), subject: plugin.name, plugin: plugin.id, restartable: plugin.restartable, restartReason: plugin.reason });
+  }
+  const auto = input.guard?.autoGuard.last;
+  if (auto && now - auto.at < AUTO_STOP_NOTICE_MINUTES * 60_000) issues.push({ ...host("auto-stopped", "warning", auto.message), subject: auto.name, pid: auto.pid });
+
   for (const result of input.watched ?? []) {
     if (result.state === "slow") issues.push({ ...host("service-slow", "warning", result.message), subject: result.name });
     if (result.state === "down") issues.push({ ...host("service-down", "warning", result.message), subject: result.name });
@@ -183,6 +208,12 @@ export function evaluateHealth(input: HealthInput, memory: HealthMemory = EMPTY_
     cpuPercent: report.host.cpuPercent, heavyJobs: report.heavyJobs.count, heavyJobLimit: report.heavyJobs.limit,
   } : null;
   return { verdict: { status: healthStatus(issues), checkedAt: now, background: input.background, issues, services, watched: [...(input.watched ?? [])], load }, memory: next };
+}
+
+/** A short name for a runaway: "A test run", "esbuild" (before " is using", or before " (PID"). */
+export function runawaySubject(title: string): string | null {
+  const cut = [title.indexOf(" (PID"), title.indexOf(" is using"), title.indexOf(" has used")].filter((index) => index > 0);
+  return cut.length ? title.slice(0, Math.min(...cut)) : null;
 }
 
 /** Remember which dev-server ports are served; move vanished ones to `lost` and expire old entries. */
@@ -253,6 +284,8 @@ export function pillText(health: WorkspaceHealth): string | null {
     if (first.code === "cpu-pressure") return `CPU busy${more}`;
     if (first.code === "memory-pressure") return `Memory nearly full${more}`;
     if (first.code === "projects-unavailable") return `Projects unverified${more}`;
+    if (first.code === "plugin-stuck") return `${first.subject ?? "A plugin"} not answering${more}`;
+    if (first.code === "auto-stopped") return `Runaway stopped${more}`;
     return `Host issue${more}`;
   }
   if (health.services.length === 0) return null;

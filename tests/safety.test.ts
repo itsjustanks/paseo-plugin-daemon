@@ -98,7 +98,8 @@ describe("tokens", () => {
     const [body, sig] = token.split(".");
     const tampered = Buffer.from(body!, "base64url").toString("utf8").replace('"pid":901', '"pid":900');
     expect(guard.verify(`${Buffer.from(tampered).toString("base64url")}.${sig}`)).toBeNull();
-    expect(guard.verify(`${body}.${sig!.slice(0, -2)}AA`)).toBeNull();
+    // Always a different signature (a signature that already ends in "AA" made this a no-op 1 time in 4,096).
+    expect(guard.verify(`${body}.${sig!.slice(0, -2)}${sig!.endsWith("AA") ? "BB" : "AA"}`)).toBeNull();
     expect(guard.verify("garbage")).toBeNull();
     expect(guard.verify("")).toBeNull();
     expect(guard.verify(`${body}.`)).toBeNull();

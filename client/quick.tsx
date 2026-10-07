@@ -6,6 +6,7 @@ import { hostHealth, pillText, type HealthVerdict } from "../shared/health";
 import { seconds } from "../shared/watch";
 import { Button, Dot, Meta, Note, SPACE, TYPE, toneColor, type Tone } from "./kit";
 import type { PopoverProps } from "./native";
+import { RestartPlugin } from "./guard";
 import { formatBytes } from "./ui";
 
 /**
@@ -60,7 +61,10 @@ export function makeQuickHealth(screenId: string): ComponentType<PopoverProps> {
     const { verdict, refresh, checking } = useVerdict();
     const state = quickState(verdict);
     const load = verdict?.load;
-    const issues = (verdict?.issues ?? []).filter((issue) => issue.code !== "service-slow" && issue.code !== "service-down").slice(0, 3);
+    // 0.13.0: a stuck plugin and an automatic stop come first; they are the ones that take a daemon down or explain why something vanished.
+    const rank = (code: string) => (code === "plugin-stuck" ? 0 : code === "auto-stopped" ? 1 : code === "memory-pressure" || code === "runaway" ? 2 : 3);
+    const issues = (verdict?.issues ?? []).filter((issue) => issue.code !== "service-slow" && issue.code !== "service-down" && issue.code !== "projects-unavailable")
+      .map((issue, index) => ({ issue, index })).sort((a, b) => rank(a.issue.code) - rank(b.issue.code) || a.index - b.index).map(({ issue }) => issue).slice(0, 3);
     return (
       <View style={{ padding: SPACE.md, gap: SPACE.row, minWidth: 280, maxWidth: 380 }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
@@ -73,7 +77,12 @@ export function makeQuickHealth(screenId: string): ComponentType<PopoverProps> {
             <Note theme={theme}>{`Heavy jobs: ${load.heavyJobs} running, ${load.heavyJobLimit} at once is the limit${load.cpuPercent === null ? "" : ` · CPU ${Math.round(load.cpuPercent)}%`}`}</Note>
           </View>
         ) : null}
-        {issues.map((issue, index) => <Note key={`${issue.code}-${index}`} theme={theme} tone={issue.severity === "critical" ? "danger" : "warning"}>{issue.message}</Note>)}
+        {issues.map((issue, index) => (
+          <View key={`${issue.code}-${index}`} style={{ gap: SPACE.sm }}>
+            <Note theme={theme} tone={issue.severity === "critical" ? "danger" : "warning"}>{issue.message}</Note>
+            {issue.code === "plugin-stuck" ? <RestartPlugin theme={theme} issue={issue} onDone={() => void refresh()} /> : null}
+          </View>
+        ))}
         {(verdict?.watched ?? []).map((service) => (
           <View key={service.id} style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
             <Dot color={dotColor(theme, WATCH_TONE[service.state] ?? "neutral")} />
@@ -96,7 +105,7 @@ export function makeStatusTrailing(Quick: ComponentType<PopoverProps>): Componen
     const dot = <Dot color={dotColor(theme, state.tone)} />;
     if (!openPopover) return dot;
     return (
-      <Pressable accessibilityRole="button" accessibilityLabel={`Hosts: ${state.text}${state.detail ? `, ${state.detail}` : ""}. Quick health check`} hitSlop={SPACE.sm} onPress={() => openPopover(Quick)} style={{ padding: SPACE.xs }}>
+      <Pressable accessibilityRole="button" accessibilityLabel={`Hosts: ${state.text}${state.detail ? `, ${state.detail.replace(/\.+$/, "")}` : ""}. Quick health check`} hitSlop={SPACE.sm} onPress={() => openPopover(Quick)} style={{ padding: SPACE.xs }}>
         {dot}
       </Pressable>
     );

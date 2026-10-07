@@ -17,6 +17,7 @@ import { suggestions } from "./server/watch";
 import { askContext, terminalOpen } from "./shared/ask";
 import { hostsAttachmentSearch } from "./shared/attachments";
 import { createAsk } from "./server/ask";
+import { guardState, pluginRestart, pluginRestartStatus } from "./shared/guard";
 
 type SettingsHandle = { read?: () => Promise<{ status: string; values?: unknown }>; subscribe?: (listener: () => void) => () => void } | undefined;
 
@@ -41,7 +42,9 @@ export default function contribute(server: PluginServerContext) {
   const runtime = createRuntime({ readSettings });
   const removeHooks = registerHooks(server, runtime, readSettings);
   // One cached verdict per host; pills and panels read it instead of probing.
-  const health = new HealthChecker({ runtime, readSettings, onVerdict: summaryWriter() });
+  const health = new HealthChecker({ runtime, readSettings, onVerdict: summaryWriter(), guard: runtime.guard ? () => runtime.guard!.state() : undefined });
+  // 0.13.0: the check loop starts now, not on the first app visit: it matters most when the daemon is too busy to answer.
+  runtime.guard?.start();
   // 0.10+: a settings change (say, a new watched service) is checked at once, not on the next tick.
   const unsubscribe = typeof handle?.subscribe === "function" ? handle.subscribe(() => { if (health.current()) void health.check(undefined, true).catch(() => undefined); }) : () => {};
   server.handle(hostHealth, (input, context) => runtime.withContext(context, () => health.read(context, input.refresh === true)));
@@ -55,6 +58,14 @@ export default function contribute(server: PluginServerContext) {
   server.handle(askContext, ({ subject }, context) => runtime.withContext(context, async () => { await health.read(context); return ask.context(subject, context.paseo); }));
   server.handle(hostsAttachmentSearch, ({ query }, context) => runtime.withContext(context, async () => { await health.read(context); return ask.attachments(query, context.paseo); }));
   server.handle(terminalOpen, ({ pid }, context) => runtime.withContext(context, () => ask.openTerminal(pid, context.paseo)));
+  server.handle(guardState, async () => {
+    if (!runtime.guard) throw new Error("Plugin and memory checks aren't available on this host.");
+    return runtime.guard.state();
+  });
+  // The verdict should drop the plugin as soon as it answers again, not on the next interval.
+  const settled = (outcome: { ok: boolean }) => { if (outcome.ok) void runtime.guard?.tick().then(() => health.check(undefined, true)).catch(() => undefined); };
+  server.handle(pluginRestart, async ({ pluginId }) => { const outcome = await runtime.plugins.restart(pluginId); settled(outcome); return outcome; });
+  server.handle(pluginRestartStatus, async ({ pluginId }) => { const outcome = runtime.plugins.status(pluginId); settled(outcome); return outcome; });
   server.handle(watchSuggestions, async () => ({ suggestions: await suggestions((await readSettings().catch(() => HOSTS_SETTINGS_DEFAULTS)).watchedServices) }));
   server.handle(sync.syncStatus, (_input, context) => runtime!.withContext(context, async () => {
     await runtime!.scope.refresh(); return { projects: runtime!.scope.status().projects.map((p) => ({ id: p.id, name: p.name })), history: await runtime!.transfers.history(), grants: await runtime!.peers.projectGrants() };
@@ -84,5 +95,5 @@ export default function contribute(server: PluginServerContext) {
   server.handle(peer.peerServices, ({ id }, context) => runtime.withContext(context, () => runtime.peers.services(id)));
   server.handle(peer.peerForward, ({ id, port }, context) => runtime.withContext(context, () => runtime.peers.forward(id, port)));
   server.handle(peer.peerDisconnect, ({ id }, context) => runtime.withContext(context, () => runtime.peers.disconnect(id)));
-  return async () => { removeHooks(); unsubscribe(); health.close(); runtime.processes.close(); await Promise.all([runtime.links.close(), runtime.peers.close(), runtime.transfers.close()]); };
+  return async () => { removeHooks(); unsubscribe(); health.close(); runtime.guard?.close(); runtime.processes.close(); await Promise.all([runtime.links.close(), runtime.peers.close(), runtime.transfers.close()]); };
 }

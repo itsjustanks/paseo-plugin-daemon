@@ -1,6 +1,7 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 import { ActionResultSchema, ContainerSnapshotSchema, PressureStateSchema } from "./contracts";
+import { RUNAWAY_SHARE_PERCENT } from "./guard";
 
 /**
  * The Processes tab: the heaviest processes this daemon's user runs, the
@@ -20,8 +21,8 @@ export const STOP_BATCH_MAX = 20;
 export const STOP_GRACE_SECONDS = 10;
 /** A process that holds a full CPU core this long is a runaway. */
 export const RUNAWAY_CPU_SECONDS = 120;
-/** A single process holding this share of the memory limit is flagged. */
-export const MEMORY_HEAVY_PERCENT = 40;
+/** A single process holding this share of the memory limit is flagged (0.13.0: 25%, was 40%). */
+export const MEMORY_HEAVY_PERCENT = RUNAWAY_SHARE_PERCENT;
 
 export const JobKindSchema = z.enum(["dev-server", "build", "test", "typecheck", "install"]);
 export type JobKind = z.infer<typeof JobKindSchema>;
@@ -29,7 +30,7 @@ export type JobKind = z.infer<typeof JobKindSchema>;
 export const OwnerKindSchema = z.enum(["paseo", "plugin", "agent", "terminal", "project", "paseo-started", "infrastructure", "other"]);
 export type OwnerKind = z.infer<typeof OwnerKindSchema>;
 
-export const ProcessFlagSchema = z.object({ code: z.enum(["cpu-runaway", "memory-heavy", "pressure-driver"]), text: z.string() });
+export const ProcessFlagSchema = z.object({ code: z.enum(["cpu-runaway", "memory-heavy", "memory-growing", "pressure-driver"]), text: z.string() });
 
 export const ProcessRowSchema = z.object({
   pid: z.number().int().positive(),
@@ -74,17 +75,21 @@ export const RunawaySchema = z.object({
   pids: z.array(z.number().int()),
   /** Home-relative directory of the process it is about, when it is about one. */
   cwd: z.string().nullable(),
+  /** 0.13.0: whether Hosts may stop the process it is about (Stop is offered next to it). */
+  stoppable: z.boolean().optional(),
 });
 export type Runaway = z.infer<typeof RunawaySchema>;
 
 export const ActionLogEntrySchema = z.object({
   at: z.number(),
-  action: z.enum(["stop", "force-stop", "auto-force-stop"]),
-  source: z.enum(["processes", "monitor"]),
+  /** 0.13.0 adds plugin restarts and the optional memory guard's automatic stop. */
+  action: z.enum(["stop", "force-stop", "auto-force-stop", "plugin-reload", "plugin-stop", "plugin-force-stop", "auto-stop"]),
+  source: z.enum(["processes", "monitor", "plugins", "guard"]),
   pid: z.number().int().nullable(),
   name: z.string(),
   owner: z.string().nullable(),
-  status: ActionResultSchema.shape.status,
+  /** A signal's outcome, or for a reload: "done" or "timed-out". */
+  status: z.enum([...ActionResultSchema.shape.status.options, "done", "timed-out"]),
   /** Processes that received the signal, the target included. */
   signaled: z.number().int().min(0),
   message: z.string(),

@@ -12,10 +12,18 @@ import { ProcessManager } from "./processes";
 import { ProjectScope } from "./scope";
 import { TunnelManager } from "./tunnels";
 import { WatchChecker } from "./watch";
+import { AdapterQuickSampler, GUARD_INTERVAL_MS, GuardLoop, LinuxQuickSampler } from "./guard-loop";
+import { scanLaunches } from "./daemon-log";
+import { PaseoCli } from "./paseo-cli";
+import { listPluginHosts, startClock } from "./plugin-procs";
+import { PluginRestarter } from "./plugin-restart";
+import { RESTART_WAIT_MS, type RestartOutcome } from "../shared/guard";
 
 export interface RuntimeOptions {
   readSettings?: () => Promise<HostsSettings>;
   log?: ActionLog;
+  /** Tests pass false to keep the check loop and the paseo command out of the way. */
+  guard?: boolean;
 }
 
 /** The Processes tab on a platform the monitor can't read: an honest, empty report. */
@@ -40,9 +48,44 @@ export function createRuntime(options: RuntimeOptions = {}) {
   const log = options.log ?? new ActionLog();
   const monitor = createMonitorHandlers({ scope });
   const readSettings = options.readSettings ?? (async () => HOSTS_SETTINGS_DEFAULTS);
+  // 0.13.0: the always-on check loop (memory pressure, growth, plugin health) and plugin restarts.
+  let guard: GuardLoop | null = null;
   const manager = monitor.internals ? new ProcessManager({
     ...monitor.internals, daemonPid: monitor.internals.parentPid, scope, log, readSettings,
+    growth: (pid, startId) => guard?.growthOf(pid, startId) ?? null,
+    memoryLevel: () => guard?.state().memory.level ?? "normal",
   }) : null;
+  let restarter: PluginRestarter | null = null;
+  if (manager && monitor.internals && options.guard !== false) {
+    const { adapter, uid, selfPid, parentPid } = monitor.internals;
+    const cli = new PaseoCli();
+    const startMs = startClock(adapter.platform);
+    guard = new GuardLoop({
+      sampler: adapter.platform === "linux" ? new LinuxQuickSampler(uid) : new AdapterQuickSampler(adapter, uid),
+      intervalMs: adapter.platform === "linux" ? GUARD_INTERVAL_MS : GUARD_INTERVAL_MS * 3,
+      readSettings: async () => ({ autoStopRunaways: (await readSettings().catch(() => HOSTS_SETTINGS_DEFAULTS)).autoStopRunaways === true }),
+      autoStop: (minPercent) => manager.autoStopBiggest(minPercent),
+      onAutoStop: (stop) => console.log(`daemon-link: memory guard: ${stop.message}`),
+      restartCheck: async () => (await cli.canReload()) ? { ok: true, reason: null } : { ok: false, reason: "Restart needs Paseo's paseo command, and Hosts can't find one here that can reload plugins." },
+    });
+    const loop = guard;
+    restarter = new PluginRestarter({
+      cli,
+      launches: async () => (await scanLaunches()).launches,
+      hosts: () => listPluginHosts({ adapter, uid, daemonPid: parentPid, selfPid, startMs }),
+      identity: (pid) => adapter.readIdentity(pid),
+      kill: (pid, signal) => { process.kill(pid, signal); },
+      self: { pid: selfPid, startMs: async () => { const identity = await adapter.readIdentity(selfPid).catch(() => null); return identity ? startMs(identity.startId) : null; } },
+      uid, daemonPid: parentPid,
+      log: (entry) => log.append(entry),
+      readyAfter: async (pluginId, since) => { await loop.pollLog(); return (loop.logState.lastReady(pluginId) ?? 0) > since; },
+    });
+  }
+  const unavailable = (pluginId: string): RestartOutcome => ({ ok: false, outcome: "refused", message: "Plugin restarts aren't available on this host.", steps: [], pluginId });
+  const plugins = {
+    restart: async (pluginId: string): Promise<RestartOutcome> => restarter ? restarter.begin(pluginId, RESTART_WAIT_MS) : unavailable(pluginId),
+    status: (pluginId: string): RestartOutcome => restarter ? restarter.status(pluginId) : unavailable(pluginId),
+  };
   const processes = manager ? {
     report: (input: ReportInput) => manager.report(input, () => log.recent(5)),
     preview: (tokens: readonly string[]) => manager.preview(tokens),
@@ -84,7 +127,7 @@ export function createRuntime(options: RuntimeOptions = {}) {
     return [...ports.values()];
   }, transfers);
   return {
-    links, peers, monitor: { ...monitor, stop: monitorStop, forceStop: monitorForceStop }, transfers, scope, processes, log,
+    links, peers, monitor: { ...monitor, stop: monitorStop, forceStop: monitorForceStop }, transfers, scope, processes, log, guard, plugins,
     watch: new WatchChecker(),
     withContext<T>(context: PluginHandlerContext, action: () => T): T { scope.bind(context.paseo); return action(); },
   };

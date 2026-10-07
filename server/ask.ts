@@ -173,7 +173,7 @@ export function createAsk(deps: AskDeps) {
     const verdict = await deps.verdict().catch(() => null);
     const flag = row.flags[0] ?? null;
     const driver = verdict?.issues.find((issue) => issue.code === "pressure-driver" && issue.pid === row.pid);
-    const code: AskFacts["code"] = flag?.code ?? (driver ? "pressure-driver" : "process");
+    const code: AskFacts["code"] = flag?.code === "memory-growing" ? "memory-heavy" : flag?.code ?? (driver ? "pressure-driver" : "process");
     const directory = absolute(row.cwd);
     const workspace = await workspaceFor(paseo, directory).catch(() => null);
     const serves = row.ports.length > 0 || row.job?.kind === "dev-server";

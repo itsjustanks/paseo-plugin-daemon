@@ -8,6 +8,8 @@ import { processPreview, processReport, processStop, sameness, twinKeys, type Ac
 import { Accordion, AccordionItem, Banner, Button, Card, Chip, Divider, HostIcon, ItemTitle, Meta, Note, QuietLine, RADIUS, Row, SPACE, TYPE, tint, toneColor, type Tone } from "./kit";
 import { formatBytes, formatDuration, formatPercent } from "./ui";
 import { AskAgentButton } from "./ask";
+import { StopProcess, StuckPlugins } from "./guard";
+import type { HealthIssue } from "../shared/health";
 
 type Theme = PluginTheme;
 export type Say = (message: { text: string; tone: Tone } | null) => void;
@@ -89,10 +91,12 @@ function LoadCard({ theme, report }: { theme: Theme; report: ProcessReport }) {
 }
 
 /** Runaways: the one place this tab raises its voice, each with the decision it needs. */
-function RunawayBanner({ theme, report, onReview, onJobs }: { theme: Theme; report: ProcessReport; onReview(pids: number[]): void; onJobs(): void }) {
+function RunawayBanner({ theme, report, say, onDone, onJobs }: { theme: Theme; report: ProcessReport; say: Say; onDone(): void; onJobs(): void }) {
   if (report.runaways.length === 0) return null;
   const critical = report.runaways.some((runaway) => runaway.severity === "critical");
   const stoppable = new Set(report.processes.filter((row) => row.stoppable).map((row) => row.pid));
+  // 0.13.0: the report says whether each runaway can be stopped, even when its row isn't on this page.
+  const canStop = (runaway: ProcessReport["runaways"][number]) => runaway.stoppable ?? runaway.pids.some((pid) => stoppable.has(pid));
   return (
     <Banner theme={theme} tone={critical ? "danger" : "warning"} title={report.runaways.length === 1 ? "Something needs attention" : `${report.runaways.length} things need attention`}>
       {report.runaways.map((runaway, index) => (
@@ -102,7 +106,7 @@ function RunawayBanner({ theme, report, onReview, onJobs }: { theme: Theme; repo
           {(runaway.code === "cpu-runaway" || runaway.code === "memory-heavy") && runaway.pids.length ? (
             <Row>
               <AskAgentButton theme={theme} subject={{ kind: "process", pid: runaway.pids[0]! }} />
-              {runaway.pids.some((pid) => stoppable.has(pid)) ? <Button theme={theme} label="Review and stop…" icon="OctagonX" danger onPress={() => onReview(runaway.pids.filter((pid) => stoppable.has(pid)))} /> : null}
+              {canStop(runaway) ? <StopProcess theme={theme} pid={runaway.pids[0]!} say={say} onDone={onDone} /> : null}
             </Row>
           ) : null}
         </View>
@@ -195,18 +199,21 @@ function ProcessItem({ theme, row, compact, byTree, selected, onSelect, onStop, 
   );
 }
 
-const ACTION_WORD: Record<ActionLogEntry["action"], string> = { stop: "Asked to stop", "force-stop": "Force stopped", "auto-force-stop": "Stopped forcefully" };
+const ACTION_WORD: Record<ActionLogEntry["action"], string> = {
+  stop: "Asked to stop", "force-stop": "Force stopped", "auto-force-stop": "Stopped forcefully",
+  "plugin-reload": "Reloaded plugin", "plugin-stop": "Stopped stuck plugin", "plugin-force-stop": "Force stopped stuck plugin", "auto-stop": "Stopped automatically (memory nearly full)",
+};
 
 /** Every stop, newest first, from this host's action log: the content of the "Recent stops" fold-out. */
 function RecentStops({ theme, entries }: { theme: Theme; entries: readonly ActionLogEntry[] }) {
-  if (entries.length === 0) return <Note theme={theme}>Nothing has been stopped from Hosts yet.</Note>;
+  if (entries.length === 0) return <Note theme={theme}>Nothing has been stopped or restarted from Hosts yet.</Note>;
   return (
     <>
       {entries.map((entry, index) => (
         <View key={`${entry.at}-${index}`} style={{ gap: SPACE.hair }}>
           {index > 0 ? <Divider theme={theme} /> : null}
           <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${ACTION_WORD[entry.action]}: ${entry.name}${entry.pid ? ` (PID ${entry.pid})` : ""}`}</Text>
-          <Meta theme={theme}>{[new Date(entry.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }), entry.owner, entry.status === "signaled" ? `${entry.signaled} process${entry.signaled === 1 ? "" : "es"} signalled` : entry.status.replace(/-/g, " ")].filter(Boolean).join(" · ")}</Meta>
+          <Meta theme={theme}>{[new Date(entry.at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }), entry.owner, entry.status === "signaled" ? `${entry.signaled} process${entry.signaled === 1 ? "" : "es"} signalled` : entry.status === "done" ? "done" : entry.status.replace(/-/g, " ")].filter(Boolean).join(" · ")}</Meta>
         </View>
       ))}
     </>
@@ -214,7 +221,7 @@ function RecentStops({ theme, entries }: { theme: Theme; entries: readonly Actio
 }
 
 /** The ask-first sheet: exactly what will be stopped (children too), what won't and why, and what happens next. */
-function StopSheet({ theme, plan, busy, onCancel, onConfirm }: { theme: Theme; plan: StopPlan | null; busy: boolean; onCancel(): void; onConfirm(): void }) {
+export function StopSheet({ theme, plan, busy, onCancel, onConfirm }: { theme: Theme; plan: StopPlan | null; busy: boolean; onCancel(): void; onConfirm(): void }) {
   const ready = plan?.targets.filter((target) => target.ok) ?? [];
   const refused = plan?.targets.filter((target) => !target.ok) ?? [];
   const children = ready.reduce((sum, target) => sum + target.children.length, 0);
@@ -260,7 +267,7 @@ export function summarizeNames(names: readonly string[]): string {
  * The Processes tab. Status first (runaways, then the load), then the list
  * with its controls, then the log; pointers last.
  */
-export function ProcessesTab({ theme, compact, hostId, say }: { theme: Theme; compact: boolean; hostId: string; say: Say }) {
+export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChanged }: { theme: Theme; compact: boolean; hostId: string; say: Say; issues?: readonly HealthIssue[]; onChanged?: () => void }) {
   const report = useRpc(processReport), preview = useRpc(processPreview), stop = useRpc(processStop);
   const [sort, setSort] = useState<ReportSort>("cpu");
   const [filter, setFilter] = useState<Filter>("all");
@@ -309,7 +316,12 @@ export function ProcessesTab({ theme, compact, hostId, say }: { theme: Theme; co
   const twins = twinKeys(rows);
   return (
     <>
-      <RunawayBanner theme={theme} report={data} onReview={(pids) => ask.mutate(pids)} onJobs={() => { setFilter("jobs"); setLimit(PAGE); }} />
+      {issues.some((issue) => issue.code === "plugin-stuck") ? (
+        <Banner theme={theme} tone={issues.some((issue) => issue.code === "plugin-stuck" && issue.severity === "critical") ? "danger" : "warning"} title="A Paseo plugin isn't answering">
+          <StuckPlugins theme={theme} issues={issues} say={say} onDone={() => { onChanged?.(); void query.refetch(); }} />
+        </Banner>
+      ) : null}
+      <RunawayBanner theme={theme} report={data} say={say} onDone={() => { onChanged?.(); void query.refetch(); }} onJobs={() => { setFilter("jobs"); setLimit(PAGE); }} />
       <LoadCard theme={theme} report={data} />
       <Card theme={theme} title={filter === "jobs" ? "Heavy jobs" : "Heaviest processes"} icon="ListOrdered" subtitle={filter === "jobs" ? "Each job with everything it started, added together" : SORTED[sort]}>
         <Pills<Filter> theme={theme} label="Show" items={FILTERS} value={filter} onChange={(next) => { setFilter(next); setLimit(PAGE); }} />
@@ -335,11 +347,11 @@ export function ProcessesTab({ theme, compact, hostId, say }: { theme: Theme; co
       </Card>
       {!data.projectsVerified ? <QuietLine theme={theme} icon="ShieldAlert">Paseo projects aren't verified on this host right now, so workspace names are missing and only processes started from Paseo can be stopped.</QuietLine> : null}
       <Accordion theme={theme}>
-        <AccordionItem theme={theme} compact={compact} icon="History" title="Recent stops" summary={data.recentActions.length ? `${data.recentActions.length} logged · last: ${data.recentActions[0]!.name}` : "None yet"}>
+        <AccordionItem theme={theme} compact={compact} icon="History" title="Recent stops and restarts" summary={data.recentActions.length ? `${data.recentActions.length} logged · last: ${data.recentActions[0]!.name}` : "None yet"}>
           <RecentStops theme={theme} entries={data.recentActions} />
         </AccordionItem>
         <AccordionItem theme={theme} compact={compact} icon="ShieldCheck" title="What can be stopped here" summary="Only your own projects' jobs, and always after asking">
-          <Note theme={theme}>Only processes started from Paseo or running inside your Paseo projects can be stopped here. Paseo itself, its plugins, agents, terminals and databases never are. Nothing is ever stopped without asking.</Note>
+          <Note theme={theme}>Only processes started from Paseo or running inside your Paseo projects can be stopped here. Paseo itself, its plugins, agents, terminals and databases never are. Nothing is stopped without asking, unless you turn on the memory guard in Settings → Hosts.</Note>
           <Meta theme={theme}>A stop asks the process to finish first and forces it only if it is still running after the grace period. Each one is logged, without command lines (where: Overview → Technical details).</Meta>
         </AccordionItem>
       </Accordion>

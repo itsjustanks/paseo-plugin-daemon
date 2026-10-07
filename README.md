@@ -35,6 +35,15 @@ an isolated preview: no real accounts, host addresses, project names, credential
   then stop: each is asked to exit, and anything still running after 10 seconds is stopped
   forcefully. Paseo itself, its plugins, agents, terminals and databases are never stopped, and
   every stop is logged.
+- **Runaway memory, early.** A job holding a quarter of memory, or growing fast, is flagged in plain
+  words ("A test run is using 36 GB, 61% of this computer's memory"), as is memory pressure, from a
+  check loop that runs every 10 seconds even when Paseo is closed. Stop or Ask an agent sits beside
+  it. An optional guard (off by default) stops the biggest stoppable job when memory stays nearly
+  full for over a minute.
+- **Stuck plugins, restarted in one press.** When a Paseo plugin stops answering ("Activity isn't
+  answering (12 timeouts in 10 min)"), Paseo can't add, update or reload plugins. Restart reloads just
+  that plugin; if Paseo is stuck on it, Hosts stops only that plugin's own process and reloads it. The
+  daemon is never restarted.
 - **Watched services.** Add health URLs on other machines (such as the AI Router's OmniRoute, offered
   in one press when that plugin is set up). A slow or failing answer shows on the sidebar dot and the
   Overview card in plain words: "OmniRoute is slow: 4.2 s, usually 110 ms".
@@ -247,6 +256,7 @@ Center. Settings are saved per host and shared by every client of that host.
 | Link duration | 2 hours | How long Open keeps a new browser link alive, and what each Extend adds (15 min–8 h). |
 | Close browser links on archive | On | Archiving a workspace stops browser links that point at its dev servers. |
 | Heavy jobs at once | 4 | More builds, tests and dev servers than this is flagged; nothing stops on its own. |
+| Stop a runaway automatically… | Off | Memory nearly full for a minute: stop the biggest job you could stop. |
 | Watched services | None | Health URLs elsewhere (http/https, no secrets), checked at most every 30 s. |
 
 Archive cleanup and background health checks run on the daemon, so they work even when no app is
@@ -254,7 +264,7 @@ connected. Cleanup only stops temporary browser links; the dev server itself kee
 saved settings file cannot be read, cleanup is skipped rather than guessed. Settings saved by 0.6.0
 through 0.9.0 are migrated in place: every value you chose is kept and new settings take their
 defaults. Defaults are safe on a shared team daemon: nothing is published, paired or stopped until
-someone presses a button.
+someone presses a button (or turns on the memory guard).
 
 ### Browser links: how long they live
 
@@ -352,7 +362,13 @@ is listed but view-only, with the reason on the row.
 children included, and anything that won't, with why. Confirming asks each process to exit; anything
 still running 10 seconds later is stopped forcefully. Every rule is re-checked against a fresh read at
 the moment of each signal, and every step is written to `$PASEO_HOME/daemon-link/actions.jsonl`
-(names, PIDs and outcomes only, never command lines). **Recent stops** lists them.
+(names, PIDs and outcomes only, never command lines). **Recent stops and restarts** lists them.
+
+**Stuck plugins and the memory guard (0.13.0).** A banner at the top lists any Paseo plugin that isn't
+answering, with **Restart** (see the [changelog](CHANGELOG.md) for exactly how its process is found
+and stopped). Memory runaways show **Stop** beside them even when their row isn't on this page. With
+the optional memory guard on, Hosts stops the biggest job you could stop yourself once memory has been
+nearly full for over a minute, through the same checks, and logs it as an automatic stop.
 
 ### Overview and the quick health check
 

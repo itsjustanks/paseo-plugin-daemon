@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { readdir, readFile, readlink } from "node:fs/promises";
 import { cpus, loadavg, uptime } from "node:os";
 import { promisify } from "node:util";
-import { readCgroup } from "./cgroup";
+import { parsePsiFull, readCgroup } from "./cgroup";
 import { hashArgv } from "./redaction";
 import {
   mapLimit,
@@ -259,6 +259,7 @@ export class LinuxAdapter implements PlatformAdapter {
       ...loads,
       psiCpuSome10: psiCpu ? parsePressure(psiCpu) : null,
       psiMemorySome10: psiMem ? parsePressure(psiMem) : null,
+      psiMemoryFull10: psiMem ? parsePsiFull(psiMem) : null,
       memoryTotalBytes: memory.totalBytes,
       memoryAvailableBytes: memory.availableBytes,
       swapTotalBytes: memory.swapTotalBytes,
@@ -430,7 +431,7 @@ export class LinuxAdapter implements PlatformAdapter {
   }
 }
 
-async function defaultReadClockTicks(): Promise<number> {
+export async function defaultReadClockTicks(): Promise<number> {
   const { stdout } = await execFileAsync("getconf", ["CLK_TCK"], { timeout: 2000, env: { LC_ALL: "C", PATH: process.env.PATH ?? "" } });
   const value = Number(stdout.trim());
   return Number.isFinite(value) && value > 0 ? value : 100;

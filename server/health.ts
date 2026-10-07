@@ -4,6 +4,7 @@ import { EMPTY_HEALTH_MEMORY, evaluateHealth, type HealthInput, type HealthMemor
 import type { LinkState, Profile, Tunnel } from "../shared/link";
 import type { ProcessReport, ReportInput } from "../shared/processes";
 import type { WatchedService, WatchResult } from "../shared/watch";
+import type { GuardState } from "../shared/guard";
 import { HOSTS_SETTINGS_DEFAULTS, SNAPSHOT_INTERVAL_DEFAULT, type HostsSettings } from "../shared/settings";
 
 /** The slice of the runtime the checker needs; tests hand in a fake. */
@@ -23,6 +24,8 @@ export interface HealthCheckerOptions {
   clearTimer?: typeof clearTimeout;
   /** Called with every fresh verdict (the summary file for other plugins). */
   onVerdict?: (verdict: HealthVerdict) => void;
+  /** 0.13.0: the check loop's latest reading (no I/O). */
+  guard?: () => GuardState;
 }
 
 /**
@@ -96,6 +99,7 @@ export class HealthChecker {
     ]);
     input.report = report;
     input.watched = watched;
+    try { input.guard = this.options.guard?.() ?? null; } catch { input.guard = null; }
     const result = evaluateHealth(input, this.memory);
     this.memory = result.memory;
     this.verdict = result.verdict;

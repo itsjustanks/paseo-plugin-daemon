@@ -328,7 +328,7 @@ export class Collector {
     }
     const newOomKills = raw.oomKills === null || this.oomKills === null ? null : Math.max(0, raw.oomKills - this.oomKills);
     this.oomKills = raw.oomKills;
-    const classified = classifyContainerMemory({ limitBytes: raw.memoryLimitBytes, workingSetBytes: raw.memoryWorkingSetBytes, psiSome10: raw.psiMemorySome10, newOomKills });
+    const classified = classifyContainerMemory({ limitBytes: raw.memoryLimitBytes, workingSetBytes: raw.memoryWorkingSetBytes, psiSome10: raw.psiMemorySome10, psiFull10: raw.psiMemoryFull10 ?? null, newOomKills });
     const cpuBasis = raw.cpuLimitCores ?? sample.cores;
     return {
       memoryLimitBytes: raw.memoryLimitBytes,
@@ -338,6 +338,7 @@ export class Collector {
       cpuCoresUsed: cores === null ? null : Math.round(cores * 100) / 100,
       cpuPercent: cores === null || cpuBasis <= 0 ? null : round1(Math.min(100, (cores / cpuBasis) * 100)),
       psiMemorySome10: raw.psiMemorySome10,
+      psiMemoryFull10: raw.psiMemoryFull10 ?? null,
       psiCpuSome10: raw.psiCpuSome10,
       oomKills: raw.oomKills,
       pressure: classified.pressure,
@@ -355,6 +356,7 @@ export class Collector {
       swapUsedBytes: sample.swapUsedBytes,
       swapGrowthBytes: swapGrowth.delta,
       psiSome10: sample.psiMemorySome10,
+      psiFull10: sample.psiMemoryFull10 ?? null,
       pressureSignal: sample.pressureSignal,
     });
     return {

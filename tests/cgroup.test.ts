@@ -37,7 +37,7 @@ describe("cgroup limits", () => {
       "/sys/fs/cgroup/memory.pressure": "some avg10=0.00 avg60=0.00 avg300=0.00 total=130\n",
       "/sys/fs/cgroup/memory.events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\n",
     }));
-    expect(sample).toEqual({ memoryLimitBytes: 7872708608, memoryUsageBytes: 2482847744, memoryWorkingSetBytes: 1106407424, cpuLimitCores: null, cpuUsageUsec: 3229858957, psiMemorySome10: 0, psiCpuSome10: null, oomKills: 0, version: 2 });
+    expect(sample).toEqual({ memoryLimitBytes: 7872708608, memoryUsageBytes: 2482847744, memoryWorkingSetBytes: 1106407424, cpuLimitCores: null, cpuUsageUsec: 3229858957, psiMemorySome10: 0, psiMemoryFull10: null, psiCpuSome10: null, oomKills: 0, version: 2 });
   });
 
   it("treats a limit at or above the host's memory as no limit, falls back to v1, and is null without cgroups", async () => {

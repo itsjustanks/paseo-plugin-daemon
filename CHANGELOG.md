@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.13.0 — 2026-10-07
+
+The two things that took a daemon down this week, caught early, each with a one-press fix. A plugin
+that stopped answering wedged Paseo's plugin manager three times, and a test run that grew to 36 GB
+filled memory until the daemon stopped answering. Both were fixed by hand; now Hosts sees them coming.
+
+- **Plugin health.** Hosts reads Paseo's own log (`$PASEO_HOME/daemon.log`) for "Plugin RPC timed
+  out: <plugin>.<method>" and says, per plugin, "Activity isn't answering (12 timeouts in 10 min)", or
+  that a plugin began stopping and never finished. Three timeouts in 10 minutes is the bar; a restart
+  clears the count. Shown on Overview's status card, the sidebar dot's popover and Processes. Slow
+  plugin requests are counted as context (the log doesn't say which plugin).
+- **Restart <plugin>.** Asks first, in place, saying what will and won't happen. It runs
+  `paseo plugin reload <id>` (the `paseo` that ships with the daemon, found from Hosts' own path)
+  with a 45-second timeout. If the reload hangs because the plugin manager is wedged, Hosts stops
+  only that plugin's process (SIGTERM, then SIGKILL after 10 seconds if the very same process is
+  still there), gives Paseo's queued reload 15 seconds to finish, and reloads again if it didn't. An
+  old copy stuck stopping is stopped the same way. Never the daemon, never Hosts, never anything that
+  isn't one of the daemon's plugin processes, and nothing at all when the process can't be told
+  apart. A reload that fails for another reason stops nothing. Every step is logged. A restart that
+  takes longer than Paseo lets one call wait answers "running" and the app follows it.
+- **How a plugin's process is found.** Plugin processes carry no plugin id in their argv,
+  environment or folder. The daemon logs "Loading plugin" just before forking a plugin's process and
+  "Plugin ready" just after, one plugin at a time, so a plugin process (`plugin-process.js`, a direct
+  child of this daemon, this user's) belongs to the plugin whose window holds its start time (Linux:
+  boot time plus start ticks; macOS: `lstart`), with 2 seconds of slack. A match must be unique both
+  ways; the window holding Hosts' own start time is Hosts. Identity (start time, command, parent,
+  user) is re-read immediately before each signal.
+- **Runaway memory, said plainly.** A process holding 25% or more of this computer's memory (the
+  container's limit when there is one; was 40%), or one already at 10% that added at least 10% of
+  memory (and at least 2 GB) in 5 minutes, is flagged: "A test run is using 36 GB, 61% of this
+  computer's memory. The computer will slow to a crawl soon." Urgent at 50%, or at any share while
+  memory is under pressure. Memory pressure now reads PSI "full" as well as "some" (the cgroup's
+  `memory.pressure`, else `/proc/pressure/memory`) and OOM kills from `memory.events`: "Memory is
+  nearly full: programs are stalled waiting for memory 84% of the time." `node --test`, `bun test`
+  and `*.test.*` / `*.spec.*` scripts now count as test runs.
+- **Stop and Ask an agent beside it.** Overview's attention list and the Processes banner offer Stop
+  (the same ask-first sheet: SIGTERM, SIGKILL after 10 seconds) for a runaway Hosts may stop, even
+  when its row isn't on the current page, next to Ask an agent.
+- **The check loop.** Starts when the plugin loads, not on the first app visit, and runs every 10
+  seconds (30 on macOS) whether or not Paseo is open: a few small /proc and cgroup files, one short
+  read per process, at most 1 MB of new log. Anything that goes through the daemon is given at most
+  5 seconds, so a starved daemon can't stall it.
+- **Optional memory guard, off by default.** Settings → Hosts → "Stop a runaway automatically when
+  memory is nearly full". Only after memory has been critical (PSI full ≥ 20%, some ≥ 50%, or OOM
+  kills while 90% full) for over 60 seconds, it stops the biggest process a person could stop with
+  the Stop button (started from Paseo or inside a project; never Paseo, an agent, a terminal's shell
+  or a database) that holds at least 10% of memory, through the same checked stop, then waits 90
+  seconds before considering another. Logged as an automatic stop; the sidebar dot says so for 30
+  minutes.
+- **Help.** Two plain questions: "A job is eating all the memory. What happens?" and "A plugin isn't
+  answering. What do I do?". "Recent stops" is now "Recent stops and restarts". Overview's Technical
+  details say whether plugin health can be read here and whether the memory guard is on.
+- **Settings** document version 5 (adds the guard switch); older documents keep every value.
+- **Tests.** Log parsing and the budgeted tail, launch history, plugin-process matching (start times
+  measured on a real host), the reload-then-stop escalation against a fake daemon that wedges, the
+  runaway and pressure thresholds with the incident's numbers, the auto-guard's rules, and the loop
+  surviving a hung settings read.
+
 ## 0.12.1 — 2026-10-06
 
 Fixes from an audit of the real Paseo app (0.11.0-beta.5), checked again in the real app before

@@ -23,6 +23,8 @@ export interface CgroupSample {
   /** Cumulative CPU time the cgroup has used, in microseconds; only deltas matter. */
   cpuUsageUsec: number | null;
   psiMemorySome10: number | null;
+  /** 0.13.0: "full avg10", the share of time every task waited on memory. */
+  psiMemoryFull10?: number | null;
   psiCpuSome10: number | null;
   /** How many times the kernel has OOM-killed a process in this cgroup. */
   oomKills: number | null;
@@ -78,6 +80,12 @@ export function parsePsi(text: string): number | null {
   return match ? Number(match[1]) : null;
 }
 
+/** `memory.pressure` → "full avg10" (0.13.0). */
+export function parsePsiFull(text: string): number | null {
+  const match = /^full\s+avg10=([\d.]+)/m.exec(text);
+  return match ? Number(match[1]) : null;
+}
+
 /** Working set: usage minus the inactive file cache the kernel can drop for free. */
 export function workingSet(usage: number, inactiveFile: number | undefined): number {
   return Math.max(0, usage - (inactiveFile ?? 0));
@@ -105,6 +113,7 @@ async function readV2(fs: CgroupFs, base: string, hostTotalBytes: number): Promi
     cpuLimitCores: cpuMax === null ? null : parseCpuMax(cpuMax),
     cpuUsageUsec: cpuStat === null ? null : parseKeyed(cpuStat).get("usage_usec") ?? null,
     psiMemorySome10: memPsi === null ? null : parsePsi(memPsi),
+    psiMemoryFull10: memPsi === null ? null : parsePsiFull(memPsi),
     psiCpuSome10: cpuPsi === null ? null : parsePsi(cpuPsi),
     oomKills: events === null ? null : parseKeyed(events).get("oom_kill") ?? null,
     version: 2,

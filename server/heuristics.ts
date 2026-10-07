@@ -67,6 +67,8 @@ export interface MemoryPressureInput {
   /** Bytes of swap growth over the recent window, when known. */
   swapGrowthBytes: number | null;
   psiSome10: number | null;
+  /** 0.13.0: "full avg10" from /proc/pressure/memory; absent or null when unknown. */
+  psiFull10?: number | null;
   pressureSignal: "normal" | "warn" | "critical" | null;
 }
 
@@ -87,7 +89,11 @@ export function classifyMemoryPressure(input: MemoryPressureInput): { pressure: 
     reasons.push("kernel reports memory pressure warning");
   }
 
-  if (input.psiSome10 !== null && input.psiSome10 >= 25) {
+  // "full" means nothing at all got done while waiting: the clearest sign a machine is about to stall.
+  if (input.psiFull10 != null && input.psiFull10 >= 5) {
+    pressure = input.psiFull10 >= 20 ? "critical" : pressure === "normal" ? "high" : pressure;
+    reasons.push(`programs were stalled waiting for memory ${input.psiFull10.toFixed(0)}% of the last 10 seconds`);
+  } else if (input.psiSome10 !== null && input.psiSome10 >= 25) {
     pressure = "critical";
     reasons.push(`tasks stalled on memory ${input.psiSome10.toFixed(0)}% of the last 10s`);
   } else if (input.psiSome10 !== null && input.psiSome10 >= 5) {
@@ -119,6 +125,8 @@ export interface ContainerPressureInput {
   limitBytes: number | null;
   workingSetBytes: number;
   psiSome10: number | null;
+  /** 0.13.0: "full avg10" (every task stalled on memory); absent or null when unknown. */
+  psiFull10?: number | null;
   /** OOM kills since the previous sample; null when unknown. */
   newOomKills: number | null;
 }
@@ -140,7 +148,11 @@ export function classifyContainerMemory(input: ContainerPressureInput): { pressu
     else if (percent >= CONTAINER_HIGH_PERCENT) pressure = "high";
     if (pressure !== "normal") reasons.push(`using ${Math.round(percent)}% of this container's ${formatBytes(input.limitBytes)} memory limit`);
   }
-  if (input.psiSome10 !== null && input.psiSome10 >= 25) {
+  // "full" means nothing at all got done while waiting: the clearest sign a machine is about to stall.
+  if (input.psiFull10 != null && input.psiFull10 >= 5) {
+    pressure = input.psiFull10 >= 20 ? "critical" : pressure === "normal" ? "high" : pressure;
+    reasons.push(`programs were stalled waiting for memory ${input.psiFull10.toFixed(0)}% of the last 10 seconds`);
+  } else if (input.psiSome10 !== null && input.psiSome10 >= 25) {
     pressure = "critical";
     reasons.push(`processes waited on memory ${input.psiSome10.toFixed(0)}% of the last 10 seconds`);
   } else if (input.psiSome10 !== null && input.psiSome10 >= 5) {

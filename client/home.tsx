@@ -2,7 +2,7 @@ import React from "react";
 import { Text, View } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc, useSettings } from "@getpaseo/plugin/client";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { askSubjectFor, type HealthVerdict } from "../shared/health";
 import type { ProcessReport } from "../shared/processes";
 import { hostsSettings } from "../shared/settings";
@@ -14,12 +14,14 @@ import { Accordion, AccordionItem, Button, Dot, Fact, HeroCard, HostIcon, Meta, 
 import { memoryWords, shareTone, type Say } from "./processes";
 import { formatBytes } from "./ui";
 import { AskAgentButton } from "./ask";
+import { RestartPlugin, StopProcess } from "./guard";
+import { guardState } from "../shared/guard";
 
 type Theme = PluginTheme;
 type Go = (tab: TabId, fold?: Fold) => void;
 
 const WATCH_TONE: Record<WatchResult["state"], Tone> = { up: "success", slow: "warning", down: "danger", unknown: "neutral" };
-const PROCESS_CODES = new Set(["memory-pressure", "cpu-pressure", "too-many-jobs", "runaway", "pressure-driver", "process-zombie"]);
+const PROCESS_CODES = new Set(["memory-pressure", "cpu-pressure", "too-many-jobs", "runaway", "pressure-driver", "process-zombie", "auto-stopped"]);
 
 /** The hero's words: the state first, in plain English, saying each thing once. */
 export function heroState(verdict: HealthVerdict | undefined, setupDone: boolean): { tone: Tone; icon: string; title: string; lead: string | null } {
@@ -60,9 +62,11 @@ function WatchedList({ theme, watched }: { theme: Theme; watched: readonly Watch
 /**
  * Each thing that's wrong, in its own words, with "Ask an agent" where an
  * agent can help (0.12.0): a runaway or a job loading the host, a dev server
- * that stopped, a watched service that is slow or down.
+ * that stopped, a watched service that is slow or down. 0.13.0 adds the
+ * one-press fixes: Stop beside a runaway Hosts may stop, and Restart beside
+ * a plugin that isn't answering (both ask first).
  */
-function AttentionList({ theme, verdict }: { theme: Theme; verdict: HealthVerdict }) {
+function AttentionList({ theme, verdict, say, onDone }: { theme: Theme; verdict: HealthVerdict; say: Say; onDone(): void }) {
   const issues = verdict.issues.filter((issue) => issue.code !== "projects-unavailable");
   return (
     <View style={{ gap: SPACE.row }}>
@@ -74,7 +78,15 @@ function AttentionList({ theme, verdict }: { theme: Theme; verdict: HealthVerdic
               <View style={{ paddingTop: SPACE.sm }}><Dot color={toneColor(theme, issue.severity === "critical" ? "danger" : "warning")} /></View>
               <Text style={{ ...TYPE.body, color: theme.colors.foreground, flex: 1 }}>{issue.message}</Text>
             </View>
-            {subject ? <View style={{ paddingLeft: SPACE.md }}><Row><AskAgentButton theme={theme} subject={subject} /></Row></View> : null}
+            {subject || (issue.code === "runaway" && issue.stoppable && issue.pid) ? (
+              <View style={{ paddingLeft: SPACE.md }}>
+                <Row>
+                  {subject ? <AskAgentButton theme={theme} subject={subject} /> : null}
+                  {issue.code === "runaway" && issue.stoppable && issue.pid ? <StopProcess theme={theme} pid={issue.pid} say={say} onDone={onDone} /> : null}
+                </Row>
+              </View>
+            ) : null}
+            {issue.code === "plugin-stuck" ? <View style={{ paddingLeft: SPACE.md }}><RestartPlugin theme={theme} issue={issue} say={say} onDone={onDone} /></View> : null}
           </View>
         );
       })}
@@ -115,9 +127,12 @@ function watchedWords(watched: readonly WatchResult[]): { value: string; tone: T
 }
 
 /** Overview's "Technical details": the schedule, limits and where things are written. */
-function TechnicalDetails({ theme, verdict, report }: { theme: Theme; verdict: HealthVerdict | undefined; report: ProcessReport | undefined }) {
+function TechnicalDetails({ theme, hostId, verdict, report }: { theme: Theme; hostId: string; verdict: HealthVerdict | undefined; report: ProcessReport | undefined }) {
   const settings = useSettings(hostsSettings);
   const values = settings.status === "ready" ? settings.values : null;
+  const readGuard = useRpc(guardState);
+  // Older daemons have no such call; the two lines are then simply absent.
+  const guard = useQuery({ queryKey: ["daemon-link", hostId, "guard"], queryFn: () => readGuard({}), staleTime: 30_000, retry: 0 });
   return (
     <>
       {values ? <Fact theme={theme} label="Checks every" value={`${values.snapshotIntervalSeconds} seconds${values.backgroundHealthChecks ? ", even with Paseo closed" : ", while Hosts is open"}`} /> : null}
@@ -125,6 +140,8 @@ function TechnicalDetails({ theme, verdict, report }: { theme: Theme; verdict: H
       {values ? <Fact theme={theme} label="Browser links last" value={formatMinutes(values.tunnelMinutes)} /> : null}
       {report ? <Fact theme={theme} label="Memory measured" value={report.memoryBasis === "container" ? "against this container's limit" : "against the whole machine"} /> : null}
       {report ? <Fact theme={theme} label="Processes" value={`${report.total} running · Paseo uses ${formatBytes(report.paseoBytes)}`} /> : null}
+      {guard.data ? <Fact theme={theme} label="Plugin health" value={guard.data.logReadable ? "Read from Paseo's own log every 10 seconds" : "Unknown: this Paseo's log can't be read here"} /> : null}
+      {guard.data ? <Fact theme={theme} label="Memory guard" value={guard.data.autoGuard.enabled ? "On: stops the biggest job Hosts may stop after a minute of nearly full memory" : "Off (Settings → Hosts)"} /> : null}
       {verdict ? <Fact theme={theme} label="Last checked" value={new Date(verdict.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })} /> : null}
       <Fact theme={theme} label="Stop log" value="$PASEO_HOME/daemon-link/actions.jsonl" />
       <Fact theme={theme} label="Summary for other plugins" value="$PASEO_HOME/daemon-link/host-summary.json" />
@@ -148,6 +165,8 @@ export function OverviewTab({ theme, compact, hostId, verdict, report, devServer
   sync?: React.ReactNode;
 }) {
   const hero = heroState(verdict, setupDone);
+  const queryClient = useQueryClient();
+  const changed = () => { void queryClient.invalidateQueries({ queryKey: ["daemon-link", hostId] }); };
   const watched = verdict?.watched ?? [];
   const processIssue = verdict?.issues.some((issue) => PROCESS_CODES.has(issue.code)) ?? false;
   const memory = report ? memoryWords(report) : null;
@@ -155,7 +174,8 @@ export function OverviewTab({ theme, compact, hostId, verdict, report, devServer
   const slow = watched.filter((service) => service.state === "slow" || service.state === "down");
   const watchedNow = watchedWords(watched);
   const pending = checks.filter((check) => check.state !== "ready" && check.state !== "optional").length;
-  const last = report?.recentActions[0];
+  // A reload isn't a stop (0.13.0): "Last stop" names the last process actually signalled.
+  const last = report?.recentActions.find((entry) => entry.action !== "plugin-reload" && entry.status === "signaled");
   // One way to refresh (0.12.1): the header's Refresh link, so the hero offers where to go, not "Check again".
   const primary: "processes" | "servers" = processIssue || !devServers ? "processes" : "servers";
   return (
@@ -180,8 +200,8 @@ export function OverviewTab({ theme, compact, hostId, verdict, report, devServer
       </HeroCard>
       <Accordion theme={theme}>
         {verdict && verdict.issues.some((issue) => issue.code !== "projects-unavailable") ? (
-          <AccordionItem key={`attention-${verdict.issues.length}`} theme={theme} compact={compact} icon="TriangleAlert" tone={hero.tone === "danger" ? "danger" : "warning"} title="What needs attention" summary="Each problem, and an agent to ask about it" open>
-            <AttentionList theme={theme} verdict={verdict} />
+          <AccordionItem key={`attention-${verdict.issues.length}`} theme={theme} compact={compact} icon="TriangleAlert" tone={hero.tone === "danger" ? "danger" : "warning"} title="What needs attention" summary="Each problem, with a fix or an agent to ask" open>
+            <AttentionList theme={theme} verdict={verdict} say={say} onDone={changed} />
           </AccordionItem>
         ) : null}
         {watched.length ? (
@@ -195,7 +215,7 @@ export function OverviewTab({ theme, compact, hostId, verdict, report, devServer
         </AccordionItem>
         {sync}
         <AccordionItem theme={theme} compact={compact} icon="SlidersHorizontal" title="Technical details" summary="How often it checks, the limits, and where it writes">
-          <TechnicalDetails theme={theme} verdict={verdict} report={report} />
+          <TechnicalDetails theme={theme} hostId={hostId} verdict={verdict} report={report} />
         </AccordionItem>
       </Accordion>
       {!watched.some((service) => /\/api\/health\/ping$/.test(service.target)) ? <WatchSuggestion theme={theme} hostId={hostId} say={say} /> : null}

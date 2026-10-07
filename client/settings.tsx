@@ -132,7 +132,7 @@ function HostsControls({ settings }: { settings: Ready }) {
           />
         </SettingsCard>
       </SettingsSection>
-      <SettingsSection title="Heavy processes" info="Builds, tests, type checks, installs and dev servers running at once. Going over the limit is flagged in Hosts and on the sidebar dot. Nothing is ever stopped automatically.">
+      <SettingsSection title="Heavy processes" info="Builds, tests, type checks, installs and dev servers running at once. Going over the limit is flagged in Hosts and on the sidebar dot. Nothing is stopped automatically unless you turn on the memory guard below.">
         <SettingsCard>
           <SettingsSelect<string>
             label="Heavy jobs at once"
@@ -141,6 +141,13 @@ function HostsControls({ settings }: { settings: Ready }) {
             options={JOB_LIMITS.some((option) => option.value === String(settings.values.maxHeavyJobs)) ? JOB_LIMITS : [...JOB_LIMITS, { label: `${settings.values.maxHeavyJobs} at once`, value: String(settings.values.maxHeavyJobs) }]}
             disabled={settings.saving}
             onValueChange={(value) => save({ maxHeavyJobs: Number(value) })}
+          />
+          <SettingsSwitch
+            label="Stop a runaway automatically when memory is nearly full"
+            hint="Off by default. When memory has been nearly full for over a minute, Hosts stops the biggest job it would let you stop by hand: started from Paseo or inside a project, never Paseo itself, an agent, a terminal's shell or a database. It's logged, and the sidebar dot tells you."
+            value={settings.values.autoStopRunaways}
+            disabled={settings.saving}
+            onValueChange={(autoStopRunaways) => save({ autoStopRunaways })}
           />
         </SettingsCard>
       </SettingsSection>

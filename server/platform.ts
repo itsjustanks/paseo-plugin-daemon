@@ -18,6 +18,8 @@ export interface RawSystemSample {
   /** Linux PSI "some" avg10 percentages; null when unavailable. */
   psiCpuSome10: number | null;
   psiMemorySome10: number | null;
+  /** 0.13.0: memory "full avg10"; absent where unknown. */
+  psiMemoryFull10?: number | null;
   memoryTotalBytes: number;
   memoryAvailableBytes: number;
   swapTotalBytes: number;

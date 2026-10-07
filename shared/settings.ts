@@ -11,7 +11,7 @@ export const MAX_HEAVY_JOBS_DEFAULT = 4;
 export const WATCHED_SERVICES_MAX = 10;
 
 /** Current stored-document version. Bump it together with `migrateHostsSettings`. */
-export const HOSTS_SETTINGS_VERSION = 4;
+export const HOSTS_SETTINGS_VERSION = 5;
 
 export const PanelScopeSchema = z.enum(["workspace", "host"]);
 export type PanelScope = z.infer<typeof PanelScopeSchema>;
@@ -31,6 +31,13 @@ export const HostsSettingsSchema = z.object({
   tunnelMinutes: TunnelMinutesSchema.default(TUNNEL_MINUTES_DEFAULT),
   /** More builds, tests, type checks, installs and dev servers than this at once is flagged. Nothing is stopped automatically. */
   maxHeavyJobs: z.number().int().min(1).max(32).default(MAX_HEAVY_JOBS_DEFAULT),
+  /**
+   * 0.13.0, off by default: when memory has been nearly full for over a
+   * minute, stop the biggest process Hosts is already allowed to stop
+   * (started from Paseo or inside a project; never Paseo, agents, shells or
+   * databases). Logged, and the sidebar dot says so.
+   */
+  autoStopRunaways: z.boolean().default(false),
   /** Health URLs on other machines (such as OmniRoute) that the daemon checks on the health-check schedule. */
   watchedServices: z.array(WatchedServiceSchema).max(WATCHED_SERVICES_MAX).default([]),
 });
@@ -42,9 +49,9 @@ export const HOSTS_SETTINGS_DEFAULTS: HostsSettings = HostsSettingsSchema.parse(
 /**
  * Bring an older stored document up to the current shape. Every field added
  * since version 1 has a schema default, so carrying the old values through
- * untouched is enough; the parse fills in the rest. Versions 1 to 3 all
+ * untouched is enough; the parse fills in the rest. Versions 1 to 4 all
  * migrate this way (2 added the health switches, 3 the link duration, 4 the
- * heavy-job limit and watched services).
+ * heavy-job limit and watched services, 5 the optional memory guard).
  * Unknown versions are returned as-is so the parse reports them instead of
  * guessing.
  */

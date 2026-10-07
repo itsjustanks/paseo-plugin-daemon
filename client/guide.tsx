@@ -42,7 +42,7 @@ function WhatIs({ theme }: { theme: Theme }) {
 
 const FLOW = [
   { icon: "Eye", title: "Your daemon watches", text: "Every 30 seconds it measures memory, CPU and running jobs, and checks the services you watch." },
-  { icon: "TriangleAlert", title: "It spots trouble", text: "A job stuck at full CPU, memory near the limit, too many builds at once, or a slow service." },
+  { icon: "TriangleAlert", title: "It spots trouble", text: "A job stuck at full CPU or eating memory, memory near the limit, a plugin that stopped answering, or a slow service." },
   { icon: "Hand", title: "You decide", text: "The sidebar dot and this page say what's wrong in plain words. Nothing is stopped without asking." },
   { icon: "ExternalLink", title: "Open what's running", text: "Each dev server opens in your browser with one press, or privately on your own computer." },
 ] as const;
@@ -210,6 +210,23 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
       action: { label: "See processes", tab: "processes" },
     },
     {
+      icon: "MemoryStick", question: "A job is eating all the memory. What happens?",
+      answer: [
+        "Hosts checks memory every 10 seconds, even when Paseo is closed. A job using a quarter or more of this computer's memory, or growing fast, is flagged in plain words, for example \"A test run is using 36 GB, 61% of this computer's memory.\" So is memory pressure, when programs start waiting for memory.",
+        "Press Stop beside it (it asks first, then forces it after 10 seconds if it won't stop), or Ask an agent to find out why it grew.",
+        "If you'd rather Hosts acted on its own, turn on \"Stop a runaway automatically when memory is nearly full\" under Settings → Hosts. It's off by default. When memory has been nearly full for over a minute, it stops the biggest job you could stop by hand, never Paseo, an agent, a terminal's shell or a database, and the sidebar dot tells you.",
+      ],
+      action: { label: "See processes", tab: "processes" },
+    },
+    {
+      icon: "Puzzle", question: "A plugin isn't answering. What do I do?",
+      answer: [
+        "When a Paseo plugin stops answering, Paseo can't add, update or reload any plugin until it's sorted. Hosts spots this in Paseo's own log and says which plugin, for example \"Activity isn't answering (12 timeouts in 10 min)\".",
+        "Press Restart. It asks first, then reloads just that plugin. If Paseo is stuck on it, Hosts stops only that plugin's own process and reloads it again. Paseo itself, your agents and the other plugins keep running, and every step is logged.",
+      ],
+      action: { label: "See what needs attention", tab: "overview" },
+    },
+    {
       icon: "Bot", question: "Can an agent help fix it?",
       answer: [
         "Yes. Beside a runaway process, a dev server that stopped, or a slow or down watched service, press Ask an agent. Pick a chat in that workspace, or start a new one, and read exactly what will be sent first: what's wrong, the figures, the last lines of the dev server's output when Hosts can find them, and a suggested next step.",
@@ -221,8 +238,8 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
     {
       icon: "ShieldCheck", question: "What can and can't be stopped?",
       answer: [
-        "Only processes started from Paseo or running inside your Paseo projects. Paseo itself, its plugins, agents, terminals and databases never can be. Nothing is ever stopped automatically.",
-        "A stop asks first, waits a few seconds, and only then forces it. Every stop is listed under Processes → Recent stops.",
+        "Only processes started from Paseo or running inside your Paseo projects. Paseo itself, its plugins, agents, terminals and databases never can be. Nothing is stopped automatically unless you turn on the memory guard under Settings → Hosts.",
+        "A stop asks first, waits a few seconds, and only then forces it. A plugin is never stopped like this; it can only be restarted, and only its own process. Every stop and restart is listed under Processes → Recent stops and restarts.",
       ],
     },
     {

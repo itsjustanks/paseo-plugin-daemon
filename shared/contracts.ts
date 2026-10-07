@@ -75,6 +75,8 @@ export const ContainerSnapshotSchema = z.object({
   /** `cpuCoresUsed` as a share of the CPU limit, or of the host's cores without one. */
   cpuPercent: z.number().min(0).nullable(),
   psiMemorySome10: z.number().min(0).max(100).nullable(),
+  /** 0.13.0: memory "full avg10"; absent on older daemons. */
+  psiMemoryFull10: z.number().min(0).max(100).nullable().optional(),
   psiCpuSome10: z.number().min(0).max(100).nullable(),
   oomKills: z.number().int().min(0).nullable(),
   pressure: PressureStateSchema,
