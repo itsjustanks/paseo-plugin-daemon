@@ -78,6 +78,13 @@ export interface Launch { loadingAt: number | null; readyAt: number | null; stop
 export interface StuckReading { id: string; name: string; timeouts: number; lastAt: number | null; stopping: boolean; severity: "warning" | "critical"; methods: string[] }
 
 const KEEP_LAUNCHES = 12;
+/**
+ * A plugin's Ready line belongs to its Loading line only if it follows within
+ * this long (a load is seconds). A later Ready with no Loading of its own
+ * (the Loading line rotated away or fell outside the read budget) starts a
+ * launch with no Loading time, which never identifies a process.
+ */
+export const PAIRING_MS = 120_000;
 const KEEP_TIMEOUTS = 5000;
 const KEEP_SLOW = 5000;
 
@@ -98,7 +105,7 @@ export class PluginLogState {
     if (event.kind === "loading") {
       list.push({ loadingAt: event.at, readyAt: null, stoppingAt: null, stoppedAt: null, daemonPid: event.daemonPid });
     } else if (event.kind === "ready") {
-      if (latest && latest.readyAt === null && latest.stoppingAt === null) latest.readyAt = event.at;
+      if (latest && latest.loadingAt !== null && latest.readyAt === null && latest.stoppingAt === null && event.at - latest.loadingAt <= PAIRING_MS) latest.readyAt = event.at;
       else list.push({ loadingAt: null, readyAt: event.at, stoppingAt: null, stoppedAt: null, daemonPid: event.daemonPid });
     } else if (event.kind === "stopping") {
       // The newest launch that is running, i.e. not already stopping.

@@ -64,7 +64,7 @@ export function createRuntime(options: RuntimeOptions = {}) {
       sampler: adapter.platform === "linux" ? new LinuxQuickSampler(uid) : new AdapterQuickSampler(adapter, uid),
       intervalMs: adapter.platform === "linux" ? GUARD_INTERVAL_MS : GUARD_INTERVAL_MS * 3,
       readSettings: async () => ({ autoStopRunaways: (await readSettings().catch(() => HOSTS_SETTINGS_DEFAULTS)).autoStopRunaways === true }),
-      autoStop: (minPercent) => manager.autoStopBiggest(minPercent),
+      autoStop: (minPercent, confirm) => manager.autoStopBiggest(minPercent, confirm),
       onAutoStop: (stop) => console.log(`daemon-link: memory guard: ${stop.message}`),
       restartCheck: async () => (await cli.canReload()) ? { ok: true, reason: null } : { ok: false, reason: "Restart needs Paseo's paseo command, and Hosts can't find one here that can reload plugins." },
     });

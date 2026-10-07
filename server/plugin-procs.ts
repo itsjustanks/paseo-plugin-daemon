@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { isHostsPlugin } from "../shared/guard";
-import type { Launch } from "./daemon-log";
+import { PAIRING_MS, type Launch } from "./daemon-log";
 import { isPluginHost } from "./jobs";
 import { defaultReadClockTicks } from "./linux";
 import type { PlatformAdapter } from "./platform";
@@ -27,21 +27,24 @@ import { hashArgv } from "./redaction";
 
 /** Seconds of slack around a window: log timestamps are milliseconds, process start times can be a second coarse (macOS `lstart`). */
 export const WINDOW_SLACK_MS = 2000;
-/** A launch the log saw start but not finish is open for at most this long. */
-export const OPEN_WINDOW_MS = 120_000;
-/** With only a Ready line, the fork happened at most this long before it. */
-export const READY_ONLY_MS = 15_000;
+/** A launch is open for at most this long after its Loading line, however late its Ready or Stopping line came. */
+export const OPEN_WINDOW_MS = PAIRING_MS;
 
 export interface PluginHost { pid: number; startId: string; startMs: number; argvHash: string }
 export interface Assignment { pluginId: string; launch: Launch; current: boolean }
 
+/**
+ * When a launch's process could have been forked: from its Loading line to
+ * its Ready (or Stopping) line, at most OPEN_WINDOW_MS. A launch without a
+ * Loading line has no window at all: its Ready line alone says when the
+ * process was ready, not when it started, and a guessed window could hold
+ * another plugin's healthy process (0.13.0 safety review). No window means
+ * "can't tell", and nothing is stopped.
+ */
 export function launchWindow(launch: Launch, slackMs = WINDOW_SLACK_MS): [number, number] | null {
-  if (launch.loadingAt !== null) {
-    const end = launch.readyAt ?? launch.stoppingAt ?? launch.loadingAt + OPEN_WINDOW_MS;
-    return [launch.loadingAt - slackMs, end + slackMs];
-  }
-  if (launch.readyAt !== null) return [launch.readyAt - READY_ONLY_MS, launch.readyAt + slackMs];
-  return null;
+  if (launch.loadingAt === null) return null;
+  const end = Math.min(launch.readyAt ?? launch.stoppingAt ?? Infinity, launch.loadingAt + OPEN_WINDOW_MS);
+  return [launch.loadingAt - slackMs, end + slackMs];
 }
 
 /**

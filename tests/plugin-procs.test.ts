@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { PluginLogState, parseLogLine, type Launch } from "../server/daemon-log";
+import { DaemonLogTail, PluginLogState, parseLogLine, scanLaunches, type Launch } from "../server/daemon-log";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { identify, launchWindow, listPluginHosts, matchHosts, startClock, type PluginHost } from "../server/plugin-procs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -49,11 +51,62 @@ describe("matching plugin processes to plugins", () => {
     expect(matchHosts(new Map([["a", [{ ...one, daemonPid: 999 }]]]), [host(1, 12_000)], DAEMON).size).toBe(0);
   });
 
-  it("windows: loading to ready with slack; open launches are capped; ready-only is narrow", () => {
+  it("windows: loading to ready with slack, capped at two minutes; no Loading line, no window", () => {
     expect(launchWindow({ loadingAt: 10_000, readyAt: 14_000, stoppingAt: null, stoppedAt: null, daemonPid: null })).toEqual([8_000, 16_000]);
     expect(launchWindow({ loadingAt: 10_000, readyAt: null, stoppingAt: null, stoppedAt: null, daemonPid: null })).toEqual([8_000, 132_000]);
-    expect(launchWindow({ loadingAt: null, readyAt: 50_000, stoppingAt: null, stoppedAt: null, daemonPid: null })).toEqual([35_000, 52_000]);
+    expect(launchWindow({ loadingAt: 10_000, readyAt: 900_000, stoppingAt: null, stoppedAt: null, daemonPid: null })).toEqual([8_000, 132_000]);
+    expect(launchWindow({ loadingAt: null, readyAt: 50_000, stoppingAt: null, stoppedAt: null, daemonPid: null })).toBeNull();
     expect(launchWindow({ loadingAt: null, readyAt: null, stoppingAt: 1, stoppedAt: null, daemonPid: null })).toBeNull();
+  });
+});
+
+describe("a launch whose Loading line is missing (0.13.0 safety review)", () => {
+  const lifecycle = (at: number, pluginId: string, message: string) => JSON.stringify({ level: 30, time: at, pid: DAEMON, module: "plugins", pluginId, stream: "stdout", message: `[paseo] ${message}`, msg: "Plugin output" });
+  const timeout = (at: number) => JSON.stringify({ level: 50, time: at, pid: DAEMON, err: { message: "Plugin RPC timed out: plugin-a.invoke" }, msg: "x" });
+
+  it("never matches another plugin's healthy process: Restart A must not stop B", () => {
+    // A's Loading line has scrolled away and A has exited; healthy B started at t=90 s; A's lone Ready is at t=100 s.
+    const state = new PluginLogState();
+    state.feed(parseLogLine(lifecycle(100_000, "plugin-a", "Plugin ready"))!);
+    const b = host(5001, 90_000);
+    expect(identify("plugin-a", state.launches, [b], { pid: 1, startMs: null }, DAEMON)).toMatchObject({ ok: false });
+    expect(matchHosts(state.launches, [b], DAEMON).size).toBe(0);
+  });
+
+  it("is the same when the Loading line fell outside the log read budget", async () => {
+    const lines = [lifecycle(10_000, "plugin-a", "Loading plugin"), ...Array.from({ length: 40 }, (_, i) => timeout(11_000 + i)), lifecycle(14_000, "plugin-a", "Plugin ready")];
+    const text = lines.join("\n") + "\n";
+    const fs = { stat: async () => ({ size: Buffer.byteLength(text), ino: 1 }), read: async (_p: string, position: number, length: number) => Buffer.from(text).subarray(position, position + length) };
+    const tail = new DaemonLogTail("/x/daemon.log", fs, 1024, 1024);
+    const state = new PluginLogState();
+    await tail.poll((event) => state.feed(event));
+    const launch = state.launches.get("plugin-a")![0]!;
+    expect(launch).toMatchObject({ loadingAt: null, readyAt: 14_000 });
+    expect(launchWindow(launch)).toBeNull();
+    expect(identify("plugin-a", state.launches, [host(5002, 12_000)], { pid: 1, startMs: null }, DAEMON)).toMatchObject({ ok: false });
+  });
+
+  it("is the same when the Loading line is in a rotated file too big to read", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "plugin-procs-"));
+    try {
+      await writeFile(join(dir, "20261006-0211-01-daemon.log"), lifecycle(10_000, "plugin-a", "Loading plugin") + "\n" + "x".repeat(4096) + "\n");
+      await writeFile(join(dir, "daemon.log"), lifecycle(14_000, "plugin-a", "Plugin ready") + "\n");
+      const state = await scanLaunches(dir, 6, 1024);
+      expect(state.launches.get("plugin-a")).toEqual([{ loadingAt: null, readyAt: 14_000, stoppingAt: null, stoppedAt: null, daemonPid: DAEMON }]);
+      expect(identify("plugin-a", state.launches, [host(5003, 12_000)], { pid: 1, startMs: null }, DAEMON)).toMatchObject({ ok: false });
+    } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+
+  it("never pairs a late Ready with an old, unfinished Loading", () => {
+    const state = new PluginLogState();
+    state.feed(parseLogLine(lifecycle(0, "plugin-a", "Loading plugin"))!);
+    state.feed(parseLogLine(lifecycle(500_000, "plugin-a", "Plugin ready"))!);
+    expect(state.launches.get("plugin-a")).toEqual([
+      { loadingAt: 0, readyAt: null, stoppingAt: null, stoppedAt: null, daemonPid: DAEMON },
+      { loadingAt: null, readyAt: 500_000, stoppingAt: null, stoppedAt: null, daemonPid: DAEMON },
+    ]);
+    // A process started at 300 s fits neither: the old launch closed at 120 s, the new one has no window.
+    expect(identify("plugin-a", state.launches, [host(5004, 300_000)], { pid: 1, startMs: null }, DAEMON)).toMatchObject({ ok: false });
   });
 });
 

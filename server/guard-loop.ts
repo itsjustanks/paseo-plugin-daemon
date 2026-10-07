@@ -132,14 +132,21 @@ export interface GuardLoopOptions {
   tail?: DaemonLogTail;
   logState?: PluginLogState;
   readSettings: () => Promise<{ autoStopRunaways: boolean }>;
-  /** Stops the biggest process Hosts may stop that holds at least `minPercent` of memory; null when there is none. */
-  autoStop?: (minPercent: number) => Promise<AutoStop | null>;
+  /**
+   * Stops the biggest process Hosts may stop that holds at least `minPercent`
+   * of memory; null when there is none. It must call `confirm` immediately
+   * before each signal it sends (the SIGKILL follow-up included) and send
+   * nothing when it answers false.
+   */
+  autoStop?: (minPercent: number, confirm: () => Promise<boolean>) => Promise<AutoStop | null>;
   /** Whether "Restart" can be offered on this host at all (the paseo command can reload plugins). */
   restartCheck?: () => Promise<{ ok: boolean; reason: string | null }>;
   /** Told about every automatic stop (the status dot reads the state). */
   onAutoStop?: (stop: AutoStop) => void;
   now?: () => number;
   intervalMs?: number;
+  /** How long a pass waits for an automatic stop before moving on (tests shorten it). */
+  autoStopLimitMs?: number;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (timer: unknown) => void;
 }
@@ -171,8 +178,12 @@ export class GuardLoop {
   private level: MemoryLevel = "normal";
   private criticalSince: number | null = null;
   private lastAuto: AutoStop | null = null;
-  private lastAutoAttempt = 0;
+  private lastAutoAttempt = -Infinity;
   private autoEnabled = false;
+  /** The automatic stop in progress, if any: only one at a time, however long it takes. */
+  private autoInFlight: Promise<unknown> | null = null;
+  /** When the last good sample was taken; a gap breaks the critical streak. */
+  private lastSampleAt: number | null = null;
   /** Offered until the check says otherwise: a restart re-checks the paseo command itself and says why if it can't. */
   private restart: { ok: boolean; reason: string | null; at: number } = { ok: true, reason: null, at: 0 };
   private checkedAt = 0;
@@ -192,6 +203,7 @@ export class GuardLoop {
     void this.tick().finally(() => { if (!this.closed) loop(); });
   }
 
+  /** Stops the loop and disarms any automatic stop still in progress: its confirm() answers false from now on. */
   close(): void {
     this.closed = true;
     if (this.timer) (this.options.clearTimer ?? ((timer) => clearTimeout(timer as ReturnType<typeof setTimeout>)))(this.timer);
@@ -211,10 +223,18 @@ export class GuardLoop {
     const sample = await bounded(this.options.sampler.sample(), STEP_LIMIT_MS, null);
     const now = this.now();
     if (sample) {
+      // 0.13.0 safety review: "critical for over a minute" has to be measured. A gap with no
+      // readings (a stalled loop) starts the streak again rather than counting as critical.
+      const gap = this.lastSampleAt !== null && now - this.lastSampleAt > maxSampleGap(this.options.intervalMs ?? GUARD_INTERVAL_MS);
+      this.lastSampleAt = now;
       this.last = sample;
       this.growth.record(sample.at, sample.processes);
       this.level = memoryLevel(sample.signal);
-      this.criticalSince = this.level === "critical" ? this.criticalSince ?? now : null;
+      this.criticalSince = this.level === "critical" ? (gap ? now : this.criticalSince ?? now) : null;
+    } else {
+      // A failed or timed-out reading breaks the streak: memory may have recovered meanwhile.
+      this.criticalSince = null;
+      this.lastSampleAt = null;
     }
     await bounded(this.pollLog(), STEP_LIMIT_MS, undefined);
     if (now - this.restart.at > 5 * 60_000 && this.options.restartCheck) {
@@ -224,11 +244,27 @@ export class GuardLoop {
     // A settings read that can't answer keeps the last known choice (off until one has been read).
     const settings = await bounded(this.options.readSettings(), STEP_LIMIT_MS, { autoStopRunaways: this.autoEnabled });
     this.autoEnabled = settings.autoStopRunaways === true;
-    if (shouldAutoStop({ enabled: this.autoEnabled, level: this.level, criticalSince: this.criticalSince, lastAttempt: this.lastAutoAttempt, now }) && this.options.autoStop) {
+    if (!this.closed && !this.autoInFlight && this.options.autoStop && shouldAutoStop({ enabled: this.autoEnabled, level: this.level, criticalSince: this.criticalSince, lastAttempt: this.lastAutoAttempt, now })) {
       this.lastAutoAttempt = now;
-      const stopped = await bounded(this.options.autoStop(AUTO_GUARD_MIN_PERCENT), AUTO_STOP_LIMIT_MS, null);
-      if (stopped) { this.lastAuto = stopped; this.options.onAutoStop?.(stopped); }
+      const run = this.options.autoStop(AUTO_GUARD_MIN_PERCENT, () => this.confirmAutoStop()).catch(() => null);
+      // A stop that finishes after the loop stopped waiting still counts (and is still reported); a new one waits for it.
+      this.autoInFlight = run.then((stopped) => { if (stopped) { this.lastAuto = stopped; this.options.onAutoStop?.(stopped); } }).finally(() => { this.autoInFlight = null; });
+      await bounded(this.autoInFlight, this.options.autoStopLimitMs ?? AUTO_STOP_LIMIT_MS, undefined);
     }
+  }
+
+  /**
+   * Asked immediately before every automatic signal: is the guard still on,
+   * is memory critical in a reading taken right now, and is the loop still
+   * running? A settings read or a reading that fails or times out is a no.
+   */
+  async confirmAutoStop(): Promise<boolean> {
+    if (this.closed) return false;
+    const settings = await bounded(this.options.readSettings(), STEP_LIMIT_MS, null);
+    if (this.closed || settings?.autoStopRunaways !== true) return false;
+    const sample = await bounded(this.options.sampler.sample(), STEP_LIMIT_MS, null);
+    if (this.closed || !sample) return false;
+    return memoryLevel(sample.signal) === "critical";
   }
 
   /** The latest reading, for the health verdict and the screens. Cheap: no I/O. */
@@ -253,6 +289,9 @@ export class GuardLoop {
     return startId ? this.growth.growth(pid, startId, this.now()) : this.growth.growthByPid(pid, this.now());
   }
 }
+
+/** The longest gap between readings that still counts as one unbroken streak. */
+export function maxSampleGap(intervalMs: number): number { return Math.max(30_000, intervalMs * 3); }
 
 /**
  * The auto-guard's rule, pure: only when switched on, only after memory has

@@ -141,6 +141,9 @@ export class PluginRestarter {
     for (const target of found.targets) {
       const label = target.current ? `${name}'s process (PID ${target.pid})` : `an old copy of ${name} that never finished stopping (PID ${target.pid})`;
       if (!await this.same(target)) { step(`Skipped PID ${target.pid}: it changed or ended before it could be stopped.`); continue; }
+      // Known limit (accepted in the 0.13.0 safety review): between this fresh identity read and kill(2) the
+      // process could exit and its PID be reused, a window of microseconds. Closing it needs pidfd_send_signal,
+      // which Node doesn't expose. The same limit applies to every stop (see server/safety.ts).
       try { this.deps.kill(target.pid, "SIGTERM"); } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ESRCH") { step(`PID ${target.pid} had already exited.`); continue; }
         await this.record("plugin-stop", pluginId, name, target.pid, "failed", 0, "The stop signal failed.");

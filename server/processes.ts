@@ -68,8 +68,12 @@ export interface ProcessManagerOptions {
   memoryLevel?: () => MemoryLevel;
 }
 
-/** Who did a stop, for the log: a person (Processes) or the optional memory guard. */
-type StopSource = { action: "stop" | "auto-stop"; source: "processes" | "guard" };
+/**
+ * Who did a stop, for the log: a person (Processes) or the optional memory
+ * guard. An automatic stop carries `confirm`, asked immediately before each
+ * signal (the SIGKILL follow-up too); false sends nothing.
+ */
+type StopSource = { action: "stop" | "auto-stop"; source: "processes" | "guard"; confirm?: () => Promise<boolean> };
 const BY_PERSON: StopSource = { action: "stop", source: "processes" };
 
 interface Decision { stoppable: boolean; reason: string | null; owner: ProcessRow["owner"] }
@@ -331,15 +335,21 @@ export class ProcessManager {
       const payload = this.guard.verify(token);
       const known = payload ? names.get(payload.pid) : undefined;
       const name = known?.name ?? "Process";
+      if (by.confirm && (this.closed || !await by.confirm().catch(() => false))) {
+        const message = "Not stopped: the memory guard was turned off, memory recovered, or Hosts was unloaded.";
+        await this.record(by.action, { ok: false, status: "denied", message, pid: payload?.pid ?? null, signaledCount: 0 }, name, known?.owner ?? null, by.source);
+        results.push({ pid: payload?.pid ?? null, name, ok: false, status: "denied", message, signaled: 0 });
+        continue;
+      }
       const { result, children } = await this.guard.stopTree(token);
       await this.record(by.action, result, name, known?.owner ?? null, by.source);
       results.push({ pid: result.pid, name, ok: result.ok, status: result.status, message: plain(result, name, this.graceMs), signaled: result.signaledCount });
-      if (result.status === "signaled") this.escalate(token, payload?.startId ?? null, result.pid!, children, name, known?.owner ?? null, by.source);
+      if (result.status === "signaled") this.escalate(token, payload?.startId ?? null, result.pid!, children, name, known?.owner ?? null, by.source, by.confirm);
     }
     return { results, escalateAfterSeconds: Math.round(this.graceMs / 1000) };
   }
 
-  private escalate(token: string, startId: string | null, pid: number, children: Parameters<ProcessGuard["forceSurvivors"]>[0], name: string, owner: string | null, source: StopSource["source"] = "processes") {
+  private escalate(token: string, startId: string | null, pid: number, children: Parameters<ProcessGuard["forceSurvivors"]>[0], name: string, owner: string | null, source: StopSource["source"] = "processes", confirm?: () => Promise<boolean>) {
     const set = this.options.setTimer ?? ((fn: () => void, ms: number) => { const timer = setTimeout(fn, ms); (timer as { unref?: () => void }).unref?.(); return timer; });
     const timer = set(() => {
       this.timers.delete(timer);
@@ -348,6 +358,11 @@ export class ProcessManager {
         let alive = false;
         try { const identity = await this.options.adapter.readIdentity(pid); alive = !!identity && identity.startId === startId; } catch { alive = false; }
         this.fresh = null;
+        // An automatic stop asks again before forcing: the guard may be off, or memory may have recovered, by now.
+        if (confirm && (this.closed || !await confirm().catch(() => false))) {
+          if (alive) await this.record("auto-force-stop", { ok: false, status: "denied", message: `${name} was not stopped forcefully: the memory guard was turned off, memory recovered, or Hosts was unloaded.`, pid, signaledCount: 0 }, name, owner, source);
+          return;
+        }
         let signaled = 0;
         let status: ActionResult["status"] = "already-exited";
         let message = `${name} stopped within ${Math.round(this.graceMs / 1000)} seconds.`;
@@ -378,9 +393,11 @@ export class ProcessManager {
    * person could stop here with the Stop button, holding at least
    * `minPercent` of memory, stopped through exactly the same checked path
    * (fresh read, signed token, SIGTERM then SIGKILL after the grace period),
-   * logged as an automatic stop. Null when nothing qualifies.
+   * logged as an automatic stop. Null when nothing qualifies. `confirm` is
+   * asked immediately before each signal; a no (guard off, memory recovered,
+   * plugin unloading) sends nothing.
    */
-  async autoStopBiggest(minPercent: number): Promise<AutoStop | null> {
+  async autoStopBiggest(minPercent: number, confirm: () => Promise<boolean>): Promise<AutoStop | null> {
     this.fresh = null;
     this.options.collector.invalidate();
     // The project list comes through the daemon, which may be starved right now: without it only Paseo-started jobs qualify.
@@ -396,7 +413,7 @@ export class ProcessManager {
     const token = this.guard.mint(target.raw, hashArgv(target.raw.argv), base.at);
     const job = classifyJob(target.raw.argv, target.view.ports);
     const name = programName(target.raw.argv, target.view.name);
-    const outcome = await this.stop([token], { action: "auto-stop", source: "guard" });
+    const outcome = await this.stop([token], { action: "auto-stop", source: "guard", confirm });
     const result = outcome.results[0];
     if (!result?.ok) return null;
     const what = job?.kind === "test" ? "a test run" : job?.kind === "build" ? "a build" : job?.kind === "typecheck" ? "a type check" : job?.kind === "install" ? "a package install" : job?.kind === "dev-server" ? "a dev server" : name;

@@ -172,7 +172,7 @@ describe("the check loop", () => {
   it("flags the incident well before the daemon stalls, and never stops anything with the guard off", async () => {
     const sampler = new IncidentSampler();
     let stops = 0;
-    const loop = new GuardLoop({ sampler, tail: new DaemonLogTail("/x", emptyLog), readSettings: async () => ({ autoStopRunaways: false }), autoStop: async () => { stops += 1; return null; }, now: () => sampler.minute * MINUTE });
+    const loop = new GuardLoop({ sampler, tail: new DaemonLogTail("/x", emptyLog), readSettings: async () => ({ autoStopRunaways: false }), autoStop: async () => { stops += 1; return null; }, now: () => sampler.minute * MINUTE, intervalMs: MINUTE });
     for (sampler.minute = 0; sampler.minute <= 30; sampler.minute += 1) await loop.tick();
     expect(stops).toBe(0);
     const state = GuardStateSchema.parse(loop.state());
@@ -210,7 +210,8 @@ describe("the check loop", () => {
     const stopped: number[] = [];
     let seen: string | null = null;
     const loop = new GuardLoop({
-      sampler, tail: new DaemonLogTail("/x", emptyLog), now: () => sampler.minute * MINUTE,
+      // One reading a minute here, so the streak tolerates minute-long gaps.
+      sampler, tail: new DaemonLogTail("/x", emptyLog), now: () => sampler.minute * MINUTE, intervalMs: MINUTE,
       readSettings: async () => ({ autoStopRunaways: true }),
       autoStop: async (minPercent) => { stopped.push(sampler.minute); expect(minPercent).toBe(10); return { at: sampler.minute * MINUTE, pid: 77, name: "app-file-ops.test", rssBytes: 36 * GB, message: "Hosts stopped a test run (app-file-ops.test, 36 GB) because memory was nearly full." }; },
       onAutoStop: (stop) => { seen = stop.message; },
@@ -257,7 +258,7 @@ describe("the auto-guard only stops what a person could stop", () => {
       proc({ pid: 303, ppid: 100, argv: ["node", "--test", "scripts/app-file-ops.test.mjs"], cwd: "/tmp/scratch", rssBytes: 18 * GB }),
       proc({ pid: 304, ppid: 100, argv: ["node", "build.js"], cwd: "/tmp/scratch", rssBytes: 8 * GB }),
     ]);
-    const stop = await pm.autoStopBiggest(10);
+    const stop = await pm.autoStopBiggest(10, async () => true);
     expect(stop).toMatchObject({ pid: 303, message: "Hosts stopped a test run (app-file-ops.test, 18 GB) because memory was nearly full." });
     expect(kills).toEqual([[303, "SIGTERM"]]);
     const entries = await log.recent(5);
@@ -278,7 +279,7 @@ describe("the auto-guard only stops what a person could stop", () => {
       proc({ pid: 305, ppid: 1, argv: ["node", "outside.js"], cwd: "/tmp/elsewhere", rssBytes: 30 * GB }),
       proc({ pid: 304, ppid: 100, argv: ["node", "build.js"], cwd: "/tmp/scratch", rssBytes: 2 * GB }),
     ]);
-    expect(await protectedOnly.pm.autoStopBiggest(10)).toBeNull();
+    expect(await protectedOnly.pm.autoStopBiggest(10, async () => true)).toBeNull();
     expect(protectedOnly.kills).toEqual([]);
   });
 });
@@ -315,5 +316,170 @@ describe("the verdict carries plugin health, pressure and automatic stops", () =
     const report = { runaways: [{ code: "memory-heavy" as const, severity: "critical" as const, title: "A test run is using 36 GB, 61% of this computer's memory. The computer will slow to a crawl soon.", pids: [77], cwd: "/tmp/x", stoppable: true }], container: null, host: { cores: 8, cpuPercent: 10, load1: 1, memoryTotalBytes: 64 * GB, memoryUsedBytes: 60 * GB, cpuPressure: "normal" as const, memoryPressure: "critical" as const }, memoryBasis: "machine" as const, memoryBasisBytes: 64 * GB, heavyJobs: { count: 1, limit: 4, pids: [77] } };
     const { verdict } = evaluateHealth({ now: 1000, snapshot: snapshot as never, tunnels: [], connections: [], profiles: [], background: true, report });
     expect(verdict.issues.find((issue) => issue.code === "runaway")).toMatchObject({ pid: 77, stoppable: true, subject: "A test run", severity: "critical" });
+  });
+});
+
+/**
+ * 0.13.0 safety review: the automatic stop must check again right before it
+ * signals, run one at a time, die with the loop, and never count missing
+ * readings as critical memory.
+ */
+describe("the auto-guard after the safety review", () => {
+  const critical: QuickSample = { at: 0, basisBytes: LIMIT, usedBytes: LIMIT, signal: { some10: 90, full10: 84, percent: 99, newOomKills: 0 }, processes: [] };
+  const calm: QuickSample = { ...critical, signal: { some10: 0, full10: 0, percent: 40, newOomKills: 0 } };
+
+  /** A scripted world: the clock, what the next reading says (or that it fails), and the guard switch. */
+  function world() {
+    const w = { now: 0, reading: "critical" as "critical" | "calm" | "fail", guard: true, signals: [] as string[] };
+    const sampler = { sample: async (): Promise<QuickSample> => { if (w.reading === "fail") throw new Error("starved"); return { ...(w.reading === "critical" ? critical : calm), at: w.now }; } };
+    const settings = async () => ({ autoStopRunaways: w.guard });
+    return { w, sampler, settings };
+  }
+  const tickAt = async (loop: GuardLoop, w: { now: number }, seconds: number) => { w.now = seconds * 1000; await loop.tick(); };
+  /** A fake automatic stop that behaves as the real one must: ask, then signal only on yes. */
+  const honest = (w: { signals: string[] }, gate: Promise<void> = Promise.resolve()) => async (_minPercent: number, confirm: () => Promise<boolean>) => {
+    await gate;
+    if (!await confirm()) { w.signals.push("refused"); return null; }
+    w.signals.push("SIGTERM");
+    return { at: 0, pid: 77, name: "job", rssBytes: GB, message: "stopped" };
+  };
+
+  it("a stall that outlasts the loop's wait can't signal once the guard is turned off", async () => {
+    const { w, sampler, settings } = world();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const loop = new GuardLoop({ sampler, tail: new DaemonLogTail("/x", emptyLog), readSettings: settings, now: () => w.now, autoStopLimitMs: 5, autoStop: honest(w, gate) });
+    for (let s = 0; s <= 70; s += 10) await tickAt(loop, w, s);
+    expect(w.signals).toEqual([]);
+    w.guard = false;
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(w.signals).toEqual(["refused"]);
+  });
+
+  it("only one automatic stop at a time: attempts don't pile up behind a stall", async () => {
+    const { w, sampler, settings } = world();
+    let calls = 0;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const stop = honest(w, gate);
+    const loop = new GuardLoop({ sampler, tail: new DaemonLogTail("/x", emptyLog), readSettings: settings, now: () => w.now, autoStopLimitMs: 5, autoStop: (p, c) => { calls += 1; return stop(p, c); } });
+    for (let s = 0; s <= 600; s += 10) await tickAt(loop, w, s);
+    expect(calls).toBe(1);
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(w.signals).toEqual(["SIGTERM"]);
+    // Finished: the next attempt may start (its cooldown ran out long ago), and only one.
+    for (let s = 610; s <= 650; s += 10) await tickAt(loop, w, s);
+    expect(calls).toBe(2);
+  });
+
+  it("closing the loop (plugin unload) disarms a pending stop", async () => {
+    const { w, sampler, settings } = world();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const loop = new GuardLoop({ sampler, tail: new DaemonLogTail("/x", emptyLog), readSettings: settings, now: () => w.now, autoStopLimitMs: 5, autoStop: honest(w, gate) });
+    for (let s = 0; s <= 70; s += 10) await tickAt(loop, w, s);
+    loop.close();
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(w.signals).toEqual(["refused"]);
+    expect(await loop.confirmAutoStop()).toBe(false);
+  });
+
+  it("a failed reading breaks the streak: one critical reading then silence never stops anything", async () => {
+    const { w, sampler, settings } = world();
+    const loop = new GuardLoop({ sampler, tail: new DaemonLogTail("/x", emptyLog), readSettings: settings, now: () => w.now, autoStop: honest(w) });
+    await tickAt(loop, w, 0);
+    w.reading = "fail";
+    for (let s = 10; s <= 60; s += 10) await tickAt(loop, w, s);
+    expect(w.signals).toEqual([]);
+    expect(loop.state().memory.criticalSince).toBeNull();
+    // Readings come back critical: the minute starts again from the first new one.
+    w.reading = "critical";
+    for (let s = 70; s <= 120; s += 10) await tickAt(loop, w, s);
+    expect(w.signals).toEqual([]);
+    await tickAt(loop, w, 131);
+    expect(w.signals).toEqual(["SIGTERM"]);
+  });
+
+  it("a gap with no readings (a stalled loop) breaks the streak too", async () => {
+    const { w, sampler, settings } = world();
+    const loop = new GuardLoop({ sampler, tail: new DaemonLogTail("/x", emptyLog), readSettings: settings, now: () => w.now, autoStop: honest(w) });
+    await tickAt(loop, w, 0);
+    await tickAt(loop, w, 70);
+    expect(w.signals).toEqual([]);
+    expect(loop.state().memory.criticalSince).toBe(70_000);
+  });
+
+  it("needs a fresh critical reading right before it acts", async () => {
+    const { w, sampler, settings } = world();
+    const loop = new GuardLoop({ sampler, tail: new DaemonLogTail("/x", emptyLog), readSettings: settings, now: () => w.now, autoStop: async (_p, confirm) => { w.reading = "calm"; return honest(w)(_p, confirm); } });
+    for (let s = 0; s <= 70; s += 10) await tickAt(loop, w, s);
+    expect(w.signals).toEqual(["refused"]);
+    // A reading that fails at that moment is a no as well, and so is a settings read that can't answer.
+    w.reading = "fail";
+    expect(await loop.confirmAutoStop()).toBe(false);
+    w.reading = "critical";
+    expect(await loop.confirmAutoStop()).toBe(true);
+    w.guard = false;
+    expect(await loop.confirmAutoStop()).toBe(false);
+  });
+});
+
+describe("the stop path asks again before every automatic signal", () => {
+  async function pmWith(confirms: boolean[]) {
+    const adapter = new FakeAdapter();
+    adapter.sample = { ...adapter.sample, memoryTotalBytes: 64 * GB, memoryAvailableBytes: 2 * GB };
+    adapter.processes = [
+      proc({ pid: 1, ppid: 0, uid: 0, argv: ["/sbin/init"] }),
+      proc({ pid: 100, ppid: 1, argv: ["Paseo Daemon"], comm: "Paseo Daemon" }),
+      proc({ pid: 200, ppid: 100, argv: ["/usr/local/bin/node", PLUGIN] }),
+      proc({ pid: 303, ppid: 100, argv: ["node", "--test", "x.test.mjs"], cwd: "/tmp/scratch", rssBytes: 18 * GB }),
+    ];
+    const clock = new FakeClock();
+    const kills: Array<[number, string]> = [];
+    const monitor = createMonitorHandlers({ adapter, uid: 1000, home: "/home/alice", selfPid: 200, parentPid: 100, clock });
+    dir = await mkdtemp(join(tmpdir(), "daemon-link-guard-"));
+    const log = new ActionLog(join(dir, "actions.jsonl"), () => undefined);
+    const timers: Array<() => void> = [];
+    const pm = new ProcessManager({ ...monitor.internals!, daemonPid: 100, log, clock, graceMs: 10_000, kill: (pid, signal) => { kills.push([pid, signal]); }, setTimer: (fn) => { timers.push(fn); return timers.length; } });
+    const answers = [...confirms];
+    const confirm = async () => answers.shift() ?? false;
+    return { pm, kills, log, timers, confirm, adapter, clock };
+  }
+
+  it("sends nothing when the answer is no", async () => {
+    const { pm, kills, log, confirm } = await pmWith([false]);
+    expect(await pm.autoStopBiggest(10, confirm)).toBeNull();
+    expect(kills).toEqual([]);
+    expect((await log.recent(1))[0]).toMatchObject({ action: "auto-stop", status: "denied", signaled: 0 });
+  });
+
+  it("skips the SIGKILL follow-up when the guard was turned off (or memory recovered) after SIGTERM", async () => {
+    const { pm, kills, log, timers, confirm, clock } = await pmWith([true, false]);
+    expect(await pm.autoStopBiggest(10, confirm)).toMatchObject({ pid: 303 });
+    expect(kills).toEqual([[303, "SIGTERM"]]);
+    clock.advance(10_000);
+    timers.shift()!();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(kills).toEqual([[303, "SIGTERM"]]);
+    expect((await log.recent(1))[0]).toMatchObject({ action: "auto-force-stop", status: "denied" });
+  });
+
+  it("still forces it when the guard is on and memory is still critical", async () => {
+    const { pm, kills, timers, confirm, clock } = await pmWith([true, true]);
+    await pm.autoStopBiggest(10, confirm);
+    clock.advance(10_000);
+    timers.shift()!();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(kills).toEqual([[303, "SIGTERM"], [303, "SIGKILL"]]);
+  });
+
+  it("sends nothing once Hosts is unloading", async () => {
+    const { pm, kills, confirm } = await pmWith([true]);
+    pm.close();
+    expect(await pm.autoStopBiggest(10, confirm)).toBeNull();
+    expect(kills).toEqual([]);
   });
 });

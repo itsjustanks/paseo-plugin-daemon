@@ -52,6 +52,18 @@ filled memory until the daemon stopped answering. Both were fixed by hand; now H
 - **Help.** Two plain questions: "A job is eating all the memory. What happens?" and "A plugin isn't
   answering. What do I do?". "Recent stops" is now "Recent stops and restarts". Overview's Technical
   details say whether plugin health can be read here and whether the memory guard is on.
+- **Safety review fixes (before release).** A plugin launch whose "Loading plugin" line is gone
+  (rotated away, outside the read budget, or a lone "Plugin ready") no longer gets a guessed window,
+  so it can never match another plugin's healthy process: Hosts says it can't tell and stops nothing.
+  A Ready line pairs with a Loading line only within 2 minutes, and no window is longer than that.
+  The memory guard now asks again immediately before every signal it sends, the SIGKILL follow-up
+  included: the switch must still be on and a reading taken right then must be critical, or nothing
+  is sent. Only one automatic stop runs at a time, and unloading Hosts disarms one in progress. A
+  failed or missing reading, or a gap of more than three check intervals, restarts the "critical for
+  over a minute" count.
+- **Known limit.** Between the last identity check and the signal, a process could exit and its PID
+  be reused within microseconds; closing that needs `pidfd_send_signal`, which Node doesn't expose.
+  This applies to every stop, as before.
 - **Settings** document version 5 (adds the guard switch); older documents keep every value.
 - **Tests.** Log parsing and the budgeted tail, launch history, plugin-process matching (start times
   measured on a real host), the reload-then-stop escalation against a fake daemon that wedges, the
