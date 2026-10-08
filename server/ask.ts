@@ -137,7 +137,7 @@ export function createAsk(deps: AskDeps) {
 
   function processFacts(row: ProcessRow, report: ProcessReport): AskProcessFacts {
     return {
-      name: row.name, pid: row.pid, job: row.job?.label ?? null, owner: row.owner.label, cwd: row.cwd,
+      name: row.name, pid: row.pid, job: row.job?.label ?? null, owner: row.owner.label, cwd: row.cwd, where: row.where ?? null,
       cpuPercent: row.cpuPercent, rssBytes: row.rssBytes, memoryPercent: row.memoryPercent,
       memoryWhere: report.memoryBasis === "container" ? "this container's limit" : "this machine's memory",
       ageSeconds: row.ageSeconds, command: redactText([row.command], home)[0] ?? "", ports: row.ports,

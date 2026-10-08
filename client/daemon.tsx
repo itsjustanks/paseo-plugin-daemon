@@ -205,7 +205,7 @@ function DaemonBody(props: DaemonProps) {
         <Accordion theme={theme}>
           {disk.report && disk.report.scan.state !== "never" ? (
             <AccordionItem key={foldKey("caches")} theme={theme} compact={layout.compact} icon="Archive" title="Shared caches and temporary files" summary={disk.report.caches.length ? `${formatSize(disk.report.caches.reduce((sum, group) => sum + group.totalBytes, 0))} · package downloads, tool caches, old browser downloads, /tmp leftovers` : disk.report.scan.state === "running" ? "Checking…" : "Nothing found"} open={foldOpen("caches")}>
-              <CacheList theme={theme} groups={disk.report.caches} />
+              <CacheList theme={theme} groups={disk.report.caches} compact={layout.compact} />
             </AccordionItem>
           ) : null}
           {tunnels.length > 0 ? (

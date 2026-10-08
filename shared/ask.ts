@@ -63,6 +63,8 @@ export type AskProcessFacts = {
   owner: string;
   /** Home-relative. */
   cwd: string | null;
+  /** 0.15.0: the folder as people read it ("site · apps/web"); the message leads with it. */
+  where?: string | null;
   cpuPercent: number | null;
   rssBytes: number;
   memoryPercent: number;
@@ -155,7 +157,8 @@ export function composeAskMessage(facts: AskFacts): string {
   const p = facts.process;
   if (p) {
     lines.push(`- Process: ${p.name} (PID ${p.pid})${p.job ? `, ${p.job.toLowerCase()}` : ""}${p.owner ? `, ${p.owner}` : ""}`);
-    if (p.cwd) lines.push(`- Folder: ${p.cwd}`);
+    if (p.where && p.cwd && p.where !== p.cwd) lines.push(`- Folder: ${p.where} (${p.cwd})`);
+    else if (p.cwd) lines.push(`- Folder: ${p.cwd}`);
     lines.push(`- CPU: ${p.cpuPercent === null ? "still measuring" : `${Math.round(p.cpuPercent)}% of one core`}`);
     lines.push(`- Memory: ${bytesWords(p.rssBytes)} (${p.memoryPercent.toFixed(1)}% of ${p.memoryWhere})`);
     lines.push(`- Running for: ${durationWords(p.ageSeconds)}`);

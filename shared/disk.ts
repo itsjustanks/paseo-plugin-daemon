@@ -194,6 +194,8 @@ export const ClearItemSchema = z.object({
   blocked: z.string().nullable(),
   /** "Ask an agent" about this one folder (its id in the last check), for /tmp folders. */
   askId: z.string().nullable().optional(),
+  /** 0.15.0: the full path, shown only when a row is opened (with Copy path). */
+  path: z.string().optional(),
 });
 export type ClearItem = z.infer<typeof ClearItemSchema>;
 
@@ -205,6 +207,8 @@ export const WorkspaceUsageSchema = z.object({
   project: z.string().nullable(),
   /** The folder, home-relative ("~/code/site"); shown when a row is opened. */
   folder: z.string(),
+  /** 0.15.0: the full folder, shown only when the row is opened (with Copy path). */
+  path: z.string().optional(),
   worktree: z.boolean(),
   branch: z.string().nullable(),
   state: WorkspaceStateSchema,
@@ -323,22 +327,23 @@ export function diskReportText(report: DiskReport, now = Date.now()): string {
   if (report.scan.state === "never") lines.push("Workspaces haven't been checked yet; run \"Check disk space\" in Hosts for sizes.");
   else lines.push(`Checked ${report.scan.finishedAt ? ago(report.scan.finishedAt, now) : "just now"}${report.scan.state === "running" ? " (a new check is running)" : ""}${report.scan.partial ? "; some sizes are floors" : ""}.`);
   lines.push(`Looks safe to clear in all: ${formatSize(report.clearableBytes)}.`);
-  const workspaces = report.workspaces.filter((workspace) => workspace.measured !== false).slice(0, 15);
+  const workspaces = report.workspaces.filter((workspace) => workspace.measured !== false).sort((a, b) => b.totalBytes - a.totalBytes || (a.names[0] ?? "\uffff").localeCompare(b.names[0] ?? "\uffff")).slice(0, 15);
   if (workspaces.length) {
     lines.push("", "Workspaces by size:");
     for (const workspace of workspaces) {
       const name = workspace.names[0] ?? "not linked to a workspace";
       const safe = workspace.clearableBytes > 0 ? `, ${formatSize(workspace.clearableBytes)} looks safe to clear` : "";
       lines.push(`- ${name} (${workspace.folder}): ${formatSize(workspace.totalBytes)}${workspace.partial ? " or more" : ""}${safe}${workspace.busy ? ` (${workspace.busy.replace(/\.$/, "")})` : ""}`);
-      for (const item of workspace.items.filter((entry) => entry.safe).slice(0, 5)) lines.push(`  - ${item.where}: ${formatSize(Math.max(0, item.bytes - item.sharedBytes))} (${item.what})`);
+      const safeItems = workspace.items.filter((entry) => entry.safe).sort((a, b) => (b.bytes - b.sharedBytes) - (a.bytes - a.sharedBytes) || a.where.localeCompare(b.where));
+      for (const item of safeItems.slice(0, 5)) lines.push(`  - ${workspace.names[0] ? `${workspace.names[0]} · ` : ""}${item.where}: ${formatSize(Math.max(0, item.bytes - item.sharedBytes))} (${item.what})`);
     }
   }
-  const groups = report.caches.filter((group) => group.totalBytes > 0);
+  const groups = report.caches.filter((group) => group.totalBytes > 0).sort((a, b) => b.totalBytes - a.totalBytes || a.title.localeCompare(b.title));
   if (groups.length) {
     lines.push("", "Shared caches and temporary files:");
     for (const group of groups) {
       lines.push(`- ${group.title}: ${formatSize(group.totalBytes)}`);
-      for (const item of [...group.items].sort((a, b) => b.bytes - a.bytes).slice(0, 5)) lines.push(`  - ${item.where}: ${formatSize(item.bytes)} (${item.what})`);
+      for (const item of [...group.items].sort((a, b) => b.bytes - a.bytes || a.where.localeCompare(b.where)).slice(0, 5)) lines.push(`  - ${item.where}: ${formatSize(item.bytes)} (${item.what})`);
     }
   }
   lines.push("", "Before deleting anything, check it isn't in use or holding unsaved work. Clear build files and caches, never source, .git or .env files.");

@@ -1,10 +1,12 @@
 import React from "react";
-import { ActivityIndicator, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc } from "@getpaseo/plugin/client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ago, diskReport, formatSize, stateWords, type CacheGroup, type ClearItem, type DiskReport, type DiskSpace, type WorkspaceUsage } from "../shared/disk";
 import { AskAgentButton } from "./ask";
+import { PathDetails, PathLabel } from "./paths";
+import { friendlyPath } from "../shared/paths";
 import { Accordion, AccordionItem, Button, Card, Disclosure, Divider, ItemTitle, Meta, Note, Row, SectionTitle, SPACE, TYPE, type Tone } from "./kit";
 import { Meter } from "./processes";
 
@@ -123,12 +125,19 @@ export function DiskCard({ theme, report, loading, scanning, onScan, onCaches, a
 }
 
 /** One found folder inside a workspace: what it is, where, its size, and why not when it doesn't look safe. */
-function ItemLine({ theme, item }: { theme: Theme; item: ClearItem }) {
+/** One found folder: what it is and its size; tap to see where it is in full, with Copy path (0.15.0). */
+function ItemLine({ theme, item, owner, compact }: { theme: Theme; item: ClearItem; owner: string | null; compact: boolean }) {
+  const [open, setOpen] = React.useState(false);
   const shared = item.sharedBytes > 0 && item.sharedBytes >= item.bytes * 0.2;
+  const label = owner ? `${owner} · ${item.where}` : item.where;
   return (
     <View style={{ gap: SPACE.hair }}>
-      <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${item.what} · ${size(item.bytes, item.partial)}`}</Text>
-      <Meta theme={theme}>{[item.where, item.blocked ?? item.cost, shared ? `${formatSize(item.sharedBytes)} of it is shared with pnpm's store, so clearing frees about ${formatSize(frees(item))}` : null].filter(Boolean).join(" · ")}</Meta>
+      <Pressable accessibilityRole="button" accessibilityLabel={`${item.what}, ${size(item.bytes, item.partial)}. ${open ? "Hide" : "Show"} where it is`} onPress={() => setOpen(!open)} style={{ gap: SPACE.hair }}>
+        <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${item.what} · ${size(item.bytes, item.partial)}`}</Text>
+        <PathLabel theme={theme} compact={compact} label={label} />
+        <Meta theme={theme}>{[item.blocked ?? item.cost, shared ? `${formatSize(item.sharedBytes)} of it is shared with pnpm's store, so clearing frees about ${formatSize(frees(item))}` : null].filter(Boolean).join(" · ")}</Meta>
+      </Pressable>
+      {open ? <PathDetails theme={theme} full={item.path ?? item.where} /> : null}
     </View>
   );
 }
@@ -151,7 +160,9 @@ export function WorkspaceRow({ theme, compact, workspace, checking }: { theme: T
     <AccordionItem theme={theme} compact={compact} icon={STATE_ICON[workspace.state]} title={title} summary={summary} tone={workspace.state === "failed" ? "warning" : undefined}>
       <View style={{ gap: SPACE.xs }}>
         {workspace.names.length > 1 ? <Meta theme={theme}>{`Used by ${workspace.names.length} workspaces: ${workspace.names.join(", ")}`}</Meta> : null}
-        <Meta theme={theme}>{[workspace.project ? `Project ${workspace.project}` : null, `Folder ${workspace.folder}`, workspace.worktree ? "a Paseo worktree" : null].filter(Boolean).join(" · ")}</Meta>
+        {workspace.project || workspace.worktree ? <Meta theme={theme}>{[workspace.project ? `Project ${workspace.project}` : null, workspace.worktree ? "a Paseo worktree" : null].filter(Boolean).join(" · ")}</Meta> : null}
+        <PathLabel theme={theme} compact={compact} prefix="Folder " label={friendlyPath(workspace.folder).label} />
+        <PathDetails theme={theme} full={workspace.path ?? workspace.folder} />
       </View>
       {workspace.busy ? <Note theme={theme} tone="warning">{workspace.busy}</Note> : null}
       {!linked && workspace.worktree ? (
@@ -163,10 +174,10 @@ export function WorkspaceRow({ theme, compact, workspace, checking }: { theme: T
       {workspace.skipped ? <Meta theme={theme}>The last check ran out of time before it reached this folder. Press Refresh at the top to check again.</Meta> : null}
       {workspace.items.length ? (
         <View style={{ gap: SPACE.row }}>
-          {shown.map((item, index) => <ItemLine key={`${item.where}-${index}`} theme={theme} item={item} />)}
+          {shown.map((item, index) => <ItemLine key={`${item.where}-${index}`} theme={theme} item={item} owner={workspace.names[0] ?? null} compact={compact} />)}
           {more.length ? (
             <Disclosure theme={theme} label={`${more.length} more`} quiet>
-              <View style={{ gap: SPACE.row }}>{more.map((item, index) => <ItemLine key={`more-${item.where}-${index}`} theme={theme} item={item} />)}</View>
+              <View style={{ gap: SPACE.row }}>{more.map((item, index) => <ItemLine key={`more-${item.where}-${index}`} theme={theme} item={item} owner={workspace.names[0] ?? null} compact={compact} />)}</View>
             </Disclosure>
           ) : null}
         </View>
@@ -183,24 +194,23 @@ export function WorkspaceRow({ theme, compact, workspace, checking }: { theme: T
 
 const CACHE_ITEMS_SHOWN = 5;
 
-function CacheLine({ theme, item }: { theme: Theme; item: ClearItem }) {
+function CacheLine({ theme, item, compact }: { theme: Theme; item: ClearItem; compact: boolean }) {
+  const [open, setOpen] = React.useState(false);
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.row, flexWrap: "wrap" }}>
-      <View style={{ flex: 1, minWidth: 200, gap: SPACE.hair }}>
-        <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${item.name} · ${size(item.bytes, item.partial)}`}</Text>
-        <Meta theme={theme}>{item.what}</Meta>
+    <View style={{ gap: SPACE.xs }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.row, flexWrap: "wrap" }}>
+        <Pressable accessibilityRole="button" accessibilityLabel={`${item.name}, ${size(item.bytes, item.partial)}. ${open ? "Hide" : "Show"} where it is`} onPress={() => setOpen(!open)} style={{ flex: 1, minWidth: 200, gap: SPACE.hair }}>
+          <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${item.name} · ${size(item.bytes, item.partial)}`}</Text>
+          <Meta theme={theme}>{item.what}</Meta>
+          <PathLabel theme={theme} compact={compact} label={item.where} />
+        </Pressable>
+        {item.askId ? <AskAgentButton theme={theme} subject={{ kind: "folder", id: item.askId }} /> : null}
       </View>
-      {item.askId ? <AskAgentButton theme={theme} subject={{ kind: "folder", id: item.askId }} /> : null}
+      {open ? <PathDetails theme={theme} full={item.path ?? item.where} /> : null}
     </View>
   );
 }
-
-/**
- * Shared caches and temporary files, grouped and sized. Hosts deletes none of
- * them; one button asks an agent to clean them up with the tools' own
- * commands. A group shows its biggest few; the rest fold away.
- */
-export function CacheList({ theme, groups }: { theme: Theme; groups: readonly CacheGroup[] }) {
+export function CacheList({ theme, groups, compact = false }: { theme: Theme; groups: readonly CacheGroup[]; compact?: boolean }) {
   if (!groups.length) return <Meta theme={theme}>No shared caches or leftovers were found.</Meta>;
   return (
     <View style={{ gap: SPACE.section }}>
@@ -209,10 +219,10 @@ export function CacheList({ theme, groups }: { theme: Theme; groups: readonly Ca
         return (
           <View key={group.id} style={{ gap: SPACE.row }}>
             <ItemTitle theme={theme}>{`${group.title} · ${formatSize(group.totalBytes)}${group.items.length > 1 ? ` · ${group.items.length} items` : ""}`}</ItemTitle>
-            {shown.map((item, index) => <CacheLine key={`${item.where}-${index}`} theme={theme} item={item} />)}
+            {shown.map((item, index) => <CacheLine key={`${item.where}-${index}`} theme={theme} item={item} compact={compact} />)}
             {more.length ? (
               <Disclosure theme={theme} label={`${more.length} more`} quiet>
-                <View style={{ gap: SPACE.row }}>{more.map((item, index) => <CacheLine key={`more-${item.where}-${index}`} theme={theme} item={item} />)}</View>
+                <View style={{ gap: SPACE.row }}>{more.map((item, index) => <CacheLine key={`more-${item.where}-${index}`} theme={theme} item={item} compact={compact} />)}</View>
               </Disclosure>
             ) : null}
           </View>

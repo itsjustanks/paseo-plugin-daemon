@@ -8,6 +8,7 @@ import { processDetails, processPreview, processReport, processStop, sameness, t
 import { Accordion, AccordionItem, Banner, Button, Card, Chip, Divider, HostIcon, ItemTitle, Meta, Note, QuietLine, RADIUS, Row, SPACE, TYPE, tint, toneColor, type Tone } from "./kit";
 import { formatBytes, formatDuration, formatPercent } from "./ui";
 import { AskAgentButton } from "./ask";
+import { PathDetails, PathLabel } from "./paths";
 import { StopProcess, StuckPlugins } from "./guard";
 import type { HealthIssue } from "../shared/health";
 
@@ -17,11 +18,10 @@ type Filter = "all" | "jobs" | "stoppable";
 
 const PAGE = 25;
 const POLL_MS = 5000;
+/** 0.15.0: highest first, memory by default; flagged rows stay pinned on top. */
 const SORTS: ReadonlyArray<{ id: ReportSort; label: string }> = [
-  { id: "cpu", label: "CPU" },
   { id: "memory", label: "Memory" },
-  { id: "age", label: "Age" },
-  { id: "name", label: "Name" },
+  { id: "cpu", label: "CPU" },
 ];
 const SORTED: Record<ReportSort, string> = { cpu: "Most CPU first", memory: "Most memory first", age: "Running longest first", name: "By name" };
 const FILTERS: ReadonlyArray<{ id: Filter; label: string }> = [
@@ -186,7 +186,9 @@ function ProcessItem({ theme, row, compact, byTree, selected, onSelect, onStop, 
           <View style={{ backgroundColor: theme.colors.surface0, borderColor: theme.colors.border, borderWidth: 1, borderRadius: RADIUS.control, padding: SPACE.row }}>
             <Text selectable style={{ ...TYPE.mono, color: theme.colors.foreground }}>{row.command}</Text>
           </View>
-          <Meta theme={theme}>{[`PID ${row.pid}`, `parent ${row.ppid}`, row.cwd ? `in ${row.cwd}` : null, row.tree.count > 1 ? `${row.tree.count - 1} child process${row.tree.count === 2 ? "" : "es"}, ${formatBytes(row.tree.rssBytes)} together` : null].filter(Boolean).join(" · ")}</Meta>
+          <Meta theme={theme}>{[`PID ${row.pid}`, `parent ${row.ppid}`, row.tree.count > 1 ? `${row.tree.count - 1} child process${row.tree.count === 2 ? "" : "es"}, ${formatBytes(row.tree.rssBytes)} together` : null].filter(Boolean).join(" · ")}</Meta>
+          {row.where ?? row.cwd ? <PathLabel theme={theme} compact={compact} prefix="In " label={(row.where ?? row.cwd)!} /> : null}
+          {row.cwdPath ?? row.cwd ? <PathDetails theme={theme} full={(row.cwdPath ?? row.cwd)!} /> : null}
           <Row>
             {row.flags.length ? <AskAgentButton theme={theme} subject={{ kind: "process", pid: row.pid }} /> : null}
             {row.stoppable ? <Button theme={theme} label="Stop…" icon="OctagonX" danger accessibilityLabel={`Stop ${row.name} (PID ${row.pid})…`} onPress={onStop} /> : null}
@@ -269,7 +271,7 @@ export function summarizeNames(names: readonly string[]): string {
  */
 export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChanged }: { theme: Theme; compact: boolean; hostId: string; say: Say; issues?: readonly HealthIssue[]; onChanged?: () => void }) {
   const report = useRpc(processReport), preview = useRpc(processPreview), stop = useRpc(processStop);
-  const [sort, setSort] = useState<ReportSort>("cpu");
+  const [sort, setSort] = useState<ReportSort>("memory");
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
   const [limit, setLimit] = useState(PAGE);

@@ -22,6 +22,8 @@ import { RESTART_WAIT_MS, type RestartOutcome } from "../shared/guard";
 import { safeGitArgs, safeGitEnv } from "./disk-git";
 import { DiskScanner, cleanupAskText, defaultPlaces, disksFor, folderAskText, readWorkspace, type WorkspaceInfo } from "./disk-scan";
 import { formatSize } from "../shared/disk";
+import { friendlyPath } from "../shared/paths";
+import { homeRelative } from "../shared/redaction";
 import type { AskContext } from "../shared/ask";
 import { join } from "node:path";
 import type { DiskReport } from "../shared/disk";
@@ -178,12 +180,12 @@ export function createRuntime(options: RuntimeOptions = {}) {
       const ask = (title: string, text: string, workspaceId: string | null = null, workspaceName: string | null = null): AskContext => ({ title, text, workspaceId, workspaceName, outputFrom: null });
       const join = (folder: string, where: string) => `${folder.replace(/\/$/, "")}/${where}`;
       if (id === "caches") {
-        const items = report.caches.flatMap((group) => group.items).filter((item) => item.bytes > 0).map((item) => ({ where: item.where, bytes: item.bytes, what: item.name, how: item.cost, partial: item.partial }));
+        const items = report.caches.flatMap((group) => group.items).filter((item) => item.bytes > 0).map((item) => ({ label: item.where, where: item.path ? homeRelative(item.path, disk!.places.home) : item.where, bytes: item.bytes, what: item.name, how: item.cost, partial: item.partial }));
         if (!items.length) return null;
         return ask(`Clean up shared caches (${formatSize(items.reduce((sum, item) => sum + item.bytes, 0))})`, cleanupAskText({ kind: "caches", checkedAt, items }));
       }
       const chosen = id === "idle" ? report.workspaces.filter((workspace) => !workspace.busy && workspace.clearableBytes > 0) : report.workspaces.filter((workspace) => workspace.id === id && workspace.clearableBytes > 0);
-      const items = chosen.flatMap((workspace) => workspace.items.filter((item) => item.safe).map((item) => ({ where: join(workspace.folder, item.where), bytes: item.bytes - item.sharedBytes, what: item.what, cost: item.cost, partial: item.partial })));
+      const items = chosen.flatMap((workspace) => workspace.items.filter((item) => item.safe).map((item) => ({ label: `${workspace.names[0] ?? friendlyPath(workspace.folder, { paseoHome: homeRelative(disk!.places.paseoHome, disk!.places.home) }).label} · ${item.where}`, where: join(workspace.folder, item.where), bytes: item.bytes - item.sharedBytes, what: item.what, cost: item.cost, partial: item.partial })));
       if (!items.length) return null;
       const single = chosen.length === 1 ? chosen[0]! : null;
       const title = single ? (single.names[0] ?? single.folder) : `${chosen.length} idle workspaces`;

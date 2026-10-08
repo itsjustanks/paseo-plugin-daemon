@@ -39,6 +39,10 @@ export const ProcessRowSchema = z.object({
   /** Redacted, length-bounded command line, for display only. */
   command: z.string(),
   cwd: z.string().nullable(),
+  /** 0.15.0: the folder as people read it ("site · apps/web", "~/scratch"); the full path is `cwdPath`. */
+  where: z.string().nullable().optional(),
+  /** 0.15.0: the full folder, shown only when the row is opened. */
+  cwdPath: z.string().nullable().optional(),
   state: z.string(),
   /** Share of one core; a busy multi-threaded process can pass 100. */
   cpuPercent: z.number().min(0).nullable(),
@@ -100,7 +104,7 @@ export const ReportSortSchema = z.enum(["cpu", "memory", "age", "name"]);
 export type ReportSort = z.infer<typeof ReportSortSchema>;
 
 export const ReportInputSchema = z.object({
-  sort: ReportSortSchema.default("cpu"),
+  sort: ReportSortSchema.default("memory"),
   query: z.string().max(120).default(""),
   /** "jobs": heavy job roots only; "stoppable": only what can be stopped here. */
   filter: z.enum(["all", "jobs", "stoppable"]).default("all"),
@@ -189,6 +193,9 @@ export function twinKeys(rows: ReadonlyArray<{ name: string; owner: { label: str
 }
 
 /** One process for a chat or a ticket (0.15.0, "Copy details"): name, PID, ports, folder, and its already redacted command. */
-export function processDetails(row: Pick<ProcessRow, "name" | "pid" | "ports" | "cwd" | "command">): string {
-  return [[`${row.name} (PID ${row.pid})`, row.ports.length ? `ports ${row.ports.map((port) => `:${port}`).join(" ")}` : null, row.cwd ? `in ${row.cwd}` : null].filter(Boolean).join(" · "), row.command].join("\n");
+export function processDetails(row: Pick<ProcessRow, "name" | "pid" | "ports" | "cwd" | "command"> & { where?: string | null; cwdPath?: string | null }): string {
+  // The friendly folder first; the full one after it, for whoever pastes this somewhere that needs it.
+  const folder = row.where ?? row.cwd;
+  const full = row.cwdPath && row.cwdPath !== folder ? row.cwdPath : null;
+  return [[`${row.name} (PID ${row.pid})`, row.ports.length ? `ports ${row.ports.map((port) => `:${port}`).join(" ")}` : null, folder ? `in ${folder}` : null].filter(Boolean).join(" · "), full ? `folder ${full}` : null, row.command].filter(Boolean).join("\n");
 }

@@ -103,6 +103,8 @@ export const ProcessSchema = z.object({
   command: z.string(),
   /** Home-relative working directory (`~/...`) or null when unreadable. */
   cwd: z.string().nullable(),
+  /** 0.15.0: the full folder, shown only when the row is opened. */
+  cwdPath: z.string().nullable().optional(),
   state: ProcessStateSchema,
   cpuPercent: z.number().min(0).nullable(),
   rssBytes: z.number().min(0),

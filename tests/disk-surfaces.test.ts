@@ -102,7 +102,7 @@ describe("Disk report attachment text", () => {
     expect(text).toContain("Hosts deleted nothing");
     expect(text).toContain("Disk: 40 GB free of 100 GB (60% used).");
     expect(text).toContain("- main (~/app): 3 GB, 1.2 GB looks safe to clear");
-    expect(text).toContain("  - node_modules: 1 GB (Installed packages)");
+    expect(text).toContain("  - main · node_modules: 1 GB (Installed packages)");
     expect(text).toContain("- api (~/api): 1 GB");
     expect(text).toContain("- npm: 2 GB");
     expect(text).toMatch(/never source, \.git or \.env files/);

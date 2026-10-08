@@ -155,7 +155,7 @@ function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, s
 
   const snapshotQuery = useQuery({
     queryKey: [...QUERY_KEY, hostId, workspaceId],
-    queryFn: () => rpc.snapshot({ query: "", sort: "cpu", limit: WORKSPACE_LIMIT }),
+    queryFn: () => rpc.snapshot({ query: "", sort: "memory", limit: WORKSPACE_LIMIT }),
     refetchInterval: intervalSeconds * 1000,
     refetchIntervalInBackground: false,
     placeholderData: keepPreviousData,

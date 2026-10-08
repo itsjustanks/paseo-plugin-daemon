@@ -25,6 +25,8 @@ import { systemClock } from "./platform";
 import { hashArgv } from "./redaction";
 import { ProcessGuard, type KillFn } from "./safety";
 import { isAgentTool, isInfrastructure, type ProjectScope } from "./scope";
+import { friendlyPath } from "../shared/paths";
+import { homedir } from "node:os";
 
 /**
  * The Processes tab's server side.
@@ -215,6 +217,9 @@ export class ProcessManager {
       if (detail.view.impact === "pressure-driver") flags.push({ code: "pressure-driver", text: "One of the biggest users while the host is under pressure" });
       return {
         pid: detail.raw.pid, ppid: detail.raw.ppid, name: programName(detail.raw.argv, detail.view.name), command: detail.view.command, cwd: detail.view.cwd, state: detail.view.state,
+        // 0.15.0: the folder as people read it ("site · apps/web"), and in full for the opened row.
+        where: detail.raw.cwd ? friendlyPath(detail.raw.cwd, { home: HOME, roots: rootsFor(this.options.scope?.match(detail.raw, detail.view.ports) ?? null), paseoHome: process.env.PASEO_HOME ?? null }).label : null,
+        cwdPath: detail.raw.cwd,
         cpuPercent: detail.view.cpuPercent, cpuSustained: detail.cpuSustained, hotSeconds: Math.round(detail.hotSeconds),
         rssBytes: detail.raw.rssBytes, memoryPercent: detail.view.memoryPercent, ageSeconds: detail.view.ageSeconds, ports: detail.view.ports,
         job, jobRoot: isJobRoot(detail), tree: tree(detail), owner: decision.owner, flags,
@@ -439,16 +444,26 @@ function capitalise(text: string): string {
   return text ? `${text[0]!.toUpperCase()}${text.slice(1)}.` : "";
 }
 
-function order(sort: ReportSort, byTree: boolean): (a: ProcessRow, b: ProcessRow) => number {
+/**
+ * Highest first (0.15.0), and stable: anything flagged (a runaway, a memory
+ * hog, a pressure driver) stays pinned on top, then the chosen figure from
+ * high to low, then name and PID, so rows don't jump between refreshes.
+ */
+export function order(sort: ReportSort, byTree: boolean): (a: ProcessRow, b: ProcessRow) => number {
   const cpu = (row: ProcessRow) => (byTree ? row.tree.cpuPercent : row.cpuPercent) ?? -1;
   const rss = (row: ProcessRow) => (byTree ? row.tree.rssBytes : row.rssBytes);
+  const pinned = (a: ProcessRow, b: ProcessRow) => Number(b.flags.length > 0) - Number(a.flags.length > 0);
+  const tie = (a: ProcessRow, b: ProcessRow) => a.name.localeCompare(b.name) || a.pid - b.pid;
   switch (sort) {
-    case "memory": return (a, b) => rss(b) - rss(a) || a.pid - b.pid;
-    case "age": return (a, b) => b.ageSeconds - a.ageSeconds || a.pid - b.pid;
-    case "name": return (a, b) => a.name.localeCompare(b.name) || a.pid - b.pid;
-    default: return (a, b) => cpu(b) - cpu(a) || rss(b) - rss(a) || a.pid - b.pid;
+    case "cpu": return (a, b) => pinned(a, b) || cpu(b) - cpu(a) || rss(b) - rss(a) || tie(a, b);
+    case "age": return (a, b) => pinned(a, b) || b.ageSeconds - a.ageSeconds || tie(a, b);
+    case "name": return (a, b) => pinned(a, b) || tie(a, b);
+    default: return (a, b) => pinned(a, b) || rss(b) - rss(a) || cpu(b) - cpu(a) || tie(a, b);
   }
 }
+
+const HOME = homedir();
+const rootsFor = (match: { name: string; path: string; workspace: string | null } | null) => (match ? [{ name: match.workspace ?? match.name, root: match.path }] : []);
 
 /** The guard's words, said plainly. */
 export function friendly(result: ActionResult): string {

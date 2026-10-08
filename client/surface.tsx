@@ -1,4 +1,6 @@
-import { errorText, useOnce, useSafeToast, Sheet } from "./feedback";
+import { errorText, useCopy, useOnce, useSafeToast, Sheet } from "./feedback";
+import { friendlyPath, pathWidth, truncateMiddle } from "../shared/paths";
+import { redactSecrets } from "../shared/redaction";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useMutation } from "@tanstack/react-query";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -282,13 +284,29 @@ export function ProcessRow({ process, first, expanded, onToggle, actions }: { pr
               { value: `state ${process.state}`, tone: stateTone(process.state) === "warning" ? "warning" : undefined },
               { value: `${formatPercent(process.memoryPercent, 1)} of memory` },
               { value: `age ${formatDuration(process.ageSeconds)}` },
-              process.cwd ? { value: `cwd ${process.cwd}` } : null,
             ]}
           />
+          {process.cwd ? <ProcessFolder process={process} /> : null}
           {process.classification.reasons.length > 0 ? <Text style={t.text.caption}>{process.classification.label}: {process.classification.reasons.join("; ")}</Text> : null}
           <ProcessActions process={process} actions={actions} />
         </View>
       ) : null}
+    </View>
+  );
+}
+
+/** 0.15.0: the folder as people read it ("site · apps/web"), then in full with Copy path. */
+function ProcessFolder({ process }: { process: Process }) {
+  const t = useTokens();
+  const copy = useCopy();
+  const project = process.project ?? null;
+  const place = friendlyPath(process.cwd!, { roots: project ? [{ name: project.workspace ?? project.name, root: project.path }] : [] });
+  const full = redactSecrets(process.cwdPath ?? process.cwd!);
+  return (
+    <View style={{ gap: t.space.xs }}>
+      <Text style={t.text.caption}>{`In ${truncateMiddle(redactSecrets(place.label), pathWidth(t.compact))}`}</Text>
+      <Text selectable style={t.text.caption}>{full}</Text>
+      <View style={{ flexDirection: "row" }}><Button label="Copy path" icon="Copy" accessibilityLabel={`Copy the path ${full}`} onPress={() => void copy(process.cwdPath ?? process.cwd!, "Path copied")} /></View>
     </View>
   );
 }

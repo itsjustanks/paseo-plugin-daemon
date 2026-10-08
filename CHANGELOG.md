@@ -27,6 +27,18 @@ stays `>=0.9.0`; no settings change; nothing stops by itself.
   archived workspace's folder for a day for anything still listening on a port, and lists it under
   What needs attention with Stop (asks first) and Ask an agent.
 - **Help:** "I archived a workspace. Is anything still running?".
+- **Highest first, everywhere.** Processes sort by memory by default, with a "Memory · CPU" pill;
+  anything flagged (a runaway, a memory hog) stays pinned on top. Dev servers, a workspace's other
+  processes, Workspaces, the items inside each (what looks safe to clear first), caches, /tmp
+  leftovers and unlinked worktrees go biggest first, and so do the Disk report and the agent's
+  clean-up list. Ties break by name, so rows don't jump on refresh. (The Age and Name sorts are gone;
+  search still finds a process by name.)
+- **Friendly file references.** One formatter for every path: a workspace's name plus the path
+  inside it ("project-hub · apps/studio/node_modules"), `~` for home ("~/.cache/ms-playwright"),
+  "worktree site/feature-x" for a worktree no workspace claims, and "/tmp/…". Long ones are
+  shortened in the middle on narrow screens. The full path shows only in an opened row, with "Copy
+  path". Agent messages lead with the friendly name and add the path. Paseo has no way for a plugin
+  to open a folder in its Files panel yet, so there's no "Show in Files".
 - **Review fixes (before release):**
   - The redactor masks a quoted value to its closing quote (`password="correct horse battery
     staple"`), an `Authorization:` header with any scheme, case or length, and quoted values after

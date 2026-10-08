@@ -9,6 +9,7 @@ import {
 } from "../shared/disk";
 import { stateDirectory } from "./binaries";
 import { ChildGroup } from "./disk-children";
+import { friendlyPath } from "../shared/paths";
 import { gitAllows, gitVerdicts, groupGit, type GitRun, type GitVerdict } from "./disk-git";
 import { runWorker, type WalkItem, type WalkResult, type WalkRoot } from "./disk-worker";
 
@@ -255,6 +256,11 @@ async function usesPnpm(workspaces: readonly WorkspaceInfo[]): Promise<boolean> 
   return false;
 }
 
+/** Biggest first, stable (0.15.0): ties by where it is, then name, so rows don't jump on refresh. */
+export const bySize = (a: { bytes: number; where: string; name: string }, b: { bytes: number; where: string; name: string }) => b.bytes - a.bytes || a.where.localeCompare(b.where) || a.name.localeCompare(b.name);
+/** Inside a workspace: what looks safe to clear first, each biggest first. */
+export const bySafeThenSize = (a: { safe: boolean; bytes: number; where: string; name: string }, b: { safe: boolean; bytes: number; where: string; name: string }) => Number(b.safe) - Number(a.safe) || bySize(a, b);
+
 export class DiskScanner {
   private data: ScanData | null = null;
   private running: Promise<void> | null = null;
@@ -468,11 +474,11 @@ export class DiskScanner {
         if (blocked === "hide") return [];
         const words = describeName(item.name)!;
         const why = blocked ?? busy;
-        return [{ safe: !why, name: item.name, what: words.what, cost: words.cost, where: item.rel, bytes: item.bytes, sharedBytes: item.sharedBytes, partial: item.partial, blocked: why }];
-      }).sort((a, b) => b.bytes - a.bytes).slice(0, 60);
+        return [{ safe: !why, name: item.name, what: words.what, cost: words.cost, where: item.rel, path, bytes: item.bytes, sharedBytes: item.sharedBytes, partial: item.partial, blocked: why }];
+      }).sort(bySafeThenSize).slice(0, 60);
       const activeAt = owners.map((owner) => owner.activityAt ?? 0).reduce((a, b) => Math.max(a, b), 0) || null;
       workspaces.push({
-        id: folder.key, names: owners.map((owner) => owner.name), project: owners[0]?.project ?? null, folder: homeRelative(folder.path, home),
+        id: folder.key, names: owners.map((owner) => owner.name), project: owners[0]?.project ?? null, folder: homeRelative(folder.path, home), path: folder.path,
         worktree: folder.kind === "worktree" || owners.some((owner) => owner.worktree), branch: owners.find((owner) => owner.branch)?.branch ?? null,
         state, activeAt, devServers, totalBytes: folder.result?.totalBytes ?? 0,
         clearableBytes: items.filter((item) => item.safe).reduce((sum, item) => sum + item.bytes - item.sharedBytes, 0),
@@ -480,18 +486,18 @@ export class DiskScanner {
         measured: !!folder.result && !folder.result.skipped, workspaceIds: owners.map((owner) => owner.id),
       });
     }
-    workspaces.sort((a, b) => b.totalBytes - a.totalBytes || a.folder.localeCompare(b.folder));
+    workspaces.sort((a, b) => b.totalBytes - a.totalBytes || (a.names[0] ?? "\uffff").localeCompare(b.names[0] ?? "\uffff") || a.folder.localeCompare(b.folder));
     const groups = new Map<string, CacheGroup>();
     for (const cache of data?.caches ?? []) {
       const group = groups.get(cache.group) ?? { id: cache.group.toLowerCase().replace(/[^a-z]+/g, "-"), title: cache.group, totalBytes: 0, items: [] };
       group.items.push({
-        safe: false, name: cache.label, what: cache.what, cost: cache.cost, where: homeRelative(cache.path, home), bytes: cache.bytes, sharedBytes: 0, partial: cache.partial,
+        safe: false, name: cache.label, what: cache.what, cost: cache.cost, where: friendlyPath(cache.path, { home, paseoHome: this.deps.places.paseoHome }).label, path: cache.path, bytes: cache.bytes, sharedBytes: 0, partial: cache.partial,
         blocked: null, askId: cache.kind === "tmp" ? cache.key : null,
       });
       group.totalBytes += cache.bytes;
       groups.set(cache.group, group);
     }
-    const caches = [...groups.values()].map((group) => ({ ...group, items: group.items.sort((a, b) => b.bytes - a.bytes) })).sort((a, b) => b.totalBytes - a.totalBytes);
+    const caches = [...groups.values()].map((group) => ({ ...group, items: group.items.sort(bySize) })).sort((a, b) => b.totalBytes - a.totalBytes || a.title.localeCompare(b.title));
     return {
       disks,
       scan: {
@@ -534,24 +540,27 @@ export const CLEANUP_RULES = [
 ];
 
 /** One line per item: where, how big, and what it is. */
-const itemLine = (where: string, bytes: number, what: string, partial = false) => `- ${where} · ${partial ? "at least " : ""}${formatSize(bytes)} · ${what}`;
+/** One item for the agent (0.15.0): the friendly name first ("site · apps/web/node_modules"), then the path it needs. */
+const itemLine = (item: { label?: string; where: string }, bytes: number, what: string, partial = false) =>
+  `- ${item.label ?? item.where} · ${partial ? "at least " : ""}${formatSize(bytes)} · ${what}${item.label && item.label !== item.where ? `\n  Path: ${item.where}` : ""}`;
+const biggestFirst = <T extends { bytes: number; where: string }>(items: readonly T[]) => [...items].sort((a, b) => b.bytes - a.bytes || a.where.localeCompare(b.where));
 
 /**
  * The message for "Ask an agent to clean this up" (0.14.0): the exact items
  * that look safe to clear, with paths and sizes, and the checks to do before
  * deleting each one. Hosts deletes nothing itself.
  */
-export function cleanupAskText(scope: { kind: "workspaces"; title: string; checkedAt: number | null; items: Array<{ where: string; bytes: number; what: string; cost: string; partial: boolean }> } | { kind: "caches"; checkedAt: number | null; items: Array<{ where: string; bytes: number; what: string; how: string; partial: boolean }> }, now = Date.now()): string {
+export function cleanupAskText(scope: { kind: "workspaces"; title: string; checkedAt: number | null; items: Array<{ label?: string; where: string; bytes: number; what: string; cost: string; partial: boolean }> } | { kind: "caches"; checkedAt: number | null; items: Array<{ label?: string; where: string; bytes: number; what: string; how: string; partial: boolean }> }, now = Date.now()): string {
   const total = scope.items.reduce((sum, item) => sum + item.bytes, 0);
   const when = scope.checkedAt ? ` (checked ${ago(scope.checkedAt, now)})` : "";
   const lines = scope.kind === "workspaces"
     ? [
       `Please free up disk space by clearing build output in ${scope.title}. Hosts found these folders${when}, about ${formatSize(total)} in all. They look safe to clear: git ignores them and nothing was using them when Hosts checked. Please check each one again before deleting it.`,
-      "", ...scope.items.map((item) => itemLine(item.where, item.bytes, `${item.what}. ${item.cost}`, item.partial)),
+      "", ...biggestFirst(scope.items).map((item) => itemLine(item, item.bytes, `${item.what}. ${item.cost}`, item.partial)),
     ]
     : [
       `Please free up disk space in the shared caches and temporary files. Hosts measured these${when}, about ${formatSize(total)} in all. Only clear what's really unused.`,
-      "", ...scope.items.map((item) => itemLine(item.where, item.bytes, `${item.what}: ${item.how}`, item.partial)),
+      "", ...biggestFirst(scope.items).map((item) => itemLine(item, item.bytes, `${item.what}: ${item.how}`, item.partial)),
     ];
   return [...lines, "", ...CLEANUP_RULES].join("\n");
 }

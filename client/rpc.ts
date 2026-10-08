@@ -42,6 +42,8 @@ export interface Process {
   name: string;
   command: string;
   cwd: string | null;
+  /** 0.15.0: the full folder, for the opened row. */
+  cwdPath?: string | null;
   state: string;
   cpuPercent: number | null;
   rssBytes: number;
@@ -96,6 +98,7 @@ function toProcess(process: ProcessView): Process {
     name: process.name,
     command: process.command,
     cwd: process.cwd,
+    cwdPath: process.cwdPath ?? null,
     state: process.state,
     cpuPercent: process.cpuPercent,
     rssBytes: process.rssBytes,

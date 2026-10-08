@@ -106,7 +106,8 @@ describe("Collector", () => {
     expect(byMemory.processes.map((p) => p.pid)).toEqual([101, 102]);
     expect(byMemory.truncated).toBe(true);
     expect(byMemory.totalProcesses).toBe(4);
-    expect(byMemory.services.map((s) => [s.pid, s.service!.label])).toEqual([[100, "Vite"], [101, "Python http.server"]]);
+    // 0.15.0: dev servers heaviest first (30 MB before 10 MB), not by port.
+    expect(byMemory.services.map((s) => [s.pid, s.service!.label])).toEqual([[101, "Python http.server"], [100, "Vite"]]);
     const search = await collector.snapshot({ query: ":8000" });
     expect(search.processes.map((p) => p.pid)).toEqual([101]);
     const byName = await collector.snapshot({ query: "vite", sort: "name" });

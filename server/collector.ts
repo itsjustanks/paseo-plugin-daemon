@@ -146,7 +146,8 @@ export class Collector {
     const page = sorted.slice(offset, offset + input.limit);
     const services = visible
       .filter((p) => p.service !== null && (!this.scope || p.project?.shareable))
-      .sort((a, b) => (a.ports[0] ?? 1 << 20) - (b.ports[0] ?? 1 << 20) || a.pid - b.pid)
+      // 0.15.0: the heaviest dev server first; name and PID break ties so cards don't jump.
+      .sort((a, b) => b.rssBytes - a.rssBytes || a.name.localeCompare(b.name) || a.pid - b.pid)
       .slice(0, MAX_SERVICES);
     return {
       ...(this.scope ? { scope: this.scope.status(), hiddenProcesses: base.processes.length - visible.length } : {}),
@@ -261,6 +262,7 @@ export class Collector {
         name: displayName(raw.argv, raw.comm),
         command: displayCommand(raw.argv, this.home, { lossy: raw.argvLossy === true }),
         cwd: raw.cwd === null ? null : homeRelative(raw.cwd, this.home),
+        cwdPath: raw.cwd,
         state: raw.state,
         cpuPercent: track.cpuPercent === null ? null : round1(track.cpuPercent),
         rssBytes: raw.rssBytes,
@@ -417,14 +419,14 @@ function matches(process: ProcessView, query: string): boolean {
 function comparator(sort: SnapshotInput["sort"]): (a: ProcessView, b: ProcessView) => number {
   switch (sort) {
     case "memory":
-      return (a, b) => b.rssBytes - a.rssBytes || a.pid - b.pid;
+      return (a, b) => b.rssBytes - a.rssBytes || a.name.localeCompare(b.name) || a.pid - b.pid;
     case "name":
       return (a, b) => a.name.localeCompare(b.name) || a.pid - b.pid;
     case "pid":
       return (a, b) => a.pid - b.pid;
     case "cpu":
     default:
-      return (a, b) => (b.cpuPercent ?? -1) - (a.cpuPercent ?? -1) || b.rssBytes - a.rssBytes || a.pid - b.pid;
+      return (a, b) => (b.cpuPercent ?? -1) - (a.cpuPercent ?? -1) || b.rssBytes - a.rssBytes || a.name.localeCompare(b.name) || a.pid - b.pid;
   }
 }
 
