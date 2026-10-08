@@ -202,7 +202,6 @@ function ProcessItem({ theme, row, compact, byTree, selected, onSelect, onStop, 
 const ACTION_WORD: Record<ActionLogEntry["action"], string> = {
   stop: "Asked to stop", "force-stop": "Force stopped", "auto-force-stop": "Stopped forcefully",
   "plugin-reload": "Reloaded plugin", "plugin-stop": "Stopped stuck plugin", "plugin-force-stop": "Force stopped stuck plugin", "auto-stop": "Stopped automatically (memory nearly full)",
-  "disk-clear": "Cleared to free space", "disk-prune": "Pruned pnpm's store",
 };
 
 /** Every stop, newest first, from this host's action log: the content of the "Recent stops" fold-out. */

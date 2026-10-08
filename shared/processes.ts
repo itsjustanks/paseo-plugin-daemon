@@ -83,9 +83,8 @@ export type Runaway = z.infer<typeof RunawaySchema>;
 export const ActionLogEntrySchema = z.object({
   at: z.number(),
   /** 0.13.0 adds plugin restarts and the optional memory guard's automatic stop. */
-  action: z.enum(["stop", "force-stop", "auto-force-stop", "plugin-reload", "plugin-stop", "plugin-force-stop", "auto-stop", "disk-clear", "disk-prune"]),
-  /** 0.14.0 adds "disk": clearing build files and caches. */
-  source: z.enum(["processes", "monitor", "plugins", "guard", "disk"]),
+  action: z.enum(["stop", "force-stop", "auto-force-stop", "plugin-reload", "plugin-stop", "plugin-force-stop", "auto-stop"]),
+  source: z.enum(["processes", "monitor", "plugins", "guard"]),
   pid: z.number().int().nullable(),
   name: z.string(),
   owner: z.string().nullable(),
@@ -94,8 +93,6 @@ export const ActionLogEntrySchema = z.object({
   /** Processes that received the signal, the target included. */
   signaled: z.number().int().min(0),
   message: z.string(),
-  /** 0.14.0, disk clears: the bytes it freed. */
-  bytes: z.number().min(0).optional(),
 });
 export type ActionLogEntry = z.infer<typeof ActionLogEntrySchema>;
 

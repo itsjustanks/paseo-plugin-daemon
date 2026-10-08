@@ -1,23 +1,22 @@
-import React, { useEffect, useRef, useState } from "react";
-import { ActivityIndicator, ScrollView, Text, View } from "react-native";
+import React from "react";
+import { ActivityIndicator, Text, View } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc } from "@getpaseo/plugin/client";
-import { Modal } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  TOKENS_MAX, ago, diskClear, diskClearStatus, diskPreview, diskReport, formatSize, stateWords,
-  type CacheGroup, type ClearItem, type DiskJob, type DiskPlan, type DiskReport, type DiskSpace, type WorkspaceUsage,
-} from "../shared/disk";
+import { ago, diskReport, formatSize, stateWords, type CacheGroup, type ClearItem, type DiskReport, type DiskSpace, type WorkspaceUsage } from "../shared/disk";
 import { AskAgentButton } from "./ask";
-import { Accordion, AccordionItem, Button, Card, Disclosure, Divider, HostIcon, ItemTitle, Meta, Note, Row, SectionTitle, SPACE, TYPE, type Tone } from "./kit";
-import { Meter, type Say } from "./processes";
+import { Accordion, AccordionItem, Button, Card, Disclosure, Divider, ItemTitle, Meta, Note, Row, SectionTitle, SPACE, TYPE, type Tone } from "./kit";
+import { Meter } from "./processes";
 
 type Theme = PluginTheme;
 
 /**
- * The Workspaces tab's disk side (0.14.0): how full the disk is, what each
- * Paseo workspace uses and what of it is safe to clear, the shared caches,
- * and one ask-first sheet for every clear, CleanMyMac-style.
+ * The Workspaces tab's disk side (0.14.0, read-only): how full the disk is,
+ * what each Paseo workspace uses and what of it looks safe to clear, and the
+ * shared caches and temporary files by size. Hosts deletes nothing here.
+ * Where a Clear button would be there's "Ask an agent to clean this up": the
+ * agent gets the exact list with paths and sizes, checks that nothing is in
+ * use or unsaved, and then clears it.
  *
  * The check is heavy, so it runs in the background on the daemon, one at a
  * time; this polls while it runs and shows the last answer with its age.
@@ -29,12 +28,12 @@ export const diskKey = (hostId: string) => ["daemon-link", hostId, "disk"] as co
 
 const DISK_TONE: Record<DiskSpace["level"], Tone> = { ok: "success", warning: "warning", critical: "danger" };
 const STATE_ICON: Record<WorkspaceUsage["state"], string> = { working: "Bot", waiting: "MessageCircle", failed: "CircleAlert", idle: "Folder", unlinked: "FolderX" };
+/** The one sentence beside every clean-up button. */
+const AGENT_PROMISE = "An agent will check nothing's in use or unsaved, then clear it. You see the message before it's sent.";
 
 const size = (bytes: number, partial = false) => `${partial ? "at least " : ""}${formatSize(bytes)}`;
-/** What clearing an item frees: bytes not shared with pnpm's store. */
+/** What clearing an item would free: bytes not shared with pnpm's store. */
 const frees = (item: ClearItem) => Math.max(0, item.bytes - item.sharedBytes);
-/** At most TOKENS_MAX per clear, biggest first (a bulk clear of many workspaces can find more). */
-const tokensOf = (items: readonly ClearItem[]) => items.filter((item) => item.token).sort((a, b) => frees(b) - frees(a)).slice(0, TOKENS_MAX).map((item) => item.token!);
 
 /** The report, polled quickly while a check runs and slowly otherwise. `scan()` starts a check. */
 export function useDiskReport(hostId: string) {
@@ -48,115 +47,25 @@ export function useDiskReport(hostId: string) {
   return { query, report: query.data, scan };
 }
 
-/** Preview, the sheet, the clear itself and its progress; one flow for every clear button. */
-export function useClear(say: Say, onDone: () => void) {
-  const preview = useRpc(diskPreview), clear = useRpc(diskClear), status = useRpc(diskClearStatus);
-  const [sheet, setSheet] = useState<{ plan: DiskPlan; tokens: string[]; title: string } | null>(null);
-  const [job, setJob] = useState<DiskJob | null>(null);
-  const live = useRef(true);
-  useEffect(() => () => { live.current = false; }, []);
-  const ask = useMutation({
-    mutationFn: async (input: { tokens: string[]; title: string }) => ({ plan: await preview({ tokens: input.tokens }), ...input }),
-    onSuccess: setSheet,
-    onError: (error) => say({ text: error instanceof Error ? error.message : String(error), tone: "danger" }),
-  });
-  const confirm = useMutation({
-    mutationFn: async () => {
-      const tokens = sheet!.tokens;
-      setSheet(null);
-      let current = await clear({ tokens });
-      setJob(current);
-      while (current.state === "running" && live.current) {
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-        current = await status({});
-        if (live.current) setJob(current);
-      }
-      return current;
-    },
-    onSuccess: (done) => {
-      setJob(null);
-      const failed = done.results.filter((result) => !result.ok).length;
-      say({ text: done.message ?? "Done.", tone: failed && failed === done.results.length ? "danger" : failed ? "warning" : "success" });
-      onDone();
-    },
-    onError: (error) => { setJob(null); say({ text: error instanceof Error ? error.message : String(error), tone: "danger" }); },
-  });
-  return {
-    start: (items: readonly ClearItem[], title: string) => { const tokens = tokensOf(items); if (tokens.length) ask.mutate({ tokens, title }); },
-    busy: ask.isPending || confirm.isPending,
-    job,
-    sheet,
-    cancel: () => setSheet(null),
-    confirm: () => confirm.mutate(),
-  };
-}
-
-/** The ask-first sheet: exactly what goes, grouped by kind with what it costs; what won't and why; one confirm. */
-export function ClearSheet({ theme, flow }: { theme: Theme; flow: ReturnType<typeof useClear> }) {
-  const sheet = flow.sheet;
-  const ready = sheet?.plan.items.filter((item) => item.ok) ?? [];
-  const refused = sheet?.plan.items.filter((item) => !item.ok) ?? [];
-  const groups = new Map<string, typeof ready>();
-  for (const item of ready) groups.set(item.name, [...(groups.get(item.name) ?? []), item]);
-  // A tool's own command frees what the tool decides; only folders Hosts clears have a size to promise.
-  const commands = ready.filter((item) => item.action === "command").length;
-  const deletes = ready.filter((item) => item.action === "delete");
-  const deleteBytes = deletes.reduce((sum, item) => sum + item.bytes, 0);
-  const title = ready.length ? (commands === ready.length ? (commands === 1 ? `Run ${ready[0]!.name}'s own clean?` : "Run these tools' own cleans?") : `Clear ${formatSize(deleteBytes)}?`) : "Nothing can be cleared";
-  return (
-    <Modal title={title} icon={HostIcon ? <HostIcon name="Trash2" size={18} color={theme.colors.statusDanger} /> : undefined} open={sheet !== null} onOpenChange={(open: boolean) => { if (!open) flow.cancel(); }}>
-      <Modal.Content>
-        <View style={{ gap: SPACE.row, padding: SPACE.card, maxHeight: 640 }}>
-          {sheet?.title ? <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{sheet.title}</Text> : null}
-          <ScrollView style={{ maxHeight: 380 }} contentContainerStyle={{ gap: SPACE.row }}>
-            {[...groups].map(([name, items]) => (
-              <View key={name} style={{ gap: SPACE.xs }}>
-                <ItemTitle theme={theme}>{`${name}${items.length > 1 ? ` · ${items.length} folders` : ""} · ${formatSize(items.reduce((sum, item) => sum + item.bytes, 0))}`}</ItemTitle>
-                <Meta theme={theme}>{items[0]!.cost}</Meta>
-                {items.map((item, index) => <Text key={`${item.where}-${index}`} style={{ ...TYPE.secondary, color: theme.colors.foreground }}>{`${item.owner ? `${item.owner} · ` : ""}${item.where} · ${formatSize(item.bytes)}`}</Text>)}
-              </View>
-            ))}
-            {refused.map((item, index) => (
-              <View key={`refused-${index}`} style={{ gap: SPACE.hair }}>
-                <ItemTitle theme={theme}>{`${item.name}: won't be cleared`}</ItemTitle>
-                <Meta theme={theme}>{item.reason}</Meta>
-              </View>
-            ))}
-          </ScrollView>
-          {deletes.length ? <Note theme={theme}>Each folder is checked again just before it goes: git must still say it's ignored build output, nothing may be using it, and nothing may be running in its workspace. Folders with a .env file or a git repository inside are put back. Every step is logged.</Note> : null}
-          {commands ? <Note theme={theme}>Each tool cleans its own cache its own way, and only while no install or download is running.</Note> : null}
-          <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: SPACE.sm }}>
-            <Button theme={theme} label={ready.length ? "Cancel" : "Close"} onPress={flow.cancel} />
-            {ready.length ? <Button theme={theme} label={commands === ready.length ? "Run it" : `Clear ${formatSize(deleteBytes)}`} icon="Trash2" danger busy={flow.busy} onPress={flow.confirm} /> : null}
-          </View>
-        </View>
-      </Modal.Content>
-    </Modal>
-  );
-}
-
-/** Items that idle workspaces (no agent working, no dev server) may clear, and how many workspaces they're in. */
-export function idleClearable(report: DiskReport | undefined): { items: ClearItem[]; workspaces: number; bytes: number } {
+/** What looks safe to clear in idle workspaces (no agent working, no dev server), and how many workspaces it's in. */
+export function idleClearable(report: DiskReport | undefined): { workspaces: number; bytes: number } {
   const idle = (report?.workspaces ?? []).filter((workspace) => !workspace.busy && workspace.clearableBytes > 0);
-  const items = idle.flatMap((workspace) => workspace.items.filter((item) => item.token)).sort((a, b) => frees(b) - frees(a)).slice(0, TOKENS_MAX);
-  return { items, workspaces: idle.length, bytes: items.reduce((sum, item) => sum + frees(item), 0) };
+  return { workspaces: idle.length, bytes: idle.reduce((sum, workspace) => sum + workspace.clearableBytes, 0) };
 }
 
-export function cacheClearable(report: DiskReport | undefined): { items: ClearItem[]; bytes: number } {
-  const items = (report?.caches ?? []).flatMap((group) => group.items);
-  return { items, bytes: items.reduce((sum, item) => sum + item.bytes, 0) };
+export function cacheBytes(report: DiskReport | undefined): number {
+  return (report?.caches ?? []).flatMap((group) => group.items).reduce((sum, item) => sum + item.bytes, 0);
 }
 
-/** Status first: the disk, what's safe to clear, and the check's age. */
-export function DiskCard({ theme, report, loading, scanning, flow, onScan, onCaches }: {
-  theme: Theme; report: DiskReport | undefined; loading: boolean; scanning: boolean; flow: ReturnType<typeof useClear>; onScan(): void; onCaches(): void;
+/** Status first: the disk, what looks safe to clear, and the check's age. */
+export function DiskCard({ theme, report, loading, scanning, onScan, onCaches }: {
+  theme: Theme; report: DiskReport | undefined; loading: boolean; scanning: boolean; onScan(): void; onCaches(): void;
 }) {
   const disk = report?.disks[0] ?? null;
   const scan = report?.scan;
   const running = scan?.state === "running" || scanning;
   const idle = idleClearable(report);
-  const caches = cacheClearable(report);
-  const job = flow.job;
+  const caches = cacheBytes(report);
   return (
     <Card theme={theme} title="Disk space" icon="HardDrive" tone={disk ? DISK_TONE[disk.level] : "accent"} subtitle={report && report.disks.length > 1 ? `${report.disks.length} disks hold your workspaces; the fullest is shown` : undefined}>
       {disk ? (
@@ -168,12 +77,7 @@ export function DiskCard({ theme, report, loading, scanning, flow, onScan, onCac
         </View>
       ) : <Meta theme={theme}>{loading ? "Checking…" : "This disk's size couldn't be read."}</Meta>}
       <Divider theme={theme} />
-      {job ? (
-        <Row>
-          <ActivityIndicator color={theme.colors.accent} />
-          <Text style={{ ...TYPE.body, color: theme.colors.foreground, flexShrink: 1 }}>{`Clearing… ${job.results.length} done, ${formatSize(job.freedBytes)} freed so far.`}</Text>
-        </Row>
-      ) : running ? (
+      {running ? (
         <View style={{ gap: SPACE.xs }}>
           <Row>
             <ActivityIndicator color={theme.colors.accent} />
@@ -183,18 +87,23 @@ export function DiskCard({ theme, report, loading, scanning, flow, onScan, onCac
         </View>
       ) : !scan || scan.state === "never" ? (
         <View style={{ gap: SPACE.sm }}>
-          <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>Hosts hasn't looked inside your workspaces yet. It finds build files, installed packages and caches you can safely clear.</Text>
+          <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>Hosts hasn't looked inside your workspaces yet. It finds build files, installed packages and caches that are usually safe to clear.</Text>
           <Row><Button theme={theme} label="Check what's using space" icon="ScanSearch" primary busy={loading} onPress={onScan} /></Row>
         </View>
       ) : (
         <View style={{ gap: SPACE.row }}>
           <View style={{ gap: SPACE.sm }}>
-            <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{idle.bytes > 0 ? `${formatSize(idle.bytes)} is safe to clear in ${idle.workspaces} idle workspace${idle.workspaces === 1 ? "" : "s"}.` : "Nothing to clear in your idle workspaces right now."}</Text>
-            {idle.bytes > 0 ? <Row><Button theme={theme} label={`Clear ${formatSize(idle.bytes)} from ${idle.workspaces} workspace${idle.workspaces === 1 ? "" : "s"}…`} icon="Trash2" primary busy={flow.busy} onPress={() => flow.start(idle.items, `Build files and installed packages from ${idle.workspaces} idle workspace${idle.workspaces === 1 ? "" : "s"}. Agents that are working and dev servers that are running are left alone.`)} /></Row> : null}
+            <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{idle.bytes > 0 ? `About ${formatSize(idle.bytes)} looks safe to clear in ${idle.workspaces} idle workspace${idle.workspaces === 1 ? "" : "s"}.` : "Nothing looks safe to clear in your idle workspaces right now."}</Text>
+            {idle.bytes > 0 ? (
+              <>
+                <Row><AskAgentButton theme={theme} subject={{ kind: "cleanup", id: "idle" }} label="Ask an agent to clean this up" primary /></Row>
+                <Meta theme={theme}>{AGENT_PROMISE}</Meta>
+              </>
+            ) : null}
           </View>
-          {caches.bytes > 0 ? (
+          {caches > 0 ? (
             <View style={{ gap: SPACE.sm }}>
-              <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${formatSize(caches.bytes)} more in shared caches and temporary files. Hosts shows them by size; npm, pnpm and Playwright can clean their own.`}</Text>
+              <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${formatSize(caches)} more in shared caches and temporary files.`}</Text>
               <Row><Button theme={theme} label="Review caches" icon="Archive" onPress={onCaches} /></Row>
             </View>
           ) : null}
@@ -207,7 +116,7 @@ export function DiskCard({ theme, report, loading, scanning, flow, onScan, onCac
   );
 }
 
-/** One found folder inside a workspace: what it is, where, its size, and why not when it can't be cleared. */
+/** One found folder inside a workspace: what it is, where, its size, and why not when it doesn't look safe. */
 function ItemLine({ theme, item }: { theme: Theme; item: ClearItem }) {
   const shared = item.sharedBytes > 0 && item.sharedBytes >= item.bytes * 0.2;
   return (
@@ -220,14 +129,13 @@ function ItemLine({ theme, item }: { theme: Theme; item: ClearItem }) {
 
 const ITEMS_SHOWN = 6;
 
-/** One workspace folder: its rows' summary says it all; opening shows where, what's in it, and Clear. */
-export function WorkspaceRow({ theme, compact, workspace, flow, checking }: { theme: Theme; compact: boolean; workspace: WorkspaceUsage; flow: ReturnType<typeof useClear>; checking: boolean }) {
-  const clearable = workspace.items.filter((item) => item.token);
+/** One workspace folder: its row's summary says it all; opening shows where, what's in it, and Ask an agent. */
+export function WorkspaceRow({ theme, compact, workspace, checking }: { theme: Theme; compact: boolean; workspace: WorkspaceUsage; checking: boolean }) {
   const linked = workspace.state !== "unlinked";
   const title = linked ? `${workspace.names[0]}${workspace.names.length > 1 ? ` +${workspace.names.length - 1}` : ""}` : "Not linked to a workspace";
   const summary = [
     workspace.measured === false ? (checking ? "Checking…" : "Not checked yet") : size(workspace.totalBytes, workspace.partial),
-    workspace.clearableBytes > 0 ? `${formatSize(workspace.clearableBytes)} safe to clear` : null,
+    workspace.clearableBytes > 0 ? `${formatSize(workspace.clearableBytes)} looks safe to clear` : null,
     stateWords(workspace.state, workspace.activeAt),
     workspace.branch,
     workspace.devServers.length ? `Dev server ${workspace.devServers.join(", ")}` : null,
@@ -242,7 +150,7 @@ export function WorkspaceRow({ theme, compact, workspace, flow, checking }: { th
       {workspace.busy ? <Note theme={theme} tone="warning">{workspace.busy}</Note> : null}
       {!linked && workspace.worktree ? (
         <View style={{ gap: SPACE.sm }}>
-          <Note theme={theme}>No Paseo workspace uses this worktree any more, probably because its workspace was archived. Hosts never deletes a whole worktree: it may hold work that isn't pushed. An agent can check it and remove it properly.</Note>
+          <Note theme={theme}>No Paseo workspace uses this worktree any more, probably because its workspace was archived. It may hold work that isn't pushed, so an agent should check it before it's removed.</Note>
           <Row><AskAgentButton theme={theme} subject={{ kind: "folder", id: workspace.id }} /></Row>
         </View>
       ) : null}
@@ -256,34 +164,37 @@ export function WorkspaceRow({ theme, compact, workspace, flow, checking }: { th
             </Disclosure>
           ) : null}
         </View>
-      ) : workspace.measured === false ? (checking ? <Meta theme={theme}>Checking this folder…</Meta> : null) : <Meta theme={theme}>No build files, installed packages or test reports to clear here.</Meta>}
-      {clearable.length ? <Row><Button theme={theme} label={`Clear ${formatSize(workspace.clearableBytes)}…`} icon="Trash2" busy={flow.busy} onPress={() => flow.start(clearable, `From ${title}.`)} /></Row> : null}
+      ) : workspace.measured === false ? (checking ? <Meta theme={theme}>Checking this folder…</Meta> : null) : <Meta theme={theme}>No build files, installed packages or test reports here.</Meta>}
+      {workspace.clearableBytes > 0 && !workspace.busy ? (
+        <View style={{ gap: SPACE.xs }}>
+          <Row><AskAgentButton theme={theme} subject={{ kind: "cleanup", id: workspace.id }} label="Ask an agent to clean this up" /></Row>
+          <Meta theme={theme}>{AGENT_PROMISE}</Meta>
+        </View>
+      ) : null}
     </AccordionItem>
   );
 }
 
 const CACHE_ITEMS_SHOWN = 5;
 
-function CacheLine({ theme, item, flow }: { theme: Theme; item: ClearItem; flow: ReturnType<typeof useClear> }) {
+function CacheLine({ theme, item }: { theme: Theme; item: ClearItem }) {
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.row, flexWrap: "wrap" }}>
       <View style={{ flex: 1, minWidth: 200, gap: SPACE.hair }}>
         <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${item.name} · ${size(item.bytes, item.partial)}`}</Text>
-        <Meta theme={theme}>{item.token ? `${item.what}. ${item.cost}` : item.blocked ?? item.what}</Meta>
+        <Meta theme={theme}>{item.what}</Meta>
       </View>
-      {item.token ? <Button theme={theme} label={item.button ?? "Clean…"} busy={flow.busy} accessibilityLabel={`${item.button ?? "Clean"} ${item.name}`.replace("…", "")} onPress={() => flow.start([item], item.cost)} /> : null}
-      {!item.token && item.askId ? <AskAgentButton theme={theme} subject={{ kind: "folder", id: item.askId }} /> : null}
+      {item.askId ? <AskAgentButton theme={theme} subject={{ kind: "folder", id: item.askId }} /> : null}
     </View>
   );
 }
 
 /**
  * Shared caches and temporary files, grouped and sized. Hosts deletes none of
- * these folders itself: npm's cache, pnpm's store and Playwright's browsers
- * offer that tool's own clean; /tmp folders offer Ask an agent. A group shows
- * its biggest few; the rest fold away.
+ * them; one button asks an agent to clean them up with the tools' own
+ * commands. A group shows its biggest few; the rest fold away.
  */
-export function CacheList({ theme, groups, flow }: { theme: Theme; groups: readonly CacheGroup[]; flow: ReturnType<typeof useClear> }) {
+export function CacheList({ theme, groups }: { theme: Theme; groups: readonly CacheGroup[] }) {
   if (!groups.length) return <Meta theme={theme}>No shared caches or leftovers were found.</Meta>;
   return (
     <View style={{ gap: SPACE.section }}>
@@ -292,48 +203,33 @@ export function CacheList({ theme, groups, flow }: { theme: Theme; groups: reado
         return (
           <View key={group.id} style={{ gap: SPACE.row }}>
             <ItemTitle theme={theme}>{`${group.title} · ${formatSize(group.totalBytes)}${group.items.length > 1 ? ` · ${group.items.length} items` : ""}`}</ItemTitle>
-            {shown.map((item, index) => <CacheLine key={`${item.where}-${index}`} theme={theme} item={item} flow={flow} />)}
+            {shown.map((item, index) => <CacheLine key={`${item.where}-${index}`} theme={theme} item={item} />)}
             {more.length ? (
               <Disclosure theme={theme} label={`${more.length} more`} quiet>
-                <View style={{ gap: SPACE.row }}>{more.map((item, index) => <CacheLine key={`more-${item.where}-${index}`} theme={theme} item={item} flow={flow} />)}</View>
+                <View style={{ gap: SPACE.row }}>{more.map((item, index) => <CacheLine key={`more-${item.where}-${index}`} theme={theme} item={item} />)}</View>
               </Disclosure>
             ) : null}
           </View>
         );
       })}
+      <View style={{ gap: SPACE.xs }}>
+        <Row><AskAgentButton theme={theme} subject={{ kind: "cleanup", id: "caches" }} label="Ask an agent to clean these up" /></Row>
+        <Meta theme={theme}>An agent will use npm's and pnpm's own clean commands, check what's still needed or in use, and tell you what it freed. You see the message before it's sent.</Meta>
+      </View>
     </View>
   );
 }
 
 /** The list of workspace rows, biggest first, with a plain heading line. */
-export function WorkspaceList({ theme, compact, report, flow }: { theme: Theme; compact: boolean; report: DiskReport | undefined; flow: ReturnType<typeof useClear> }) {
+export function WorkspaceList({ theme, compact, report }: { theme: Theme; compact: boolean; report: DiskReport | undefined }) {
   const rows = report?.workspaces ?? [];
   if (!rows.length) return null;
   return (
     <View style={{ gap: SPACE.sm }}>
       <SectionTitle theme={theme} icon="FolderTree">Workspaces, biggest first</SectionTitle>
       <Accordion theme={theme}>
-        {rows.map((workspace) => <WorkspaceRow key={workspace.id} theme={theme} compact={compact} workspace={workspace} flow={flow} checking={report?.scan.state === "running"} />)}
+        {rows.map((workspace) => <WorkspaceRow key={workspace.id} theme={theme} compact={compact} workspace={workspace} checking={report?.scan.state === "running"} />)}
       </Accordion>
     </View>
-  );
-}
-
-/** What an interrupted clear left set aside and couldn't put back: shown with its size; Hosts never deletes it. */
-export function Leftovers({ theme, report }: { theme: Theme; report: DiskReport | undefined }) {
-  const leftovers = report?.leftovers ?? [];
-  if (!leftovers.length) return null;
-  return (
-    <Card theme={theme} title="Left over from an interrupted clear" icon="ArchiveRestore" tone="warning" subtitle="Set aside when a clear was cut short, and not put back because something now sits in its place. Hosts never deletes these itself.">
-      {leftovers.map((item) => (
-        <View key={item.id} style={{ flexDirection: "row", alignItems: "center", gap: SPACE.row, flexWrap: "wrap" }}>
-          <View style={{ flex: 1, minWidth: 200, gap: SPACE.hair }}>
-            <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${item.name} · ${formatSize(item.bytes)}`}</Text>
-            <Meta theme={theme}>{`From ${item.where} · ${ago(item.at)}`}</Meta>
-          </View>
-          <AskAgentButton theme={theme} subject={{ kind: "folder", id: item.id }} />
-        </View>
-      ))}
-    </Card>
   );
 }

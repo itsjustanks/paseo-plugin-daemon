@@ -40,12 +40,11 @@ an isolated preview: no real accounts, host addresses, project names, credential
   check loop that runs every 10 seconds even when Paseo is closed. Stop or Ask an agent sits beside
   it. An optional guard (off by default) stops the biggest stoppable job when memory stays nearly
   full for over a minute.
-- **Disk usage and safe cleanup.** Free space at a glance (the sidebar dot warns at 85% full), every
-  Paseo workspace by size with its status, and shared caches and temporary files by size. Hosts
-  clears only build output git ignores inside a workspace (ask first, checked again just before each
-  folder goes), and cleans npm's, pnpm's and Playwright's caches only through their own commands.
-  It never touches git-tracked files, repositories, .env files, Paseo's or agents' data, whole
-  workspaces, the temporary folder, or anything in use.
+- **Disk usage, and an agent to clean up.** Free space at a glance (the sidebar dot warns at 85%
+  full), every Paseo workspace by size with its status and what looks safe to clear, and shared
+  caches and temporary files by size. Hosts deletes nothing: "Ask an agent to clean this up" hands an
+  agent the exact list and the checks to do (nothing in use, nothing unsaved, never .git, .env files,
+  agents' history or Paseo's data) before it deletes anything.
 - **Stuck plugins, restarted in one press.** When a Paseo plugin stops answering ("Activity isn't
   answering (12 timeouts in 10 min)"), Paseo can't add, update or reload plugins. Restart reloads just
   that plugin; if Paseo is stuck on it, Hosts stops only that plugin's own process and reloads it. The

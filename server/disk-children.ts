@@ -2,10 +2,10 @@ import { spawn } from "node:child_process";
 import { setPriority } from "node:os";
 
 /**
- * Children Hosts starts for disk work (0.14.0): the scan walk, git, rm, and
- * the tools' own cache commands. Each runs at the lowest priority in its own
- * process group, with a timeout; `killAll` (on unload) ends every group and
- * refuses new work.
+ * Children Hosts starts for the disk scan (0.14.0): the read-only walk, git's
+ * read-only queries and `pnpm store path`. Each runs at the lowest priority in
+ * its own process group, with a timeout; `killAll` (on unload) ends every
+ * group and refuses new work.
  */
 
 export interface ChildResult { code: number | null; stdout: string; stderr: string; timedOut: boolean; killed: boolean }

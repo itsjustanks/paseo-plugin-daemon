@@ -19,13 +19,11 @@ import { PaseoCli } from "./paseo-cli";
 import { listPluginHosts, startClock } from "./plugin-procs";
 import { PluginRestarter } from "./plugin-restart";
 import { RESTART_WAIT_MS, type RestartOutcome } from "../shared/guard";
-import { DiskScanner, defaultPlaces, disksFor, folderAskText, readWorkspace, type WorkspaceInfo } from "./disk-scan";
+import { DiskScanner, cleanupAskText, defaultPlaces, disksFor, folderAskText, readWorkspace, type WorkspaceInfo } from "./disk-scan";
 import { formatSize } from "../shared/disk";
 import type { AskContext } from "../shared/ask";
-import { DiskCleaner, DiskTokens, cacheToolReady } from "./disk-clear";
-import { QuarantineInventory } from "./disk-quarantine";
 import { join } from "node:path";
-import type { DiskJob, DiskPlan, DiskReport } from "../shared/disk";
+import type { DiskReport } from "../shared/disk";
 
 export interface RuntimeOptions {
   readSettings?: () => Promise<HostsSettings>;
@@ -71,30 +69,17 @@ export function createRuntime(options: RuntimeOptions = {}) {
   /** Dev servers the monitor last saw, with absolute folders, for "dev server running here". */
   let lastServices: Array<{ cwd: string | null; label: string; ports: number[] }> | null = null;
   let servicesAt = 0;
-  let disk: { scanner: DiskScanner; cleaner: DiskCleaner; tokens: DiskTokens; places: ReturnType<typeof defaultPlaces>; inventory: QuarantineInventory } | null = null;
+  let disk: { scanner: DiskScanner; places: ReturnType<typeof defaultPlaces> } | null = null;
   if (monitor.internals) {
     const { adapter, uid } = monitor.internals;
     const places = defaultPlaces(adapter.platform);
-    const tokens = new DiskTokens();
     const devServersIn = (folder: string) => (lastServices ?? []).filter((service) => service.cwd && (service.cwd === folder || service.cwd.startsWith(`${folder}/`))).map((service) => `${service.label}${service.ports[0] ? ` :${service.ports[0]}` : ""}`);
-    // Every quarantine is recorded; on load, an interrupted clear is put back where its place is free.
-    const inventory = new QuarantineInventory(join(places.stateDir, "quarantine.json"));
-    void inventory.recover().then((outcome) => {
-      for (const entry of outcome.restored) void log.append({ at: Date.now(), action: "disk-clear", source: "disk", pid: null, name: entry.name, owner: null, status: "done", signaled: 0, message: "Put back after an interrupted clear.", bytes: 0 });
-      if (outcome.left.length) console.log(`daemon-link: ${outcome.left.length} folder(s) left from an interrupted clear; listed under Workspaces`);
-    }).catch(() => undefined);
+    // Read-only (0.14.0): the scan measures and classifies; nothing in Hosts deletes.
     const scanner = new DiskScanner({
-      places, uid, listWorkspaces: () => listWorkspaces(true), devServersIn, inventory,
+      places, uid, listWorkspaces: () => listWorkspaces(true), devServersIn,
       pnpmStore: async (group) => { const result = await group.run("pnpm", ["store", "path"], { timeoutMs: 10_000, cwd: places.home }); return result.code === 0 ? result.stdout.trim() || null : null; },
-      toolReady: (kind, group) => cacheToolReady(kind, group, places.home),
     });
-    const cleaner = new DiskCleaner({
-      places, uid, tokens, inventory, listWorkspaces: () => listWorkspaces(true),
-      unlinkedWorktrees: (claimed) => scanner.unlinkedWorktrees(claimed),
-      log: (entry) => log.append(entry),
-      cleared: (path, bytes) => scanner.forget(path, bytes),
-    });
-    disk = { scanner, cleaner, tokens, places, inventory };
+    disk = { scanner, places };
   }
   if (manager && monitor.internals && options.guard !== false) {
     const { adapter, uid, selfPid, parentPid } = monitor.internals;
@@ -136,32 +121,17 @@ export function createRuntime(options: RuntimeOptions = {}) {
         const absolute = (cwd: string | null) => (cwd && cwd.startsWith("~/") ? `${disk!.places.home}/${cwd.slice(2)}` : cwd);
         lastServices = snap.services.map((service) => ({ cwd: absolute(service.cwd), label: service.service?.label ?? service.name, ports: service.ports }));
       } catch { /* Dev servers are a courtesy here. */ }
-      if (scan && !disk.cleaner.isRunning) disk.scanner.start();
+      if (scan) disk.scanner.start();
       const disks = await disksFor([disk.places.paseoHome, disk.places.home, ...disk.places.tmpDirs, ...knownFolders]);
-      return disk.scanner.report(workspaces, (item) => disk!.tokens.mint(item), disks);
+      return disk.scanner.report(workspaces, disks);
     },
-    preview: (tokens: readonly string[]): Promise<DiskPlan> => {
-      if (!disk) throw new Error("Disk usage isn't available on this host.");
-      return disk.cleaner.preview(tokens);
-    },
-    clear: (tokens: readonly string[]): DiskJob => {
-      if (!disk) throw new Error("Disk usage isn't available on this host.");
-      if (disk.scanner.isRunning) return { state: "idle", freedBytes: 0, results: [], message: "A disk check is still running. Clear once it finishes." };
-      return disk.cleaner.start(tokens);
-    },
-    status: (): DiskJob => disk ? disk.cleaner.status() : { state: "idle", freedBytes: 0, results: [], message: null },
     /** Unloading: stop the scan and the clear job, kill their process groups (walk, find, rm, pnpm), and wait for both. */
-    async close(): Promise<void> { if (disk) await Promise.all([disk.scanner.close(), disk.cleaner.close()]); },
-    /** "Ask an agent" about a folder Hosts won't remove itself: an unlinked worktree, a /tmp folder, or what an interrupted clear left. Only ids the last check (or the inventory) knows. */
+    async close(): Promise<void> { if (disk) await disk.scanner.close(); },
+    /** "Ask an agent" about a folder Hosts never removes itself: an unlinked worktree or a /tmp folder. Only ids the last check knows. */
     async folderAsk(id: string): Promise<AskContext | null> {
       if (!disk) return null;
       const home = disk.places.home;
       const ask = (title: string, text: string): AskContext => ({ title, text, workspaceId: null, workspaceName: null, outputFrom: null });
-      if (id.startsWith("leftover:")) {
-        const entry = (await disk.inventory.list().catch(() => [])).find((item) => `leftover:${item.quarantine}` === id);
-        if (!entry) return null;
-        return ask(`Left over from an interrupted clear (${formatSize(entry.bytes)})`, folderAskText({ path: entry.quarantine, bytes: entry.bytes, branch: null, changedAt: entry.at, kind: "leftover", original: entry.original }, home));
-      }
       if (id.startsWith("tmp:")) {
         const cache = disk.scanner.last()?.caches.find((item) => item.key === id && item.kind === "tmp");
         if (!cache) return null;
@@ -172,6 +142,33 @@ export function createRuntime(options: RuntimeOptions = {}) {
       const branch = await new Promise<string | null>((resolve) => execFile("git", ["-C", folder.path, "rev-parse", "--abbrev-ref", "HEAD"], { timeout: 5000 }, (error, stdout) => resolve(error ? null : String(stdout).trim() || null)));
       const changedAt = folder.result?.newestMtimeMs ? Math.round(folder.result.newestMtimeMs) : null;
       return ask(`A worktree no workspace uses (${formatSize(folder.result?.totalBytes ?? 0)})`, folderAskText({ path: folder.path, bytes: folder.result?.totalBytes ?? 0, branch, changedAt }, home));
+    },
+    /**
+     * "Ask an agent to clean this up": one workspace (its folder id), every
+     * idle workspace ("idle"), or the shared caches and temporary files
+     * ("caches"). The message lists the exact items that look safe to clear,
+     * with paths and sizes, and the checks to do before deleting each one.
+     */
+    async cleanupAsk(id: string): Promise<AskContext | null> {
+      if (!disk) return null;
+      const workspaces = await listWorkspaces().catch(() => [] as WorkspaceInfo[]);
+      const report = await disk.scanner.report(workspaces, []);
+      const checkedAt = report.scan.finishedAt;
+      const ask = (title: string, text: string, workspaceId: string | null = null, workspaceName: string | null = null): AskContext => ({ title, text, workspaceId, workspaceName, outputFrom: null });
+      const join = (folder: string, where: string) => `${folder.replace(/\/$/, "")}/${where}`;
+      if (id === "caches") {
+        const items = report.caches.flatMap((group) => group.items).filter((item) => item.bytes > 0).map((item) => ({ where: item.where, bytes: item.bytes, what: item.name, how: item.cost, partial: item.partial }));
+        if (!items.length) return null;
+        return ask(`Clean up shared caches (${formatSize(items.reduce((sum, item) => sum + item.bytes, 0))})`, cleanupAskText({ kind: "caches", checkedAt, items }));
+      }
+      const chosen = id === "idle" ? report.workspaces.filter((workspace) => !workspace.busy && workspace.clearableBytes > 0) : report.workspaces.filter((workspace) => workspace.id === id && workspace.clearableBytes > 0);
+      const items = chosen.flatMap((workspace) => workspace.items.filter((item) => item.safe).map((item) => ({ where: join(workspace.folder, item.where), bytes: item.bytes - item.sharedBytes, what: item.what, cost: item.cost, partial: item.partial })));
+      if (!items.length) return null;
+      const single = chosen.length === 1 ? chosen[0]! : null;
+      const title = single ? (single.names[0] ?? single.folder) : `${chosen.length} idle workspaces`;
+      // One workspace: offer its own chats first. Several: let the person pick where to send it.
+      const owner = single && single.names.length ? workspaces.find((workspace) => workspace.name === single.names[0]) ?? null : null;
+      return ask(`Clean up ${title} (${formatSize(items.reduce((sum, item) => sum + item.bytes, 0))})`, cleanupAskText({ kind: "workspaces", title, checkedAt, items }), owner?.id ?? null, owner?.name ?? null);
     },
   };
   const plugins = {

@@ -18,7 +18,7 @@ import { askContext, terminalOpen } from "./shared/ask";
 import { hostsAttachmentSearch } from "./shared/attachments";
 import { createAsk } from "./server/ask";
 import { guardState, pluginRestart, pluginRestartStatus } from "./shared/guard";
-import { diskClear, diskClearStatus, diskPreview, diskReport } from "./shared/disk";
+import { diskReport } from "./shared/disk";
 
 type SettingsHandle = { read?: () => Promise<{ status: string; values?: unknown }>; subscribe?: (listener: () => void) => () => void } | undefined;
 
@@ -59,7 +59,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(processStop, ({ tokens }, context) => runtime.withContext(context, () => runtime.processes.stop(tokens)));
   server.handle(processLog, async ({ limit }) => ({ entries: await runtime.log.recent(limit) }));
   // 0.12.0: "Ask an agent", the Hosts attach menu and "Open a terminal here". Each reads through the handler's own Paseo session.
-  const ask = createAsk({ report: (input) => runtime.processes.report(input), verdict: () => health.read(), lost: (port) => health.lost(port), folder: (id) => runtime.disk.folderAsk(id) });
+  const ask = createAsk({ report: (input) => runtime.processes.report(input), verdict: () => health.read(), lost: (port) => health.lost(port), folder: (id) => runtime.disk.folderAsk(id), cleanup: (id) => runtime.disk.cleanupAsk(id) });
   server.handle(askContext, ({ subject }, context) => runtime.withContext(context, async () => { await health.read(context); return ask.context(subject, context.paseo); }));
   server.handle(hostsAttachmentSearch, ({ query }, context) => runtime.withContext(context, async () => { await health.read(context); return ask.attachments(query, context.paseo); }));
   server.handle(terminalOpen, ({ pid }, context) => runtime.withContext(context, () => ask.openTerminal(pid, context.paseo)));
@@ -71,11 +71,8 @@ export default function contribute(server: PluginServerContext) {
   const settled = (outcome: { ok: boolean }) => { if (outcome.ok) void runtime.guard?.tick().then(() => health.check(undefined, true)).catch(() => undefined); };
   server.handle(pluginRestart, async ({ pluginId }) => { const outcome = await runtime.plugins.restart(pluginId); settled(outcome); return outcome; });
   server.handle(pluginRestartStatus, async ({ pluginId }) => { const outcome = runtime.plugins.status(pluginId); settled(outcome); return outcome; });
-  // 0.14.0: disk usage and safe cleanup. Scans and clears run in the background; the app polls.
+  // 0.14.0: disk usage, read-only. A scan runs in the background; the app polls. Cleaning up is an agent's job (ask.ts).
   server.handle(diskReport, ({ scan }, context) => runtime.withContext(context, () => runtime.disk.report(scan === true)));
-  server.handle(diskPreview, ({ tokens }, context) => runtime.withContext(context, () => runtime.disk.preview(tokens)));
-  server.handle(diskClear, ({ tokens }, context) => runtime.withContext(context, () => runtime.disk.clear(tokens)));
-  server.handle(diskClearStatus, async () => runtime.disk.status());
   server.handle(watchSuggestions, async () => ({ suggestions: await suggestions((await readSettings().catch(() => HOSTS_SETTINGS_DEFAULTS)).watchedServices) }));
   server.handle(sync.syncStatus, (_input, context) => runtime!.withContext(context, async () => {
     await runtime!.scope.refresh(); return { projects: runtime!.scope.status().projects.map((p) => ({ id: p.id, name: p.name })), history: await runtime!.transfers.history(), grants: await runtime!.peers.projectGrants() };

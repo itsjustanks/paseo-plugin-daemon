@@ -9,13 +9,13 @@ import {
 import { stateDirectory } from "./binaries";
 import { ChildGroup } from "./disk-children";
 import { gitAllows, gitVerdicts, groupGit, type GitRun, type GitVerdict } from "./disk-git";
-import type { QuarantineInventory } from "./disk-quarantine";
 import { runWorker, type WalkItem, type WalkResult, type WalkRoot } from "./disk-worker";
-import type { ItemKind, MintInput } from "./disk-clear";
 
 /**
- * 0.14.0's disk scan: what each Paseo workspace's folder holds, what of it is
- * build output git ignores, and the shared caches and temporary files.
+ * 0.14.0's disk scan (read-only): what each Paseo workspace's folder holds,
+ * what of it looks safe to clear (build output git ignores), and the shared
+ * caches and temporary files. It never deletes anything; "Ask an agent to
+ * clean this up" passes the list on (cleanupAskText).
  * Heavy, so it is:
  *  - on demand only (never from the 10-second loop), with the last answer
  *    cached in memory and in $PASEO_HOME/daemon-link/disk-scan.json;
@@ -37,8 +37,7 @@ export interface WorkspaceInfo { id: string; name: string; project: string | nul
 
 /**
  * Where things are. `browserRoots` are folders of browser downloads (shown
- * for size; Playwright's is cleaned only by Playwright); `stateDir` is Hosts'
- * own folder (always protected).
+ * for size); `stateDir` is Hosts' own folder (always protected).
  */
 export interface DiskPlaces { platform: "linux" | "darwin"; home: string; paseoHome: string; stateDir: string; tmpDirs: string[]; cacheBases: string[]; browserRoots: string[] }
 
@@ -140,12 +139,11 @@ export const homeRelative = (path: string, home: string) => (path === home ? "~"
 
 /** Raw per-folder facts from a scan, kept between reports. */
 export interface ScanFolder { key: string; path: string; kind: "workspace" | "worktree"; result: WalkResult | null }
-/** Something shared, measured by the scan. `command` names the tool that may clean it; without one it is shown for size only. */
+/** Something shared, measured by the scan. Shown for its size; an agent can be asked to clean it up. */
 export interface ScanCache {
   kind: "npm" | "npx" | "pnpm" | "browsers" | "tool" | "tmp";
   key: string; path: string; label: string; what: string; cost: string; group: string;
   dev: number; ino: number; mtimeMs: number; bytes: number; partial: boolean;
-  command: Exclude<ItemKind, "workspace"> | null;
 }
 export interface ScanData {
   startedAt: number; finishedAt: number | null; partial: boolean; done: number; total: number;
@@ -167,26 +165,23 @@ export interface ScannerDeps {
   scanSeconds?: number;
   /** Where the last result is kept between reloads; null to keep it in memory only. */
   cacheFile?: string | null;
-  /** pnpm's store folder, when pnpm is here. */
+  /** pnpm's store folder, when pnpm is here (`pnpm store path`, read-only). */
   pnpmStore?(group: ChildGroup): Promise<string | null>;
-  /** Whether a tool's own cleanup command is available (npm, pnpm, Playwright). */
-  toolReady?(kind: Exclude<ItemKind, "workspace">, group: ChildGroup): Promise<boolean>;
-  inventory?: QuarantineInventory;
   walk?: typeof runWorker;
 }
 
 /** The walk gets this share of what's left of the deadline; git's checks get the rest. */
 export const WALK_SHARE = 0.8;
 
-const SIZE_ONLY: Record<ScanCache["kind"], string | null> = {
-  npm: null, pnpm: null,
-  npx: "Shown for its size. npm's clean doesn't touch it, and Hosts doesn't delete it.",
-  browsers: "Shown for its size. Hosts doesn't delete browser downloads; Playwright's own clean removes only the ones no project uses.",
-  tool: "Shown for its size. Hosts doesn't delete tool caches.",
-  tmp: "Shown for its size. Hosts doesn't delete anything in the temporary folder; ask an agent if it should go.",
+/** What clearing each kind of shared thing would mean, for the agent's message. */
+const CACHE_HOW: Record<ScanCache["kind"], string> = {
+  npm: "use npm's own command: npm cache clean --force",
+  pnpm: "use pnpm's own command: pnpm store prune (it removes only packages no project uses)",
+  npx: "tools fetched with npx; they download again when next used",
+  browsers: "browser downloads; check which projects still need each version before removing any",
+  tool: "a tool's download cache; it fills again when the tool next needs it",
+  tmp: "left in the temporary folder; check nothing is using it",
 };
-
-const BUTTON: Record<Exclude<ItemKind, "workspace">, string> = { npm: "Clean with npm…", pnpm: "Prune with pnpm…", playwright: "Remove unused browsers…" };
 
 export class DiskScanner {
   private data: ScanData | null = null;
@@ -280,7 +275,7 @@ export class DiskScanner {
       if (result) { cache.dev = result.dev; cache.ino = result.ino; cache.bytes = result.totalBytes; cache.partial = result.partial || !!result.skipped; }
       else { cache.bytes = 0; cache.partial = true; }
     }
-    this.data = { startedAt, finishedAt: this.now(), partial, done: byId.size, total: roots.length, folders, git, caches: caches.filter((cache) => cache.bytes > 0 || cache.partial || cache.command), warnings };
+    this.data = { startedAt, finishedAt: this.now(), partial, done: byId.size, total: roots.length, folders, git, caches: caches.filter((cache) => cache.bytes > 0 || cache.partial), warnings };
     const file = this.cacheFile();
     if (file) await safe(async () => { await mkdir(dirname(file), { recursive: true, mode: 0o700 }); await writeFile(file, JSON.stringify(this.data), { mode: 0o600 }); }, undefined);
   }
@@ -329,41 +324,39 @@ export class DiskScanner {
     const { places, uid } = this.deps;
     const out: ScanCache[] = [];
     const guard = await protectionFor(places, workspaces, (claimed) => this.unlinkedWorktrees(claimed));
-    const ready = (kind: Exclude<ItemKind, "workspace">) => (this.deps.toolReady ?? (async () => false))(kind, this.group).catch(() => false);
-    const add = async (kind: ScanCache["kind"], path: string, label: string, what: string, cost: string, group: string, command: ScanCache["command"] = null) => {
+    const add = async (kind: ScanCache["kind"], path: string, label: string, what: string, group: string) => {
       const st = await safe(() => lstat(path), null);
       if (!st || st.isSymbolicLink() || !st.isDirectory() || st.uid !== uid) return;
       if (PROTECTED_NAME.test(basename(path)) || protectedReason(path, guard) || !await canonicalChain(path)) return;
-      out.push({ kind, key: `${kind}:${path}`, path, label, what, cost, group, dev: st.dev, ino: st.ino, mtimeMs: st.mtimeMs, bytes: -1, partial: false, command });
+      out.push({ kind, key: `${kind}:${path}`, path, label, what, cost: CACHE_HOW[kind], group, dev: st.dev, ino: st.ino, mtimeMs: st.mtimeMs, bytes: -1, partial: false });
     };
     const npm = join(places.home, ".npm");
-    await add("npm", join(npm, "_cacache"), "npm cache", "Packages npm downloaded", "npm clears it with its own command; packages download again when a project next installs them.", "Package managers", await ready("npm") ? "npm" : null);
-    await add("npx", join(npm, "_npx"), "npx downloads", "Tools fetched with npx", "", "Package managers");
+    await add("npm", join(npm, "_cacache"), "npm cache", "Packages npm downloaded", "Package managers");
+    await add("npx", join(npm, "_npx"), "npx downloads", "Tools fetched with npx", "Package managers");
     const store = await (this.deps.pnpmStore ?? (async () => null))(this.group).catch(() => null);
-    if (store && store.startsWith("/")) await add("pnpm", store, "pnpm store", "Packages shared by your pnpm projects", "pnpm prunes it with its own command, removing only packages no project uses.", "Package managers", await ready("pnpm") ? "pnpm" : null);
-    const playwright = await ready("playwright");
+    if (store && store.startsWith("/")) await add("pnpm", store, "pnpm store", "Packages shared by your pnpm projects", "Package managers");
     for (const root of places.browserRoots) {
-      const isPlaywright = basename(root) === "ms-playwright";
-      await add("browsers", root, isPlaywright ? "Playwright browsers" : basename(dirname(root)) === ".agent-browser" ? "agent-browser browsers" : basename(root), "Browser downloads", isPlaywright ? "Playwright removes only the browsers no installed Playwright uses; a project that needs one downloads it again." : "", "Browser downloads", isPlaywright && playwright ? "playwright" : null);
+      const label = basename(root) === "ms-playwright" ? "Playwright browsers" : basename(dirname(root)) === ".agent-browser" ? "agent-browser browsers" : basename(root);
+      await add("browsers", root, label, "Browser downloads", "Browser downloads");
     }
     for (const base of places.cacheBases) {
       for (const name of await safe(() => readdir(base), [] as string[])) {
         const what = toolCacheName(name);
-        if (what) await add("tool", join(base, name), name, what, "", "Tool caches");
+        if (what) await add("tool", join(base, name), name, what, "Tool caches");
       }
     }
     for (const dir of places.tmpDirs) {
       for (const name of await safe(() => readdir(dir), [] as string[])) {
         if (TMP_NEVER.test(name) || name.startsWith(".hosts-")) continue;
-        await add("tmp", join(dir, name), name, "Left in the temporary folder", "", "Temporary files");
+        await add("tmp", join(dir, name), name, "Left in the temporary folder", "Temporary files");
       }
     }
     if (!out.length) warnings.push("No shared caches were found here.");
     return out;
   }
 
-  /** The report: sizes from the last scan, status read fresh. Tokens are minted by the caller. */
-  async report(workspacesNow: readonly WorkspaceInfo[], mint: (item: MintInput) => string, disks: DiskSpace[]): Promise<DiskReport> {
+  /** The report: sizes from the last scan, status read fresh. */
+  async report(workspacesNow: readonly WorkspaceInfo[], disks: DiskSpace[]): Promise<DiskReport> {
     await this.load();
     const data = this.data;
     const { home } = this.deps.places;
@@ -380,24 +373,20 @@ export class DiskScanner {
       const state: WorkspaceState = owners.length ? owners.map((owner) => workspaceState(owner.status)).sort((a, b) => STATE_RANK[a] - STATE_RANK[b])[0]! : "unlinked";
       const devServers = [...new Set([...owners.flatMap((owner) => owner.devServers), ...(this.deps.devServersIn?.(folder.path) ?? [])])];
       const busy = busyReason(state, devServers);
-      const label = owners.length ? owners.map((owner) => owner.name).join(", ") : basename(folder.path);
       const items: ClearItem[] = (folder.result?.items ?? []).flatMap((item) => {
         const path = join(folder.path, item.rel);
         const blocked = itemBlocked(item, data?.git[path] ?? null, path, guard);
         if (blocked === "hide") return [];
         const words = describeName(item.name)!;
         const why = blocked ?? busy;
-        return [{
-          token: why ? null : mint({ path, dev: item.dev, ino: item.ino, mtimeMs: item.mtimeMs, action: "delete", kind: "workspace", owner: label, bytes: item.bytes - item.sharedBytes }),
-          name: item.name, what: words.what, cost: words.cost, where: item.rel, bytes: item.bytes, sharedBytes: item.sharedBytes, partial: item.partial, action: "delete" as const, blocked: why, button: "Clear…",
-        }];
+        return [{ safe: !why, name: item.name, what: words.what, cost: words.cost, where: item.rel, bytes: item.bytes, sharedBytes: item.sharedBytes, partial: item.partial, blocked: why }];
       }).sort((a, b) => b.bytes - a.bytes).slice(0, 60);
       const activeAt = owners.map((owner) => owner.activityAt ?? 0).reduce((a, b) => Math.max(a, b), 0) || null;
       workspaces.push({
         id: folder.key, names: owners.map((owner) => owner.name), project: owners[0]?.project ?? null, folder: homeRelative(folder.path, home),
         worktree: folder.kind === "worktree" || owners.some((owner) => owner.worktree), branch: owners.find((owner) => owner.branch)?.branch ?? null,
         state, activeAt, devServers, totalBytes: folder.result?.totalBytes ?? 0,
-        clearableBytes: items.filter((item) => item.token).reduce((sum, item) => sum + item.bytes - item.sharedBytes, 0),
+        clearableBytes: items.filter((item) => item.safe).reduce((sum, item) => sum + item.bytes - item.sharedBytes, 0),
         partial: !!folder.result?.partial, busy, items, skipped: !!data && !this.running && (!folder.result || !!folder.result.skipped),
         measured: !!folder.result && !folder.result.skipped,
       });
@@ -406,17 +395,14 @@ export class DiskScanner {
     const groups = new Map<string, CacheGroup>();
     for (const cache of data?.caches ?? []) {
       const group = groups.get(cache.group) ?? { id: cache.group.toLowerCase().replace(/[^a-z]+/g, "-"), title: cache.group, totalBytes: 0, items: [] };
-      const blocked = cache.command ? null : SIZE_ONLY[cache.kind];
       group.items.push({
-        token: cache.command ? mint({ path: cache.path, dev: cache.dev, ino: cache.ino, mtimeMs: cache.mtimeMs, action: "command", kind: cache.command, owner: cache.group, bytes: cache.bytes, name: cache.label, cost: cache.cost }) : null,
-        name: cache.label, what: cache.what, cost: cache.cost, where: homeRelative(cache.path, home), bytes: cache.bytes, sharedBytes: 0, partial: cache.partial,
-        action: cache.command ? "command" : "delete", blocked, button: cache.command ? BUTTON[cache.command] : undefined, askId: cache.kind === "tmp" ? cache.key : null,
+        safe: false, name: cache.label, what: cache.what, cost: cache.cost, where: homeRelative(cache.path, home), bytes: cache.bytes, sharedBytes: 0, partial: cache.partial,
+        blocked: null, askId: cache.kind === "tmp" ? cache.key : null,
       });
       group.totalBytes += cache.bytes;
       groups.set(cache.group, group);
     }
     const caches = [...groups.values()].map((group) => ({ ...group, items: group.items.sort((a, b) => b.bytes - a.bytes) })).sort((a, b) => b.totalBytes - a.totalBytes);
-    const leftovers = this.deps.inventory ? (await safe(() => this.deps.inventory!.list(), [])).map((entry) => ({ id: `leftover:${entry.quarantine}`, name: entry.name, where: homeRelative(entry.original, home), bytes: entry.bytes, at: entry.at })) : [];
     return {
       disks,
       scan: {
@@ -426,21 +412,19 @@ export class DiskScanner {
         partial: !!data?.partial,
         message: this.running ? "Checking what's using space. This runs quietly in the background and can take a few minutes." : data?.partial ? "The check stopped at its time limit, so some sizes are at least what's shown and some folders weren't reached." : null,
       },
-      workspaces, caches, clearableBytes: workspaces.reduce((sum, workspace) => sum + workspace.clearableBytes, 0), warnings: data?.warnings ?? [], leftovers,
+      workspaces, caches, clearableBytes: workspaces.reduce((sum, workspace) => sum + workspace.clearableBytes, 0), warnings: data?.warnings ?? [],
     };
   }
 }
 
 /** "Ask an agent" about a folder Hosts won't remove itself: an unlinked worktree, a /tmp leftover, or what an interrupted clear left. */
-export function folderAskText(folder: { path: string; bytes: number; branch: string | null; changedAt: number | null; kind?: "worktree" | "tmp" | "leftover"; original?: string }, home: string, now = Date.now()): string {
+export function folderAskText(folder: { path: string; bytes: number; branch: string | null; changedAt: number | null; kind?: "worktree" | "tmp" }, home: string, now = Date.now()): string {
   const kind = folder.kind ?? "worktree";
   const lead = kind === "worktree" ? `Hosts found a Paseo worktree that no workspace uses any more. It takes up ${formatSize(folder.bytes)}.`
-    : kind === "tmp" ? `Hosts found a folder in the temporary folder that takes up ${formatSize(folder.bytes)}. Hosts doesn't delete anything there itself.`
-    : `A clear Hosts started was interrupted, and this folder was left set aside (${formatSize(folder.bytes)}). Hosts never deletes it by itself.`;
+    : `Hosts found a folder in the temporary folder that takes up ${formatSize(folder.bytes)}. Hosts doesn't delete anything itself.`;
   const check = kind === "worktree"
     ? ["Please check whether anything in it still matters: uncommitted changes (git status) and commits that aren't pushed anywhere (git log --branches --not --remotes).", "Tell me what you find. If nothing is needed, suggest removing it properly with \"git worktree remove\" from its main repository, then \"git worktree prune\"."]
-    : kind === "tmp" ? ["Please check what it is and whether anything is still using it or needs it.", "Tell me what you find, and whether it's safe to delete."]
-    : [`It was moved aside from ${folder.original ? homeRelative(folder.original, home) : "its folder"}. Please check whether it's needed (it was build output Hosts was clearing), and whether it should go back or be deleted.`];
+    : ["Please check what it is and whether anything is still using it or needs it.", "Tell me what you find, and whether it's safe to delete."];
   return [
     lead, "",
     `Folder: ${homeRelative(folder.path, home)}`,
@@ -448,6 +432,39 @@ export function folderAskText(folder: { path: string; bytes: number; branch: str
     ...(folder.changedAt ? [`Last changed: ${ago(folder.changedAt, now)}`] : []),
     "", ...check, "Ask me before you delete anything.",
   ].join("\n");
+}
+
+/** The rules an agent cleaning up must follow, said once and reused. */
+export const CLEANUP_RULES = [
+  "Before deleting each one, check it yourself:",
+  "1. Git: nothing inside is tracked and there's no uncommitted or unpushed work (git status, git check-ignore, git log --branches --not --remotes in that project).",
+  "2. Nothing is using it: no running process has it as its working folder or has a file open in it (lsof, or /proc on Linux), and no dev server, build, test or install is running in that project.",
+  "3. It holds nothing that must stay: never delete a .git folder or any git repository, .env files, ~/.claude, ~/.codex, Paseo's data folder, or a whole project or worktree folder. Don't follow symlinks.",
+  "For shared caches, use the tools' own commands (npm cache clean --force, pnpm store prune) rather than deleting their folders.",
+  "If anything looks unsure, skip it and ask me. When you're done, tell me what you deleted and how much space it freed.",
+];
+
+/** One line per item: where, how big, and what it is. */
+const itemLine = (where: string, bytes: number, what: string, partial = false) => `- ${where} · ${partial ? "at least " : ""}${formatSize(bytes)} · ${what}`;
+
+/**
+ * The message for "Ask an agent to clean this up" (0.14.0): the exact items
+ * that look safe to clear, with paths and sizes, and the checks to do before
+ * deleting each one. Hosts deletes nothing itself.
+ */
+export function cleanupAskText(scope: { kind: "workspaces"; title: string; checkedAt: number | null; items: Array<{ where: string; bytes: number; what: string; cost: string; partial: boolean }> } | { kind: "caches"; checkedAt: number | null; items: Array<{ where: string; bytes: number; what: string; how: string; partial: boolean }> }, now = Date.now()): string {
+  const total = scope.items.reduce((sum, item) => sum + item.bytes, 0);
+  const when = scope.checkedAt ? ` (checked ${ago(scope.checkedAt, now)})` : "";
+  const lines = scope.kind === "workspaces"
+    ? [
+      `Please free up disk space by clearing build output in ${scope.title}. Hosts found these folders${when}, about ${formatSize(total)} in all. They look safe to clear: git ignores them and nothing was using them when Hosts checked. Please check each one again before deleting it.`,
+      "", ...scope.items.map((item) => itemLine(item.where, item.bytes, `${item.what}. ${item.cost}`, item.partial)),
+    ]
+    : [
+      `Please free up disk space in the shared caches and temporary files. Hosts measured these${when}, about ${formatSize(total)} in all. Only clear what's really unused.`,
+      "", ...scope.items.map((item) => itemLine(item.where, item.bytes, `${item.what}: ${item.how}`, item.partial)),
+    ];
+  return [...lines, "", ...CLEANUP_RULES].join("\n");
 }
 
 /**

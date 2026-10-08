@@ -15,7 +15,7 @@ import { syncScreenParams } from "./native";
 import { HelpTab, type SetupCheck } from "./guide";
 import { OverviewTab } from "./home";
 import { Accordion, AccordionItem, IconBadge, MessageBar, QuietLine, SectionTitle, SPACE, TYPE, type Tone } from "./kit";
-import { CacheList, ClearSheet, DiskCard, Leftovers, WorkspaceList, useClear, useDiskReport } from "./workspaces";
+import { CacheList, DiskCard, WorkspaceList, useDiskReport } from "./workspaces";
 import { formatSize } from "../shared/disk";
 import { TAB_IDS, TabBar, TabLine, type TabId } from "./navigation";
 import { OpenRow } from "./open-row";
@@ -116,7 +116,6 @@ function DaemonBody(props: DaemonProps) {
   }, [paramTab, paramOpen]);
   // 0.14.0: on Workspaces, Refresh also checks disk use again (the one way to re-check; it runs in the background).
   const disk = useDiskReport(props.host.id);
-  const clearFlow = useClear(setMessage, () => { void disk.query.refetch(); void health.refetch(); });
   const refreshAll = () => { check.mutate(); void queryClient.invalidateQueries({ queryKey: ["daemon-link", props.host.id] }); if (tab === "workspaces") disk.scan.mutate(); };
   // The first visit to Workspaces checks once by itself (it's what the person came to see); after that, only Refresh does.
   const neverChecked = disk.report?.scan.state === "never";
@@ -165,7 +164,7 @@ function DaemonBody(props: DaemonProps) {
       {tab === "processes" ? <ProcessesTab theme={theme} compact={layout.compact} hostId={props.host.id} say={setMessage} issues={verdict?.issues ?? []} onChanged={() => void health.refetch()} /> : null}
       {tab === "help" ? <HelpTab theme={theme} compact={layout.compact} go={toHelp} minutes={formatMinutes(minutes)} shortcuts={!!props.shortcuts} /> : null}
       {tab === "workspaces" && <View style={{ gap: t.space.xl }}>
-        <DiskCard theme={theme} report={disk.report} loading={disk.query.isPending} scanning={disk.scan.isPending} flow={clearFlow} onScan={() => disk.scan.mutate()} onCaches={() => go("workspaces", "caches")} />
+        <DiskCard theme={theme} report={disk.report} loading={disk.query.isPending} scanning={disk.scan.isPending} onScan={() => disk.scan.mutate()} onCaches={() => go("workspaces", "caches")} />
         {apps.length || !ready ? (
           <View style={{ gap: t.space.md }}>
             <SectionTitle theme={theme} icon="Server">{apps.length ? `Dev servers running now · ${apps.length}` : "Dev servers"}</SectionTitle>
@@ -193,12 +192,11 @@ function DaemonBody(props: DaemonProps) {
             )}
           </View>
         ) : null}
-        <Leftovers theme={theme} report={disk.report} />
-        <WorkspaceList theme={theme} compact={layout.compact} report={disk.report} flow={clearFlow} />
+        <WorkspaceList theme={theme} compact={layout.compact} report={disk.report} />
         <Accordion theme={theme}>
           {disk.report && disk.report.scan.state !== "never" ? (
             <AccordionItem key={foldKey("caches")} theme={theme} compact={layout.compact} icon="Archive" title="Shared caches and temporary files" summary={disk.report.caches.length ? `${formatSize(disk.report.caches.reduce((sum, group) => sum + group.totalBytes, 0))} · package downloads, tool caches, old browser downloads, /tmp leftovers` : disk.report.scan.state === "running" ? "Checking…" : "Nothing found"} open={foldOpen("caches")}>
-              <CacheList theme={theme} groups={disk.report.caches} flow={clearFlow} />
+              <CacheList theme={theme} groups={disk.report.caches} />
             </AccordionItem>
           ) : null}
           {tunnels.length > 0 ? (
@@ -223,7 +221,6 @@ function DaemonBody(props: DaemonProps) {
         </Accordion>
         {!apps.length && ready ? <QuietLine theme={theme} icon="Server">No dev server is running. Run a project's dev command in its Paseo terminal and it appears here with an Open button.</QuietLine> : null}
         <QuietLine theme={theme} icon="Info">Databases, system services and other listeners are left out. Link length is under Settings → Hosts.</QuietLine>
-        <ClearSheet theme={theme} flow={clearFlow} />
       </View>}
     </ScrollView>
   );

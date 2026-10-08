@@ -212,22 +212,20 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
     {
       icon: "HardDrive", question: "My disk is filling up. What can I clear?",
       answer: [
-        "Open Workspaces. It shows how much space is free, what each Paseo workspace uses (biggest first, with whether an agent is working in it) and how much of it is safe to clear. The sidebar dot warns when the disk is 85% full and turns red at 95%.",
-        "Hosts clears two things. Build output inside a workspace: installed packages (node_modules), build files (.next, .nuxt, .turbo, dist), test reports and Python caches, and only when git confirms the folder is ignored and holds nothing else. Each one says what clearing it costs, such as \"comes back on the next install (a few minutes)\".",
-        "And shared caches, only through each tool's own clean: npm's cache (npm cache clean), pnpm's store (pnpm store prune, which removes only packages no project uses) and Playwright's browsers (playwright uninstall, which removes only browsers no installed Playwright uses). These run only while no install or download is going on.",
-        "Everything else is shown by size only: other browser downloads, tool caches and the temporary folder. Hosts doesn't delete them; press Ask an agent beside a temporary folder to have one look at it.",
-        "Press Clear on one workspace, or clear every idle workspace at once. You see exactly what goes first, then confirm once.",
+        "Open Workspaces. It shows how much space is free, what each Paseo workspace uses (biggest first, with whether an agent is working in it), and how much of it looks safe to clear. The sidebar dot warns when the disk is 85% full and turns red at 95%.",
+        "Looks safe to clear means build output that comes back by itself: installed packages (node_modules), build files (.next, .nuxt, .turbo, dist), test reports and Python caches, and only when git confirms the folder is ignored and holds nothing else. Shared caches (npm, pnpm, browser downloads, tool caches) and the temporary folder are shown by size.",
+        "Hosts doesn't delete anything itself. Press Ask an agent to clean this up, on one workspace, on every idle workspace, or on the caches: the agent gets the exact list with paths and sizes, checks that nothing is in use or unsaved, clears it, and tells you what it freed. You see the message before it's sent.",
+        "One-press clearing is being reviewed for a later version.",
         "Checking sizes reads a lot of files, so it runs in the background at low priority, one check at a time, and stops after a few minutes with what it found. Press Refresh at the top to check again.",
       ],
       action: { label: "Open Workspaces", tab: "workspaces" },
     },
     {
-      icon: "ShieldBan", question: "What will Hosts never delete?",
+      icon: "ShieldBan", question: "What does the agent check before it deletes anything?",
       answer: [
-        "Anything git tracks or hasn't been told to ignore, a .git folder or any git repository (bare ones too), .env files, your source code, Paseo's own data (settings, history, logs), agents' history (~/.claude and ~/.codex), anything reached through a link, and never a whole workspace or worktree folder. Nothing in the temporary folder, browser download folders or tool caches either: those are shown by size only.",
-        "Nothing that's in use: if a program has a file open in it, an agent is working or waiting in that workspace, or a dev server, build, test or install is running there, Hosts leaves it and says why. If Hosts can't see every process completely, it clears nothing. Each folder is checked again just before it goes, and every deletion is logged.",
-        "A folder is first moved aside and only then deleted. If Hosts stops halfway, it puts the folder back the next time it starts; if something now sits in its place, the folder is listed under \"Left over from an interrupted clear\" for you or an agent to decide. Hosts never deletes it on its own.",
-        "A worktree no workspace uses any more (usually an archived one) shows its size, but Hosts won't remove it: it may hold work that isn't pushed. Ask an agent instead; it checks the worktree and removes it properly with git, after asking you.",
+        "The message asks it to check each item itself first: that git tracks nothing inside and there's no uncommitted or unpushed work; that no program has it open or is running in it (no dev server, build, test or install); and that it holds nothing that must stay.",
+        "It's told never to delete a .git folder or any git repository, .env files, agents' history (~/.claude, ~/.codex), Paseo's data, or a whole project or worktree; not to follow links; to clean npm's and pnpm's caches with their own commands; to skip anything unsure and ask you; and to tell you what it freed.",
+        "A worktree no workspace uses any more shows its size with Ask an agent: the agent checks for unpushed work and removes it properly with git, after asking you.",
       ],
     },
     {

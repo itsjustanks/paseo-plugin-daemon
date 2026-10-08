@@ -18,8 +18,10 @@ export const AskSubjectSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("port"), port: z.number().int().min(1).max(65535) }),
   /** A watched service, by its settings id. */
   z.object({ kind: z.literal("service"), id: z.string().min(1).max(64) }),
-  /** 0.14.0: a worktree folder no workspace uses any more, by its id in the last disk check. */
+  /** 0.14.0: a worktree folder no workspace uses any more, or a /tmp folder, by its id in the last disk check. */
   z.object({ kind: z.literal("folder"), id: z.string().min(1).max(1024) }),
+  /** 0.14.0: clean up what looks safe to clear: one workspace (its folder id), every idle workspace ("idle"), or the shared caches ("caches"). */
+  z.object({ kind: z.literal("cleanup"), id: z.string().min(1).max(1024) }),
 ]);
 export type AskSubject = z.infer<typeof AskSubjectSchema>;
 

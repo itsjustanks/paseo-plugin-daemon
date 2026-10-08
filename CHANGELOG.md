@@ -2,80 +2,58 @@
 
 ## 0.14.0 — 2026-10-08
 
-Disk usage and safe cleanup, CleanMyMac-style, by workspace. "Dev servers" became **Workspaces**:
-each Paseo workspace with what's running in it, what it uses on disk, and what's safe to clear.
+Disk usage by workspace, and an agent to clean up. "Dev servers" became **Workspaces**: each Paseo
+workspace with what's running in it, what it uses on disk, and what looks safe to clear. Hosts
+deletes nothing in this release: "Ask an agent to clean this up" hands an agent the exact list.
+One-press clearing went through three independent deletion-safety reviews and is held back for a
+later version (kept on a branch, not shipped).
 
 - **Disk at a glance.** Free and used space on the disk your workspaces live on, read with statfs
   every 10 seconds by the check loop (statfs and stat only, never a folder walk there). Overview gets
   a Disk row; the sidebar dot warns at 85% full ("Clearing build files and caches under Workspaces can
   help") and turns red at 95% ("Agents will start failing to write files soon").
-- **By workspace.** Every Paseo workspace from the SDK, biggest first: its size, how much is safe to
-  clear, its status (agent working now, waiting for you, idle since…), branch, and dev servers.
+- **By workspace.** Every Paseo workspace from the SDK, biggest first: its size, how much looks safe
+  to clear, its status (agent working now, waiting for you, idle since…), branch, and dev servers.
   Workspaces sharing one folder are one row ("Used by 3 workspaces"). Worktrees under
-  `$PASEO_HOME/worktrees` that no workspace claims are shown as "Not linked to a workspace", with
-  their size and **Ask an agent** (it checks for unpushed work and removes the worktree properly with
-  git, after asking). Hosts never removes a worktree itself: the SDK has no remove for an archived
-  one, and an rm could lose work. Folders and paths appear only when a row is opened.
-- **What can be cleared, exactly (narrowed after two independent deletion-safety reviews).**
-  - Build output inside a workspace or worktree, ask first, per workspace or every idle one:
-    an allow-listed folder (node_modules, .next, .nuxt, .turbo, .vite, .svelte-kit, .parcel-cache,
-    .cache, coverage, test-results, playwright-report, storybook-static, __pycache__,
-    .pytest_cache, and dist/build/out) that git says right now is ignored, with nothing tracked and
-    nothing untracked-but-not-ignored beneath it. Folders outside a git repository: nothing.
-  - Shared caches only through each tool's own command, run as argv (no shell) in its own process
-    group with a timeout, and only while no install or download is running: `npm cache clean
-    --force`, `pnpm store prune`, and `npx --no-install playwright uninstall` (removes only browsers
-    no installed Playwright uses), each offered only when the tool is there.
-  - Shown by size only, never deleted by Hosts: the temporary folder (with Ask an agent), other
-    browser downloads (Puppeteer, agent-browser), npx downloads and tool caches.
-- **Never:** anything git tracks (a source folder called "coverage" isn't even listed), .git, .env
-  files, source, `$PASEO_HOME`'s own data, `~/.claude` or `~/.codex`, a whole workspace or worktree
-  folder, or another user's files. **Never anything in use:** a folder something has open, or that is
-  any process's working directory, or in a workspace where an agent is working or waiting or a build,
-  test, install or dev server runs, is refused with the reason. Links are never followed; a path must
-  be its own real path, inside its place and on the same device.
-- **Tokens.** Each clearable item is a signed token (HMAC, 30 minutes) bound to its path, device,
-  inode and modification time from the scan; every rule is checked again just before it goes.
-  Deletions are logged (what, size, when, "confirmed in the Paseo app"; plugins aren't told who),
-  as the daemon's own user.
+  `$PASEO_HOME/worktrees` that no workspace claims are shown as "Not linked to a workspace" with their
+  size and Ask an agent (it checks for unpushed work and removes the worktree properly with git, after
+  asking). Folders and paths appear only when a row is opened.
+- **Looks safe to clear** means an allow-listed build folder (node_modules, .next, .nuxt, .turbo,
+  .vite, .svelte-kit, .parcel-cache, .cache, coverage, test-results, playwright-report,
+  storybook-static, __pycache__, .pytest_cache, and dist/build/out) that git says is ignored, with
+  nothing tracked and nothing untracked-but-not-ignored beneath it, no .env, .git or bare repository
+  inside, no symlink on its path, outside every protected place (home, Paseo's data, agents' history,
+  Hosts' folder, workspace and worktree roots), in a workspace where no agent is working and no dev
+  server runs. Folders outside a git repository never look safe.
+- **Shared caches and temporary files, by size:** npm's cache and npx downloads, pnpm's store,
+  browser downloads (Playwright, Puppeteer, agent-browser, including the fleet's second agent-browser
+  home), known tool caches (pip, uv, Yarn, Go, node-gyp, TypeScript, Cypress, Prisma…), and this
+  user's folders in /tmp (each with Ask an agent).
+- **Ask an agent to clean this up**, on one workspace, every idle workspace, or the caches. The
+  message (shown before it's sent, through 0.12's ask flow) lists the exact items with paths and
+  sizes, and tells the agent to check each one for tracked, uncommitted or unpushed work, running
+  processes and open files before deleting; never to delete .git, any repository, .env files,
+  ~/.claude, ~/.codex or Paseo's data, nor a whole project or worktree; to use npm's and pnpm's own
+  clean commands; to skip anything unsure; and to report what it freed.
 - **Scans are gentle.** On demand (the first visit to Workspaces, then Refresh at the top), cached
-  in memory and `$PASEO_HOME/daemon-link/disk-scan.json` with "Checked 4 min ago", one at a time, in a
-  child process at nice 19 and (Linux) the idle disk class, time-boxed to 4 minutes with a fair share
-  per folder and partial results marked "at least". Plugin calls get 30 seconds, so scans and clears
-  run in the background and the app polls, like 0.13's Restart.
-- **How a workspace folder is cleared.** Immediately before each folder, with a fresh and COMPLETE
-  snapshot of this user's processes and open files (Linux /proc with the status-uid rule; macOS one
-  ps and one lsof; any gap, error or truncation means nothing is cleared, and Hosts says why):
-  - it's the same real folder as the scan (device, inode, modification time; not a symlink), owned
-    by this user, with no symlink anywhere on its path and its own real path;
-  - it's outside the protected set: never equal to or enclosing home, a workspace or worktree root
-    or /; never equal to, enclosing or inside agents' history, Paseo's data or Hosts' folder;
-  - git's three answers hold; no agent works or waits in its workspace; no build, test, install or
-    dev server runs there, and none runs anywhere whose folder can't be told; nothing has it open.
-  Then it's moved into a private quarantine folder beside it (mode 700, same disk), recorded in
-  `$PASEO_HOME/daemon-link/quarantine.json`, its inode re-checked, walked physically for a .env file,
-  a .git file or folder, a bare repository (HEAD + objects/ + refs/) or anything unreadable (any of
-  those puts it back), and removed with the system `rm -rf` plus `--one-file-system` (GNU) or `-x`
-  (macOS). A clear cut short is put back on the next load when its place is free; otherwise it's
-  listed as "Left over from an interrupted clear" with Ask an agent, never deleted by Hosts.
-- **One deadline** covers the whole scan: reading Paseo's workspaces, finding folders and caches, the
-  walk and git. git, the walk, rm and the tool commands all run in process groups that unloading
-  Hosts kills, and unloading waits for them.
+  in memory and `$PASEO_HOME/daemon-link/disk-scan.json` with "Checked 4 min ago", one at a time, in
+  child processes at the lowest priority (nice 19, idle disk class on Linux), each in its own process
+  group that unloading kills. One deadline (4 minutes) covers reading Paseo's workspaces, finding
+  folders, the walk and git; cut-off sizes say "at least". Plugin calls get 30 seconds, so a scan runs
+  in the background and the app polls.
 - **Fewer calls to the daemon.** Passive reads (the sidebar dot, Overview, Processes, Workspaces)
   now share one cached copy of the project and workspace registry for 60 seconds (was 5), with one
   read in flight at a time and a 10-second back-off after a failed read. A busy daemon logged about
   110 slow `project.list` requests an hour from Hosts polling. User actions (Refresh, stop, share or
-  receive a project, start a disk check, clear, the memory guard's stop) still read it fresh, and the
-  Workspaces view adds no polling of its own: it reads the same cache.
-- **Help:** "My disk is filling up. What can I clear?" and "What will Hosts never delete?". Old
-  `tab=servers` links land on Workspaces. No settings change.
+  receive a project, start a disk check) still read it fresh, and Workspaces adds no polling of its
+  own: it reads the same cache.
+- **Help:** "My disk is filling up. What can I clear?" and "What does the agent check before it
+  deletes anything?". Old `tab=servers` links land on Workspaces. No settings change.
 - **Tests:** a temp home with a git workspace, a real git worktree no workspace claims, caches,
-  ~/.claude, Paseo's data and /tmp folders, run through the real scanner, worker, quarantine and
-  rm: tracked and untracked work, no repository, git timeouts, symlinks (the item, any ancestor, a
-  cache folder linked into ~/.codex, a folder swapped for a link before rm), bare repositories,
-  files in use, incomplete snapshots, inode swaps, writes since the check, busy workspaces, builds
-  with unknown folders, installs blocking cache commands, protected paths and their parents,
-  quarantine recovery after a crash, and unloading mid-clear.
+  ~/.claude, ~/.codex, Paseo's data and /tmp folders, through the real scanner and walker: what looks
+  safe (git's three answers, no repository, git timeouts, untracked work, bare repositories, symlinked
+  folders and parents, protected places, busy workspaces), the agent's messages, the deadline and
+  unload, statfs-only disk readings, and a check that the shipped server code has no delete path.
 
 ## 0.13.0 — 2026-10-07
 

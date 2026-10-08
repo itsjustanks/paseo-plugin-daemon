@@ -2,22 +2,18 @@ import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 
 /**
- * 0.14.0: disk usage and safe cleanup, narrowed after two deletion-safety
- * reviews to what can be cleared without guessing.
+ * 0.14.0: disk usage, read-only. Hosts shows how full the disk is, what each
+ * Paseo workspace uses, what of it looks safe to clear, and the shared caches
+ * and temporary files, by size. It deletes nothing: "Ask an agent to clean
+ * this up" hands an agent the exact list, with the checks to do before each
+ * deletion. One-press clearing is being reviewed for a later release.
  *
- * Hosts shows how full the disk is, what each Paseo workspace uses, and the
- * shared caches and temporary files, by size. It clears exactly two things,
- * after asking:
- *  - build output inside a workspace or worktree: an allow-listed folder
- *    (node_modules, .next, coverage…) that git says is ignored, with nothing
- *    tracked and nothing untracked-but-not-ignored beneath it;
- *  - shared caches, only through each tool's own command (npm cache clean,
- *    pnpm store prune, playwright uninstall).
- * Everything else (/tmp, browser download folders, other tool caches) is
- * shown for its size only; an agent can be asked about it. Never: anything
- * git tracks, .git or a bare repository, .env files, source, Paseo's data,
- * agents' history, a whole workspace or worktree, or anything in use.
- * Pure rules here; the server reads, checks and deletes.
+ * "Looks safe to clear" (inside a workspace or worktree): an allow-listed
+ * folder (node_modules, .next, coverage…) that git says is ignored, with
+ * nothing tracked and nothing untracked-but-not-ignored beneath it, no .env,
+ * .git or bare repository inside, outside every protected place, and not in
+ * a workspace where an agent is working or a dev server runs. It's a hint for
+ * the agent, which checks again before deleting anything.
  */
 
 // ----------------------------------------------------------- the disk
@@ -129,7 +125,8 @@ export const PROTECTED_NAME = /claude|codex|paseo|anthropic|openai/i;
 export const TMP_NEVER = /^(\.X11-unix|\.ICE-unix|\.font-unix|\.XIM-unix|\.Test-unix|tmux-|ssh-|systemd-|snap-|com\.apple|launchd|powerlog|claude|codex|paseo)/i;
 
 /**
- * What Hosts protects, whatever a scan or a token says (0.14.0, reviewed).
+ * What Hosts protects (0.14.0): a folder in or around one of these never
+ * "looks safe to clear", whatever else is true of it.
  *  - `whole`: never deleted, and never an ancestor of a target either (so a
  *    /tmp folder that happens to contain $PASEO_HOME is refused): home,
  *    Paseo's home, ~/.claude, ~/.codex, every workspace and worktree root,
@@ -176,9 +173,10 @@ export function protectedSet(places: { home: string; paseoHome: string; stateDir
 export const WorkspaceStateSchema = z.enum(["working", "waiting", "failed", "idle", "unlinked"]);
 export type WorkspaceState = z.infer<typeof WorkspaceStateSchema>;
 
+/** Something found inside a workspace, or a shared cache or temporary folder. Read-only: Hosts deletes nothing. */
 export const ClearItemSchema = z.object({
-  /** Signed handle bound to the item (path, device, inode, scan); null when it may not be cleared (or is shown for size only). */
-  token: z.string().nullable(),
+  /** It looks safe to clear by Hosts' rules (git ignores it, nothing in use found…); a hint for the agent, never an action. */
+  safe: z.boolean(),
   /** "node_modules", "chromium-1140", "npm cache". */
   name: z.string(),
   /** What it is, in a few words. */
@@ -192,13 +190,9 @@ export const ClearItemSchema = z.object({
   sharedBytes: z.number().min(0),
   /** The size is a floor: checking it ran out of time. */
   partial: z.boolean(),
-  /** "delete": a workspace build folder Hosts removes. "command": the tool's own cleanup command. */
-  action: z.enum(["delete", "command"]),
-  /** Why it can't be cleared now, in plain words (or that it's shown for size only); null when it can. */
+  /** Why it doesn't look safe to clear, in plain words; null when it does. */
   blocked: z.string().nullable(),
-  /** The button's words ("Clear…", "Clean with npm…"). */
-  button: z.string().optional(),
-  /** For things Hosts won't clear itself: "Ask an agent" about it (the folder's id in the last check). */
+  /** "Ask an agent" about this one folder (its id in the last check), for /tmp folders. */
   askId: z.string().nullable().optional(),
 });
 export type ClearItem = z.infer<typeof ClearItemSchema>;
@@ -252,36 +246,11 @@ export const DiskReportSchema = z.object({
   caches: z.array(CacheGroupSchema),
   clearableBytes: z.number().min(0),
   warnings: z.array(z.string()),
-  /** Quarantines an interrupted clear left behind that couldn't be put back: shown, never deleted by Hosts. */
-  leftovers: z.array(z.object({ id: z.string(), name: z.string(), where: z.string(), bytes: z.number().min(0), at: z.number() })).optional(),
 });
 export type DiskReport = z.infer<typeof DiskReportSchema>;
 
-export const DiskPlanSchema = z.object({
-  items: z.array(z.object({ name: z.string(), where: z.string(), owner: z.string(), bytes: z.number(), action: z.enum(["delete", "command"]), cost: z.string(), ok: z.boolean(), reason: z.string().nullable() })),
-  bytes: z.number(),
-});
-export type DiskPlan = z.infer<typeof DiskPlanSchema>;
-
-export const DiskJobSchema = z.object({
-  state: z.enum(["idle", "running", "done"]),
-  /** What was freed so far. */
-  freedBytes: z.number().min(0),
-  results: z.array(z.object({ name: z.string(), owner: z.string(), ok: z.boolean(), bytes: z.number(), message: z.string() })),
-  message: z.string().nullable(),
-});
-export type DiskJob = z.infer<typeof DiskJobSchema>;
-
-export const TOKENS_MAX = 200;
-const Tokens = z.object({ tokens: z.array(z.string().min(1).max(1024)).min(1).max(TOKENS_MAX) });
-
 /** The cached report; `scan: true` starts a fresh scan in the background (one at a time) and answers at once. */
 export const diskReport = defineRpc({ name: "daemon-link.disk.report", input: z.object({ scan: z.boolean().optional() }), output: DiskReportSchema });
-/** The ask-first list: exactly what would go, its size and cost, and what won't and why. */
-export const diskPreview = defineRpc({ name: "daemon-link.disk.preview", input: Tokens, output: DiskPlanSchema });
-/** Starts clearing in the background; poll `diskClearStatus`. */
-export const diskClear = defineRpc({ name: "daemon-link.disk.clear", input: Tokens, output: DiskJobSchema });
-export const diskClearStatus = defineRpc({ name: "daemon-link.disk.clear-status", input: z.object({}), output: DiskJobSchema });
 
 /** "Idle 3 days", "Agent working now". */
 export function stateWords(state: WorkspaceState, activeAt: number | null, now = Date.now()): string {

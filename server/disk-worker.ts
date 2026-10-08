@@ -14,7 +14,7 @@ import { lowPriority, type ChildGroup } from "./disk-children";
  * Rules it keeps: lstat only (a symlink is never followed, only counted as
  * itself or unlinked as itself); never cross onto another device; stop at the
  * deadline and say so (partial); every byte counted once per inode. It only
- * reads: deleting is done by the system rm (disk-remove.ts).
+ * reads: nothing in Hosts deletes.
  */
 
 export interface WalkRoot { id: string; path: string; mode: "workspace" | "whole" }

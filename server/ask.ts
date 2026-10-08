@@ -22,8 +22,10 @@ export interface AskDeps {
   verdict(): Promise<HealthVerdict>;
   /** When a dev server's port stopped serving, while the health check still reports it. */
   lost(port: number): { name: string; cwd: string | null; lostAt: number } | null;
-  /** 0.14.0: the message about a worktree folder no workspace uses, by its id in the last disk check. */
+  /** 0.14.0: the message about a worktree or /tmp folder, by its id in the last disk check. */
   folder?(id: string): Promise<AskContext | null>;
+  /** 0.14.0: "Ask an agent to clean this up": a workspace's folder id, "idle" or "caches". */
+  cleanup?(id: string): Promise<AskContext | null>;
   home?: string;
   now?: () => number;
 }
@@ -144,6 +146,11 @@ export function createAsk(deps: AskDeps) {
   }
 
   async function context(subject: AskSubject, paseo: PaseoApi): Promise<AskContext> {
+    if (subject.kind === "cleanup") {
+      const found = await deps.cleanup?.(subject.id);
+      if (!found) throw new Error("Nothing there looks safe to clear in the last disk check. Check again first.");
+      return found;
+    }
     if (subject.kind === "folder") {
       const found = await deps.folder?.(subject.id);
       if (!found) throw new Error("That folder isn't in the last disk check any more. Check again first.");
