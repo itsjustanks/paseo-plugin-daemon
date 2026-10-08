@@ -16,62 +16,51 @@ each Paseo workspace with what's running in it, what it uses on disk, and what's
   their size and **Ask an agent** (it checks for unpushed work and removes the worktree properly with
   git, after asking). Hosts never removes a worktree itself: the SDK has no remove for an archived
   one, and an rm could lose work. Folders and paths appear only when a row is opened.
-- **Clear what's safe, ask first.** Per workspace, or every idle workspace at once ("Clear 4.2 GB
-  from 6 workspaces…"). One sheet lists exactly what goes, grouped by kind, with its size and what
-  clearing costs ("Comes back on the next install (a few minutes)"), and what won't go and why; then
-  one confirm. Inside a workspace only regenerable folders, by name: node_modules, .next, .nuxt,
-  .turbo, .vite, .svelte-kit, .parcel-cache, .cache, coverage, test-results, playwright-report,
-  storybook-static, __pycache__, .pytest_cache; dist/build/out only when git confirms it ignores them.
-  pnpm's hard-linked node_modules say how much is shared with the store, so the size freed is honest.
-- **Shared caches** (folded): npm's cache and npx downloads, pnpm's store (pruned by `pnpm store
-  prune`, never deleted), older Playwright / Puppeteer / agent-browser downloads (the newest of each
-  kind stays), known tool caches (pip, uv, Yarn, Go, node-gyp, TypeScript, Cypress, Prisma…) under
-  `~/.cache` or, on macOS, `~/Library/Caches`, and this user's leftovers in /tmp older than 6 hours.
-  Nothing else in Library is touched.
+- **What can be cleared, exactly (narrowed after two independent deletion-safety reviews).**
+  - Build output inside a workspace or worktree, ask first, per workspace or every idle one:
+    an allow-listed folder (node_modules, .next, .nuxt, .turbo, .vite, .svelte-kit, .parcel-cache,
+    .cache, coverage, test-results, playwright-report, storybook-static, __pycache__,
+    .pytest_cache, and dist/build/out) that git says right now is ignored, with nothing tracked and
+    nothing untracked-but-not-ignored beneath it. Folders outside a git repository: nothing.
+  - Shared caches only through each tool's own command, run as argv (no shell) in its own process
+    group with a timeout, and only while no install or download is running: `npm cache clean
+    --force`, `pnpm store prune`, and `npx --no-install playwright uninstall` (removes only browsers
+    no installed Playwright uses), each offered only when the tool is there.
+  - Shown by size only, never deleted by Hosts: the temporary folder (with Ask an agent), other
+    browser downloads (Puppeteer, agent-browser), npx downloads and tool caches.
 - **Never:** anything git tracks (a source folder called "coverage" isn't even listed), .git, .env
   files, source, `$PASEO_HOME`'s own data, `~/.claude` or `~/.codex`, a whole workspace or worktree
   folder, or another user's files. **Never anything in use:** a folder something has open, or that is
   any process's working directory, or in a workspace where an agent is working or waiting or a build,
   test, install or dev server runs, is refused with the reason. Links are never followed; a path must
   be its own real path, inside its place and on the same device.
-- **How a clear is checked.** Each item is a signed token (HMAC, 30 minutes) bound to its path,
-  device, inode and modification time from the scan. Immediately before it goes every rule is checked
-  again against a fresh read; then it's renamed aside (atomic), confirmed to be the very same inode,
-  and deleted at low priority by a worker that never follows a link, never leaves the device and never
-  removes a .env file or a .git folder (they're left and reported). Every deletion is logged (what,
-  size, when, "confirmed in the Paseo app"; plugins aren't told who), as the daemon's own user.
+- **Tokens.** Each clearable item is a signed token (HMAC, 30 minutes) bound to its path, device,
+  inode and modification time from the scan; every rule is checked again just before it goes.
+  Deletions are logged (what, size, when, "confirmed in the Paseo app"; plugins aren't told who),
+  as the daemon's own user.
 - **Scans are gentle.** On demand (the first visit to Workspaces, then Refresh at the top), cached
   in memory and `$PASEO_HOME/daemon-link/disk-scan.json` with "Checked 4 min ago", one at a time, in a
   child process at nice 19 and (Linux) the idle disk class, time-boxed to 4 minutes with a fair share
   per folder and partial results marked "at least". Plugin calls get 30 seconds, so scans and clears
   run in the background and the app polls, like 0.13's Restart.
-- **Deletion safety, after an independent review (before release).** Simpler, and fail-closed:
-  - Inside a workspace a folder is clearable only when git says it is ignored (every name,
-    node_modules and coverage included) and lists nothing tracked and nothing untracked-but-not-
-    ignored beneath it. No repository, no git, an error or no answer in time: not clearable. A new,
-    uncommitted `src/coverage/route.ts` is never offered.
-  - Shared caches: the item must be a real folder (lstat, not a symlink) directly inside a known
-    cache root that is itself a real folder. Nothing is canonicalised, so a `chromium-1` symlink
-    pointing at your documents can't be followed.
-  - Protected set: refused if it equals, encloses, or (for data folders) is inside home, Paseo's
-    home, ~/.claude, ~/.codex, any workspace or worktree root, Hosts' own folder, or /. An old /tmp
-    folder that contains Paseo's home is now refused.
-  - Deleting: the item is moved into a private quarantine folder beside it (mode 700, same disk),
-    its inode re-checked, put back if a .env file or .git folder turns up inside, then removed with
-    the system `rm -rf` plus `--one-file-system` (GNU) or `-x` (macOS), argv only, `--`, no shell.
-    rm walks physically, so a folder swapped for a symlink mid-delete is unlinked, never followed.
-    The hand-written JavaScript delete walk is gone; a Linux without GNU rm deletes nothing.
-  - In use: any lsof error, timeout or nonzero exit means in use. On Linux a process is skipped only
-    when /proc/<pid>/status shows another user; a same-user process whose cwd or any fd can't be read
-    means in use. No fd cap.
-  - Running work: a fresh look at workspaces, processes and open files before each item. Caches and
-    pnpm's prune wait while any npm/pnpm/npx/yarn/bun/Playwright/agent-browser install or download
-    runs. A build, test or install whose folder can't be told (macOS asks lsof first) blocks every
-    workspace clear, and says so.
-  - One deadline for the whole scan, git's checks included; anything cut off isn't clearable.
-  - Unloading Hosts stops the clear between items and kills the scan walk, find, rm and pnpm with
-    their whole process groups, then waits for them.
-  - Fleet layout: agent-browser downloads are also looked for in /opt/agent-home/.agent-browser.
+- **How a workspace folder is cleared.** Immediately before each folder, with a fresh and COMPLETE
+  snapshot of this user's processes and open files (Linux /proc with the status-uid rule; macOS one
+  ps and one lsof; any gap, error or truncation means nothing is cleared, and Hosts says why):
+  - it's the same real folder as the scan (device, inode, modification time; not a symlink), owned
+    by this user, with no symlink anywhere on its path and its own real path;
+  - it's outside the protected set: never equal to or enclosing home, a workspace or worktree root
+    or /; never equal to, enclosing or inside agents' history, Paseo's data or Hosts' folder;
+  - git's three answers hold; no agent works or waits in its workspace; no build, test, install or
+    dev server runs there, and none runs anywhere whose folder can't be told; nothing has it open.
+  Then it's moved into a private quarantine folder beside it (mode 700, same disk), recorded in
+  `$PASEO_HOME/daemon-link/quarantine.json`, its inode re-checked, walked physically for a .env file,
+  a .git file or folder, a bare repository (HEAD + objects/ + refs/) or anything unreadable (any of
+  those puts it back), and removed with the system `rm -rf` plus `--one-file-system` (GNU) or `-x`
+  (macOS). A clear cut short is put back on the next load when its place is free; otherwise it's
+  listed as "Left over from an interrupted clear" with Ask an agent, never deleted by Hosts.
+- **One deadline** covers the whole scan: reading Paseo's workspaces, finding folders and caches, the
+  walk and git. git, the walk, rm and the tool commands all run in process groups that unloading
+  Hosts kills, and unloading waits for them.
 - **Fewer calls to the daemon.** Passive reads (the sidebar dot, Overview, Processes, Workspaces)
   now share one cached copy of the project and workspace registry for 60 seconds (was 5), with one
   read in flight at a time and a 10-second back-off after a failed read. A busy daemon logged about
@@ -80,12 +69,13 @@ each Paseo workspace with what's running in it, what it uses on disk, and what's
   Workspaces view adds no polling of its own: it reads the same cache.
 - **Help:** "My disk is filling up. What can I clear?" and "What will Hosts never delete?". Old
   `tab=servers` links land on Workspaces. No settings change.
-- **Tests:** a temp home with a git workspace, an unlinked worktree, caches, ~/.claude, Paseo's data
-  and /tmp leftovers, run through the real scanner, the real low-priority worker and the real cleaner:
-  tracked folders, symlink escapes (as the item and on the way), files in use, an incomplete in-use
-  picture, inode swaps, writes since the check, working/waiting agents and running builds,
-  $PASEO_HOME data, ~/.claude, whole folders, tampered and expired tokens, a .env appearing inside,
-  newest-browser and fresh-/tmp refusals, and statfs-only disk readings in the loop.
+- **Tests:** a temp home with a git workspace, a real git worktree no workspace claims, caches,
+  ~/.claude, Paseo's data and /tmp folders, run through the real scanner, worker, quarantine and
+  rm: tracked and untracked work, no repository, git timeouts, symlinks (the item, any ancestor, a
+  cache folder linked into ~/.codex, a folder swapped for a link before rm), bare repositories,
+  files in use, incomplete snapshots, inode swaps, writes since the check, busy workspaces, builds
+  with unknown folders, installs blocking cache commands, protected paths and their parents,
+  quarantine recovery after a crash, and unloading mid-clear.
 
 ## 0.13.0 — 2026-10-07
 

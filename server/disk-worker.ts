@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { lowPriority, type ChildGroup } from "./disk-remove";
+import { lowPriority, type ChildGroup } from "./disk-children";
 
 /**
  * The heavy part of 0.14.0's disk scan (walking folders to measure them),
@@ -37,11 +37,12 @@ export interface WalkResult {
   dev: number;
   ino: number;
   totalBytes: number;
-  /** Newest change anywhere inside (for /tmp's "older than 6 hours"). */
+  /** Newest change anywhere inside. */
   newestMtimeMs: number;
   partial: boolean;
   entries: number;
   hasEnv: boolean;
+  /** A .git file or folder, or a bare repository (HEAD + objects/ + refs/), anywhere inside or at the root itself. */
   hasGit: boolean;
   items: WalkItem[];
 }
@@ -115,7 +116,11 @@ export function diskWorker(fs: FsLike, request: ScanRequest, emit: (result: unkn
         }
       }
       var children: string[] = [];
-      try { children = fs.readdirSync(entry.path); } catch { continue; }
+      try { children = fs.readdirSync(entry.path); } catch { if (item >= 0) result.items[item]!.partial = true; else result.partial = true; continue; }
+      // A bare git repository has no ".git" entry: HEAD, objects/ and refs/ side by side. It counts as .git.
+      if (children.indexOf("HEAD") >= 0 && children.indexOf("objects") >= 0 && children.indexOf("refs") >= 0) {
+        if (item >= 0) result.items[item]!.hasGit = true; else result.hasGit = true;
+      }
       for (var c = 0; c < children.length; c += 1) {
         var child = children[c]!;
         queue.push({ path: join(entry.path, child), rel: entry.rel ? entry.rel + "/" + child : child, depth: entry.depth + 1, item: item, git: inGit });

@@ -2,24 +2,22 @@ import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 
 /**
- * 0.14.0: disk usage and safe cleanup.
+ * 0.14.0: disk usage and safe cleanup, narrowed after two deletion-safety
+ * reviews to what can be cleared without guessing.
  *
- * What fills a dev host's disk is almost always regenerable: dependency
- * folders, build output, test reports, tool caches and old browser
- * downloads. Hosts shows what each Paseo workspace uses, how much of it is
- * safe to clear, and clears it only after asking, CleanMyMac-style.
- *
- * Safe to clear means, and only means:
- *  - inside a workspace: a folder on the allow-list below, not tracked by git,
- *    with no .env file or .git inside; dist/build/out only when git confirms
- *    it ignores them;
- *  - shared caches: npm's cache, old Playwright / Puppeteer / agent-browser
- *    downloads (the newest of each kind is kept), known tool caches, pnpm's
- *    store (pruned by pnpm, never deleted), and this user's leftovers in /tmp
- *    older than 6 hours.
- * Never: anything git tracks, .git, .env files, source, Paseo's own data,
- * ~/.claude or ~/.codex, a whole workspace or worktree folder, or anything
- * a process is using. Pure rules here; the server reads, checks and deletes.
+ * Hosts shows how full the disk is, what each Paseo workspace uses, and the
+ * shared caches and temporary files, by size. It clears exactly two things,
+ * after asking:
+ *  - build output inside a workspace or worktree: an allow-listed folder
+ *    (node_modules, .next, coverage…) that git says is ignored, with nothing
+ *    tracked and nothing untracked-but-not-ignored beneath it;
+ *  - shared caches, only through each tool's own command (npm cache clean,
+ *    pnpm store prune, playwright uninstall).
+ * Everything else (/tmp, browser download folders, other tool caches) is
+ * shown for its size only; an agent can be asked about it. Never: anything
+ * git tracks, .git or a bare repository, .env files, source, Paseo's data,
+ * agents' history, a whole workspace or worktree, or anything in use.
+ * Pure rules here; the server reads, checks and deletes.
  */
 
 // ----------------------------------------------------------- the disk
@@ -127,37 +125,8 @@ export const toolCacheName = (name: string): string | null => {
 /** Names a cache or /tmp scan never offers, whatever they hold: agents' history and Paseo's own state. */
 export const PROTECTED_NAME = /claude|codex|paseo|anthropic|openai/i;
 
-/** /tmp folders are offered only when this old (newest change inside included). */
-export const TMP_MIN_AGE_HOURS = 6;
-/** System and session folders in /tmp that are never leftovers. */
+/** System and session folders in /tmp that aren't listed as leftovers. */
 export const TMP_NEVER = /^(\.X11-unix|\.ICE-unix|\.font-unix|\.XIM-unix|\.Test-unix|tmux-|ssh-|systemd-|snap-|com\.apple|launchd|powerlog|claude|codex|paseo)/i;
-
-/**
- * Versioned downloads (Playwright, Puppeteer, agent-browser): which entries
- * are older versions of a kind that has a newer one. Entries without a
- * version in their name (".links", "b") are never offered.
- * "chromium-1140", "chromium_headless_shell-1140", "mac_arm-131.0.6778.85", "chrome-128.0.1".
- */
-export function olderVersions(names: readonly string[]): string[] {
-  const parsed = names.flatMap((name) => {
-    const match = /^(.*?)[-_]v?(\d+(?:\.\d+)*)$/.exec(name);
-    return match && !name.startsWith(".") ? [{ name, family: match[1]!, version: match[2]!.split(".").map(Number) }] : [];
-  });
-  const newest = new Map<string, number[]>();
-  for (const item of parsed) {
-    const best = newest.get(item.family);
-    if (!best || compareVersions(item.version, best) > 0) newest.set(item.family, item.version);
-  }
-  return parsed.filter((item) => compareVersions(item.version, newest.get(item.family)!) < 0).map((item) => item.name).sort();
-}
-
-export function compareVersions(a: readonly number[], b: readonly number[]): number {
-  for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
-    const diff = (a[index] ?? 0) - (b[index] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  return 0;
-}
 
 /**
  * What Hosts protects, whatever a scan or a token says (0.14.0, reviewed).
@@ -208,7 +177,7 @@ export const WorkspaceStateSchema = z.enum(["working", "waiting", "failed", "idl
 export type WorkspaceState = z.infer<typeof WorkspaceStateSchema>;
 
 export const ClearItemSchema = z.object({
-  /** Signed handle bound to the folder (path, device, inode, scan); null when it may not be cleared. */
+  /** Signed handle bound to the item (path, device, inode, scan); null when it may not be cleared (or is shown for size only). */
   token: z.string().nullable(),
   /** "node_modules", "chromium-1140", "npm cache". */
   name: z.string(),
@@ -223,10 +192,14 @@ export const ClearItemSchema = z.object({
   sharedBytes: z.number().min(0),
   /** The size is a floor: checking it ran out of time. */
   partial: z.boolean(),
-  /** "delete" removes the folder; "prune" asks pnpm to drop what no project uses. */
-  action: z.enum(["delete", "prune"]),
-  /** Why it can't be cleared now, in plain words; null when it can. */
+  /** "delete": a workspace build folder Hosts removes. "command": the tool's own cleanup command. */
+  action: z.enum(["delete", "command"]),
+  /** Why it can't be cleared now, in plain words (or that it's shown for size only); null when it can. */
   blocked: z.string().nullable(),
+  /** The button's words ("Clear…", "Clean with npm…"). */
+  button: z.string().optional(),
+  /** For things Hosts won't clear itself: "Ask an agent" about it (the folder's id in the last check). */
+  askId: z.string().nullable().optional(),
 });
 export type ClearItem = z.infer<typeof ClearItemSchema>;
 
@@ -279,11 +252,13 @@ export const DiskReportSchema = z.object({
   caches: z.array(CacheGroupSchema),
   clearableBytes: z.number().min(0),
   warnings: z.array(z.string()),
+  /** Quarantines an interrupted clear left behind that couldn't be put back: shown, never deleted by Hosts. */
+  leftovers: z.array(z.object({ id: z.string(), name: z.string(), where: z.string(), bytes: z.number().min(0), at: z.number() })).optional(),
 });
 export type DiskReport = z.infer<typeof DiskReportSchema>;
 
 export const DiskPlanSchema = z.object({
-  items: z.array(z.object({ name: z.string(), where: z.string(), owner: z.string(), bytes: z.number(), action: z.enum(["delete", "prune"]), cost: z.string(), ok: z.boolean(), reason: z.string().nullable() })),
+  items: z.array(z.object({ name: z.string(), where: z.string(), owner: z.string(), bytes: z.number(), action: z.enum(["delete", "command"]), cost: z.string(), ok: z.boolean(), reason: z.string().nullable() })),
   bytes: z.number(),
 });
 export type DiskPlan = z.infer<typeof DiskPlanSchema>;

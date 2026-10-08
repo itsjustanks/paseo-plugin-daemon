@@ -98,9 +98,11 @@ export function ClearSheet({ theme, flow }: { theme: Theme; flow: ReturnType<typ
   const refused = sheet?.plan.items.filter((item) => !item.ok) ?? [];
   const groups = new Map<string, typeof ready>();
   for (const item of ready) groups.set(item.name, [...(groups.get(item.name) ?? []), item]);
-  const total = ready.reduce((sum, item) => sum + item.bytes, 0);
-  const prunes = ready.filter((item) => item.action === "prune").length;
-  const title = ready.length ? (prunes === ready.length ? "Prune pnpm's store?" : `Clear ${formatSize(total)}?`) : "Nothing can be cleared";
+  // A tool's own command frees what the tool decides; only folders Hosts clears have a size to promise.
+  const commands = ready.filter((item) => item.action === "command").length;
+  const deletes = ready.filter((item) => item.action === "delete");
+  const deleteBytes = deletes.reduce((sum, item) => sum + item.bytes, 0);
+  const title = ready.length ? (commands === ready.length ? (commands === 1 ? `Run ${ready[0]!.name}'s own clean?` : "Run these tools' own cleans?") : `Clear ${formatSize(deleteBytes)}?`) : "Nothing can be cleared";
   return (
     <Modal title={title} icon={HostIcon ? <HostIcon name="Trash2" size={18} color={theme.colors.statusDanger} /> : undefined} open={sheet !== null} onOpenChange={(open: boolean) => { if (!open) flow.cancel(); }}>
       <Modal.Content>
@@ -121,10 +123,11 @@ export function ClearSheet({ theme, flow }: { theme: Theme; flow: ReturnType<typ
               </View>
             ))}
           </ScrollView>
-          {ready.length ? <Note theme={theme}>Each folder is checked again just before it goes. Anything in use, changed since the check, or tracked by git is left alone, and .env files and .git folders are never deleted. Every step is logged.</Note> : null}
+          {deletes.length ? <Note theme={theme}>Each folder is checked again just before it goes: git must still say it's ignored build output, nothing may be using it, and nothing may be running in its workspace. Folders with a .env file or a git repository inside are put back. Every step is logged.</Note> : null}
+          {commands ? <Note theme={theme}>Each tool cleans its own cache its own way, and only while no install or download is running.</Note> : null}
           <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: SPACE.sm }}>
             <Button theme={theme} label={ready.length ? "Cancel" : "Close"} onPress={flow.cancel} />
-            {ready.length ? <Button theme={theme} label={prunes === ready.length ? "Prune" : `Clear ${formatSize(total)}`} icon="Trash2" danger busy={flow.busy} onPress={flow.confirm} /> : null}
+            {ready.length ? <Button theme={theme} label={commands === ready.length ? "Run it" : `Clear ${formatSize(deleteBytes)}`} icon="Trash2" danger busy={flow.busy} onPress={flow.confirm} /> : null}
           </View>
         </View>
       </Modal.Content>
@@ -140,7 +143,7 @@ export function idleClearable(report: DiskReport | undefined): { items: ClearIte
 }
 
 export function cacheClearable(report: DiskReport | undefined): { items: ClearItem[]; bytes: number } {
-  const items = (report?.caches ?? []).flatMap((group) => group.items).filter((item) => item.token && item.action === "delete");
+  const items = (report?.caches ?? []).flatMap((group) => group.items);
   return { items, bytes: items.reduce((sum, item) => sum + item.bytes, 0) };
 }
 
@@ -191,7 +194,7 @@ export function DiskCard({ theme, report, loading, scanning, flow, onScan, onCac
           </View>
           {caches.bytes > 0 ? (
             <View style={{ gap: SPACE.sm }}>
-              <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${formatSize(caches.bytes)} more in shared caches and temporary files.`}</Text>
+              <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${formatSize(caches.bytes)} more in shared caches and temporary files. Hosts shows them by size; npm, pnpm and Playwright can clean their own.`}</Text>
               <Row><Button theme={theme} label="Review caches" icon="Archive" onPress={onCaches} /></Row>
             </View>
           ) : null}
@@ -266,25 +269,25 @@ function CacheLine({ theme, item, flow }: { theme: Theme; item: ClearItem; flow:
     <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.row, flexWrap: "wrap" }}>
       <View style={{ flex: 1, minWidth: 200, gap: SPACE.hair }}>
         <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${item.name} · ${size(item.bytes, item.partial)}`}</Text>
-        <Meta theme={theme}>{item.blocked ?? `${item.what}. ${item.cost}`}</Meta>
+        <Meta theme={theme}>{item.token ? `${item.what}. ${item.cost}` : item.blocked ?? item.what}</Meta>
       </View>
-      {item.token ? <Button theme={theme} label={item.action === "prune" ? "Prune…" : "Clear…"} busy={flow.busy} accessibilityLabel={`${item.action === "prune" ? "Prune" : "Clear"} ${item.name}`} onPress={() => flow.start([item], item.action === "prune" ? "pnpm removes the packages that none of your projects use. Packages a project needs stay." : `${item.what}.`)} /> : null}
+      {item.token ? <Button theme={theme} label={item.button ?? "Clean…"} busy={flow.busy} accessibilityLabel={`${item.button ?? "Clean"} ${item.name}`.replace("…", "")} onPress={() => flow.start([item], item.cost)} /> : null}
+      {!item.token && item.askId ? <AskAgentButton theme={theme} subject={{ kind: "folder", id: item.askId }} /> : null}
     </View>
   );
 }
 
 /**
- * Shared caches, grouped; each with what clearing costs, and Clear (or Prune
- * for pnpm). A group shows its biggest few; the rest fold away (a temporary
- * folder can hold hundreds of leftovers), and one button clears the group.
+ * Shared caches and temporary files, grouped and sized. Hosts deletes none of
+ * these folders itself: npm's cache, pnpm's store and Playwright's browsers
+ * offer that tool's own clean; /tmp folders offer Ask an agent. A group shows
+ * its biggest few; the rest fold away.
  */
 export function CacheList({ theme, groups, flow }: { theme: Theme; groups: readonly CacheGroup[]; flow: ReturnType<typeof useClear> }) {
-  const all = groups.flatMap((group) => group.items).filter((item) => item.token && item.action === "delete");
   if (!groups.length) return <Meta theme={theme}>No shared caches or leftovers were found.</Meta>;
   return (
     <View style={{ gap: SPACE.section }}>
       {groups.map((group) => {
-        const clearable = group.items.filter((item) => item.token && item.action === "delete");
         const shown = group.items.slice(0, CACHE_ITEMS_SHOWN), more = group.items.slice(CACHE_ITEMS_SHOWN);
         return (
           <View key={group.id} style={{ gap: SPACE.row }}>
@@ -295,11 +298,9 @@ export function CacheList({ theme, groups, flow }: { theme: Theme; groups: reado
                 <View style={{ gap: SPACE.row }}>{more.map((item, index) => <CacheLine key={`more-${item.where}-${index}`} theme={theme} item={item} flow={flow} />)}</View>
               </Disclosure>
             ) : null}
-            {clearable.length > 1 ? <Row><Button theme={theme} label={`Clear these ${clearable.length} (${formatSize(clearable.reduce((sum, item) => sum + item.bytes, 0))})…`} busy={flow.busy} onPress={() => flow.start(clearable, `${group.title}.`)} /></Row> : null}
           </View>
         );
       })}
-      {all.length > 1 && groups.length > 1 ? <Row><Button theme={theme} label={`Clear all ${formatSize(all.reduce((sum, item) => sum + item.bytes, 0))}…`} icon="Trash2" busy={flow.busy} onPress={() => flow.start(all, "Shared caches and temporary leftovers. pnpm's store is pruned separately.")} /></Row> : null}
     </View>
   );
 }
@@ -315,5 +316,24 @@ export function WorkspaceList({ theme, compact, report, flow }: { theme: Theme; 
         {rows.map((workspace) => <WorkspaceRow key={workspace.id} theme={theme} compact={compact} workspace={workspace} flow={flow} checking={report?.scan.state === "running"} />)}
       </Accordion>
     </View>
+  );
+}
+
+/** What an interrupted clear left set aside and couldn't put back: shown with its size; Hosts never deletes it. */
+export function Leftovers({ theme, report }: { theme: Theme; report: DiskReport | undefined }) {
+  const leftovers = report?.leftovers ?? [];
+  if (!leftovers.length) return null;
+  return (
+    <Card theme={theme} title="Left over from an interrupted clear" icon="ArchiveRestore" tone="warning" subtitle="Set aside when a clear was cut short, and not put back because something now sits in its place. Hosts never deletes these itself.">
+      {leftovers.map((item) => (
+        <View key={item.id} style={{ flexDirection: "row", alignItems: "center", gap: SPACE.row, flexWrap: "wrap" }}>
+          <View style={{ flex: 1, minWidth: 200, gap: SPACE.hair }}>
+            <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${item.name} · ${formatSize(item.bytes)}`}</Text>
+            <Meta theme={theme}>{`From ${item.where} · ${ago(item.at)}`}</Meta>
+          </View>
+          <AskAgentButton theme={theme} subject={{ kind: "folder", id: item.id }} />
+        </View>
+      ))}
+    </Card>
   );
 }

@@ -15,7 +15,7 @@ import { syncScreenParams } from "./native";
 import { HelpTab, type SetupCheck } from "./guide";
 import { OverviewTab } from "./home";
 import { Accordion, AccordionItem, IconBadge, MessageBar, QuietLine, SectionTitle, SPACE, TYPE, type Tone } from "./kit";
-import { CacheList, ClearSheet, DiskCard, WorkspaceList, useClear, useDiskReport } from "./workspaces";
+import { CacheList, ClearSheet, DiskCard, Leftovers, WorkspaceList, useClear, useDiskReport } from "./workspaces";
 import { formatSize } from "../shared/disk";
 import { TAB_IDS, TabBar, TabLine, type TabId } from "./navigation";
 import { OpenRow } from "./open-row";
@@ -193,6 +193,7 @@ function DaemonBody(props: DaemonProps) {
             )}
           </View>
         ) : null}
+        <Leftovers theme={theme} report={disk.report} />
         <WorkspaceList theme={theme} compact={layout.compact} report={disk.report} flow={clearFlow} />
         <Accordion theme={theme}>
           {disk.report && disk.report.scan.state !== "never" ? (

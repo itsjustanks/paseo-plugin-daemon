@@ -22,7 +22,9 @@ import { RESTART_WAIT_MS, type RestartOutcome } from "../shared/guard";
 import { DiskScanner, defaultPlaces, disksFor, folderAskText, readWorkspace, type WorkspaceInfo } from "./disk-scan";
 import { formatSize } from "../shared/disk";
 import type { AskContext } from "../shared/ask";
-import { DiskCleaner, DiskTokens } from "./disk-clear";
+import { DiskCleaner, DiskTokens, cacheToolReady } from "./disk-clear";
+import { QuarantineInventory } from "./disk-quarantine";
+import { join } from "node:path";
 import type { DiskJob, DiskPlan, DiskReport } from "../shared/disk";
 
 export interface RuntimeOptions {
@@ -69,22 +71,30 @@ export function createRuntime(options: RuntimeOptions = {}) {
   /** Dev servers the monitor last saw, with absolute folders, for "dev server running here". */
   let lastServices: Array<{ cwd: string | null; label: string; ports: number[] }> | null = null;
   let servicesAt = 0;
-  let disk: { scanner: DiskScanner; cleaner: DiskCleaner; tokens: DiskTokens; places: ReturnType<typeof defaultPlaces> } | null = null;
+  let disk: { scanner: DiskScanner; cleaner: DiskCleaner; tokens: DiskTokens; places: ReturnType<typeof defaultPlaces>; inventory: QuarantineInventory } | null = null;
   if (monitor.internals) {
     const { adapter, uid } = monitor.internals;
     const places = defaultPlaces(adapter.platform);
     const tokens = new DiskTokens();
     const devServersIn = (folder: string) => (lastServices ?? []).filter((service) => service.cwd && (service.cwd === folder || service.cwd.startsWith(`${folder}/`))).map((service) => `${service.label}${service.ports[0] ? ` :${service.ports[0]}` : ""}`);
-    const scanner = new DiskScanner({ places, uid, listWorkspaces: () => listWorkspaces(true), devServersIn });
+    // Every quarantine is recorded; on load, an interrupted clear is put back where its place is free.
+    const inventory = new QuarantineInventory(join(places.stateDir, "quarantine.json"));
+    void inventory.recover().then((outcome) => {
+      for (const entry of outcome.restored) void log.append({ at: Date.now(), action: "disk-clear", source: "disk", pid: null, name: entry.name, owner: null, status: "done", signaled: 0, message: "Put back after an interrupted clear.", bytes: 0 });
+      if (outcome.left.length) console.log(`daemon-link: ${outcome.left.length} folder(s) left from an interrupted clear; listed under Workspaces`);
+    }).catch(() => undefined);
+    const scanner = new DiskScanner({
+      places, uid, listWorkspaces: () => listWorkspaces(true), devServersIn, inventory,
+      pnpmStore: async (group) => { const result = await group.run("pnpm", ["store", "path"], { timeoutMs: 10_000, cwd: places.home }); return result.code === 0 ? result.stdout.trim() || null : null; },
+      toolReady: (kind, group) => cacheToolReady(kind, group, places.home),
+    });
     const cleaner = new DiskCleaner({
-      places, uid, tokens, listWorkspaces: () => listWorkspaces(true),
+      places, uid, tokens, inventory, listWorkspaces: () => listWorkspaces(true),
       unlinkedWorktrees: (claimed) => scanner.unlinkedWorktrees(claimed),
-      processes: async () => (await adapter.sampleProcesses(uid)).processes,
-      pnpmStore: () => new Promise((resolve) => { execFile("pnpm", ["store", "path"], { timeout: 10_000 }, (error, stdout) => resolve(error ? null : String(stdout).trim() || null)); }),
       log: (entry) => log.append(entry),
       cleared: (path, bytes) => scanner.forget(path, bytes),
     });
-    disk = { scanner, cleaner, tokens, places };
+    disk = { scanner, cleaner, tokens, places, inventory };
   }
   if (manager && monitor.internals && options.guard !== false) {
     const { adapter, uid, selfPid, parentPid } = monitor.internals;
@@ -142,13 +152,26 @@ export function createRuntime(options: RuntimeOptions = {}) {
     status: (): DiskJob => disk ? disk.cleaner.status() : { state: "idle", freedBytes: 0, results: [], message: null },
     /** Unloading: stop the scan and the clear job, kill their process groups (walk, find, rm, pnpm), and wait for both. */
     async close(): Promise<void> { if (disk) await Promise.all([disk.scanner.close(), disk.cleaner.close()]); },
-    /** "Ask an agent" about a worktree no workspace uses: only folders the last check found as such. */
+    /** "Ask an agent" about a folder Hosts won't remove itself: an unlinked worktree, a /tmp folder, or what an interrupted clear left. Only ids the last check (or the inventory) knows. */
     async folderAsk(id: string): Promise<AskContext | null> {
-      const folder = disk?.scanner.last()?.folders.find((item) => item.key === id && item.kind === "worktree");
-      if (!folder || !disk) return null;
+      if (!disk) return null;
+      const home = disk.places.home;
+      const ask = (title: string, text: string): AskContext => ({ title, text, workspaceId: null, workspaceName: null, outputFrom: null });
+      if (id.startsWith("leftover:")) {
+        const entry = (await disk.inventory.list().catch(() => [])).find((item) => `leftover:${item.quarantine}` === id);
+        if (!entry) return null;
+        return ask(`Left over from an interrupted clear (${formatSize(entry.bytes)})`, folderAskText({ path: entry.quarantine, bytes: entry.bytes, branch: null, changedAt: entry.at, kind: "leftover", original: entry.original }, home));
+      }
+      if (id.startsWith("tmp:")) {
+        const cache = disk.scanner.last()?.caches.find((item) => item.key === id && item.kind === "tmp");
+        if (!cache) return null;
+        return ask(`A folder in the temporary folder (${formatSize(cache.bytes)})`, folderAskText({ path: cache.path, bytes: cache.bytes, branch: null, changedAt: Math.round(cache.mtimeMs), kind: "tmp" }, home));
+      }
+      const folder = disk.scanner.last()?.folders.find((item) => item.key === id && item.kind === "worktree");
+      if (!folder) return null;
       const branch = await new Promise<string | null>((resolve) => execFile("git", ["-C", folder.path, "rev-parse", "--abbrev-ref", "HEAD"], { timeout: 5000 }, (error, stdout) => resolve(error ? null : String(stdout).trim() || null)));
       const changedAt = folder.result?.newestMtimeMs ? Math.round(folder.result.newestMtimeMs) : null;
-      return { title: `A worktree no workspace uses (${formatSize(folder.result?.totalBytes ?? 0)})`, text: folderAskText({ path: folder.path, bytes: folder.result?.totalBytes ?? 0, branch, changedAt }, disk.places.home), workspaceId: null, workspaceName: null, outputFrom: null };
+      return ask(`A worktree no workspace uses (${formatSize(folder.result?.totalBytes ?? 0)})`, folderAskText({ path: folder.path, bytes: folder.result?.totalBytes ?? 0, branch, changedAt }, home));
     },
   };
   const plugins = {

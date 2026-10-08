@@ -41,9 +41,11 @@ an isolated preview: no real accounts, host addresses, project names, credential
   it. An optional guard (off by default) stops the biggest stoppable job when memory stays nearly
   full for over a minute.
 - **Disk usage and safe cleanup.** Free space at a glance (the sidebar dot warns at 85% full), every
-  Paseo workspace by size with its status and what's safe to clear, and shared caches. Clearing asks
-  first, lists exactly what goes and what it costs, and never touches git-tracked files, .git, .env
-  files, Paseo's or agents' data, whole workspaces, or anything in use.
+  Paseo workspace by size with its status, and shared caches and temporary files by size. Hosts
+  clears only build output git ignores inside a workspace (ask first, checked again just before each
+  folder goes), and cleans npm's, pnpm's and Playwright's caches only through their own commands.
+  It never touches git-tracked files, repositories, .env files, Paseo's or agents' data, whole
+  workspaces, the temporary folder, or anything in use.
 - **Stuck plugins, restarted in one press.** When a Paseo plugin stops answering ("Activity isn't
   answering (12 timeouts in 10 min)"), Paseo can't add, update or reload plugins. Restart reloads just
   that plugin; if Paseo is stuck on it, Hosts stops only that plugin's own process and reloads it. The

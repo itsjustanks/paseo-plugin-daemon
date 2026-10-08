@@ -3,42 +3,43 @@ import { readdir, readFile, readlink } from "node:fs/promises";
 import { mapLimit } from "./platform";
 
 /**
- * What's in use (0.14.0, reviewed: fail closed). Every working directory and
- * open file of this user's processes, read fresh before each item.
- *  - macOS: one `lsof -u <uid>`. Any error, timeout or nonzero exit (even
- *    with partial output) means the picture is incomplete.
- *  - Linux: /proc. A process is skipped only when its /proc/<pid>/status
- *    shows a different user (real and effective uid); a process of this user
- *    whose cwd or any fd can't be read makes the picture incomplete. A process
- *    that exited meanwhile is fine. Every fd is read; there is no cap.
- * Incomplete means "in use": nothing is cleared.
+ * One look at this user's processes for clearing (0.14.0, third pass): what
+ * runs (argv), where (cwd) and what it has open, read in a single pass that is
+ * either COMPLETE or refuses. Clearing and cache commands need a complete
+ * snapshot; anything less is "can't tell", and nothing runs. It doesn't use
+ * the monitor's process reader, which skips what it can't read and caps the
+ * list for display.
+ *
+ *  - Linux, /proc: a process is skipped only when /proc/<pid>/status shows a
+ *    different user (real and effective uid). For this user's processes the
+ *    command line, working directory and every fd must be readable; one that
+ *    exited meanwhile is fine. No cap.
+ *  - macOS: `ps -axo pid=,uid=,command=` for what runs and one
+ *    `lsof -Fpfn -u <uid>` for each process's cwd and open files. Any error,
+ *    timeout or nonzero exit, even with partial output, makes it incomplete.
  */
 
-export interface OpenPaths { paths: string[]; complete: boolean }
+export interface SnapshotProcess { pid: number; argv: string[]; cwd: string | null }
+export interface HostSnapshot { processes: SnapshotProcess[]; open: string[]; complete: boolean; why: string | null }
 
-export interface InUseDeps {
+export interface SnapshotDeps {
   readdir(path: string): Promise<string[]>;
   readlink(path: string): Promise<string>;
   readFile(path: string): Promise<string>;
-  lsof(uid: number): Promise<{ code: number | null; stdout: string }>;
+  run(file: string, args: string[]): Promise<{ code: number | null; stdout: string }>;
 }
 
-const realDeps: InUseDeps = {
+const realDeps: SnapshotDeps = {
   readdir: (path) => readdir(path),
   readlink: (path) => readlink(path),
   readFile: (path) => readFile(path, "utf8"),
-  lsof: (uid) => new Promise((resolve) => {
-    execFile("lsof", ["-nP", "-w", "-Fn", "-u", String(uid)], { timeout: 30_000, killSignal: "SIGKILL", maxBuffer: 128 * 1024 * 1024, env: { PATH: "/usr/sbin:/usr/bin:/bin:/sbin", LC_ALL: "C" } }, (error, stdout) => {
+  run: (file, args) => new Promise((resolve) => {
+    execFile(file, args, { timeout: 30_000, killSignal: "SIGKILL", maxBuffer: 128 * 1024 * 1024, env: { PATH: "/usr/sbin:/usr/bin:/bin:/sbin", LC_ALL: "C" } }, (error, stdout) => {
       const failure = error as (NodeJS.ErrnoException & { code?: number | string }) | null;
       resolve({ code: failure ? (typeof failure.code === "number" ? failure.code : null) : 0, stdout: String(stdout ?? "") });
     });
   }),
 };
-
-/** `lsof -Fn` output: the `n` lines are names; only absolute paths matter. */
-export function parseLsofNames(text: string): string[] {
-  return text.split("\n").filter((line) => line.startsWith("n/")).map((line) => line.slice(1).replace(/ \((deleted|stat: .*)\)$/, ""));
-}
 
 /** `/proc/<pid>/status` → its real and effective uid, or null when the line isn't there. */
 export function statusUids(text: string): number[] | null {
@@ -46,61 +47,76 @@ export function statusUids(text: string): number[] | null {
   return match ? [Number(match[1]), Number(match[2])] : null;
 }
 
+/** `lsof -Fpfn`: per process, its cwd (`fcwd`) and every absolute path it has open. */
+export function parseLsof(text: string): { cwd: Map<number, string>; open: string[] } {
+  const cwd = new Map<number, string>();
+  const open: string[] = [];
+  let pid: number | null = null, fd = "";
+  for (const line of text.split("\n")) {
+    if (line.startsWith("p")) { pid = Number(line.slice(1)); fd = ""; }
+    else if (line.startsWith("f")) fd = line.slice(1);
+    else if (line.startsWith("n/")) {
+      const path = line.slice(1).replace(/ \((deleted|stat: .*)\)$/, "");
+      open.push(path);
+      if (fd === "cwd" && pid !== null) cwd.set(pid, path);
+    }
+  }
+  return { cwd, open };
+}
+
+/** `ps -axo pid=,uid=,command=` rows for one user. Lossy argv (space-split), which is enough to spot a build or an install. */
+export function parsePs(text: string, uid: number): Array<{ pid: number; argv: string[] }> {
+  return text.split("\n").flatMap((line) => {
+    const match = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
+    return match && Number(match[2]) === uid ? [{ pid: Number(match[1]), argv: match[3]!.trim().split(/\s+/) }] : [];
+  });
+}
+
 const gone = (error: unknown) => ["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException)?.code ?? "");
 const clean = (path: string) => path.replace(/ \(deleted\)$/, "");
 
-export async function openPaths(platform: "linux" | "darwin", uid: number, deps: InUseDeps = realDeps): Promise<OpenPaths> {
+export async function hostSnapshot(platform: "linux" | "darwin", uid: number, deps: SnapshotDeps = realDeps): Promise<HostSnapshot> {
+  const incomplete = (why: string): HostSnapshot => ({ processes: [], open: [], complete: false, why });
   if (platform === "darwin") {
-    const result = await deps.lsof(uid).catch(() => ({ code: null, stdout: "" }));
-    return result.code === 0 ? { paths: parseLsofNames(result.stdout), complete: true } : { paths: [], complete: false };
+    const [ps, lsof] = await Promise.all([
+      deps.run("ps", ["-axo", "pid=,uid=,command="]).catch(() => ({ code: null, stdout: "" })),
+      deps.run("lsof", ["-nP", "-w", "-Fpfn", "-u", String(uid)]).catch(() => ({ code: null, stdout: "" })),
+    ]);
+    if (ps.code !== 0) return incomplete("The process list (ps) couldn't be read completely.");
+    if (lsof.code !== 0) return incomplete("What's open (lsof) couldn't be read completely.");
+    const files = parseLsof(lsof.stdout);
+    return { processes: parsePs(ps.stdout, uid).map((row) => ({ ...row, cwd: files.cwd.get(row.pid) ?? null })), open: files.open, complete: true, why: null };
   }
   let pids: string[];
-  try { pids = (await deps.readdir("/proc")).filter((entry) => /^\d+$/.test(entry)); } catch { return { paths: [], complete: false }; }
-  const paths: string[] = [];
-  let complete = true;
+  try { pids = (await deps.readdir("/proc")).filter((entry) => /^\d+$/.test(entry)); } catch { return incomplete("/proc couldn't be read."); }
+  const processes: SnapshotProcess[] = [];
+  const open: string[] = [];
+  let why: string | null = null;
+  const fail = () => { why ??= "Some of this user's processes couldn't be read completely."; };
   await mapLimit(pids, 16, async (pid) => {
     let status: string;
-    try { status = await deps.readFile(`/proc/${pid}/status`); } catch (error) { if (!gone(error)) complete = false; return; }
+    try { status = await deps.readFile(`/proc/${pid}/status`); } catch (error) { if (!gone(error)) fail(); return; }
     const uids = statusUids(status);
-    if (!uids) { complete = false; return; }
-    if (uids.every((id) => id !== uid)) return; // another user's process: Hosts can't clear anything it holds anyway
-    try { paths.push(clean(await deps.readlink(`/proc/${pid}/cwd`))); } catch (error) { if (!gone(error)) complete = false; return; }
-    let fds: string[];
-    try { fds = await deps.readdir(`/proc/${pid}/fd`); } catch (error) { if (!gone(error)) complete = false; return; }
+    if (!uids) { fail(); return; }
+    if (uids.every((id) => id !== uid)) return; // another user's: Hosts never clears anything it holds anyway
+    let cmdline: string, cwd: string, fds: string[];
+    try {
+      cmdline = await deps.readFile(`/proc/${pid}/cmdline`);
+      cwd = clean(await deps.readlink(`/proc/${pid}/cwd`));
+      fds = await deps.readdir(`/proc/${pid}/fd`);
+    } catch (error) { if (!gone(error)) fail(); return; }
+    processes.push({ pid: Number(pid), argv: cmdline.split("\0").filter(Boolean), cwd });
+    open.push(cwd);
     for (const fd of fds) {
-      try { const target = await deps.readlink(`/proc/${pid}/fd/${fd}`); if (target.startsWith("/")) paths.push(clean(target)); }
-      catch (error) { if (!gone(error)) complete = false; }
+      try { const target = await deps.readlink(`/proc/${pid}/fd/${fd}`); if (target.startsWith("/")) open.push(clean(target)); }
+      catch (error) { if (!gone(error)) fail(); }
     }
   });
-  return { paths, complete };
+  return why ? incomplete(why) : { processes, open, complete: true, why: null };
 }
 
 /** The first open path at or beneath `target`, or null. */
 export function usedBeneath(target: string, open: readonly string[]): string | null {
   const prefix = target.endsWith("/") ? target : `${target}/`;
   return open.find((path) => path === target || path.startsWith(prefix)) ?? null;
-}
-
-/**
- * macOS: the working directories of the given processes, from one `lsof -a
- * -d cwd`. Processes it can't answer for stay unknown (null), and unknown
- * blocks workspace clears.
- */
-export function darwinCwds(pids: readonly number[], run: (args: string[]) => Promise<{ code: number | null; stdout: string }> = (args) => new Promise((resolve) => {
-  execFile("lsof", args, { timeout: 15_000, killSignal: "SIGKILL", maxBuffer: 8 * 1024 * 1024, env: { PATH: "/usr/sbin:/usr/bin:/bin:/sbin", LC_ALL: "C" } }, (error, stdout) => {
-    const failure = error as (NodeJS.ErrnoException & { code?: number | string }) | null;
-    resolve({ code: failure ? (typeof failure.code === "number" ? failure.code : null) : 0, stdout: String(stdout ?? "") });
-  });
-})): Promise<Map<number, string>> {
-  if (!pids.length) return Promise.resolve(new Map());
-  return run(["-a", "-nP", "-w", "-d", "cwd", "-Fpn", "-p", pids.join(",")]).then((result) => {
-    const out = new Map<number, string>();
-    if (result.code !== 0) return out;
-    let pid: number | null = null;
-    for (const line of result.stdout.split("\n")) {
-      if (line.startsWith("p")) pid = Number(line.slice(1));
-      else if (line.startsWith("n/") && pid !== null) out.set(pid, line.slice(1));
-    }
-    return out;
-  });
 }

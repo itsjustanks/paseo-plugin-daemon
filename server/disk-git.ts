@@ -24,6 +24,11 @@ export const runGit: GitRun = (cwd, args, input, timeoutMs) => new Promise((reso
   if (input !== undefined) child.stdin?.end(input); else child.stdin?.end();
 });
 
+/** git through a ChildGroup: its own process group, lowest priority, killed on unload. */
+export function groupGit(group: { run(file: string, args: readonly string[], options: { timeoutMs: number; input?: string; env?: NodeJS.ProcessEnv }): Promise<{ code: number | null; stdout: string; stderr: string }> }): GitRun {
+  return (cwd, args, input, timeoutMs) => group.run("git", ["-C", cwd, ...args], { timeoutMs: Math.max(1, timeoutMs), input, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" } });
+}
+
 /** Each answer is true/false, or null when git couldn't give one. */
 export interface GitVerdict { ignored: boolean | null; tracked: boolean | null; untracked: boolean | null }
 

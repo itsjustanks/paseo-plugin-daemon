@@ -1,58 +1,54 @@
-import { execFile } from "node:child_process";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { lstat, readdir, realpath } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
-import {
-  CLEARABLE_NAMES, PROTECTED_NAME, TMP_MIN_AGE_HOURS, TMP_NEVER,
-  formatSize, isClearableName, isIgnoredOnlyName, isWithin, olderVersions, protectedReason, protectedSet, toolCacheName,
-  type DiskJob, type DiskPlan, type ProtectedSet,
-} from "../shared/disk";
+import { lstat } from "node:fs/promises";
+import { basename } from "node:path";
+import { CLEARABLE_NAMES, formatSize, isClearableName, isIgnoredOnlyName, isWithin, protectedReason, type DiskJob, type DiskPlan } from "../shared/disk";
 import type { ActionLogEntry } from "../shared/processes";
-import { gitAllows, gitVerdicts, runGit, type GitRun } from "./disk-git";
-import { darwinCwds, openPaths, usedBeneath, type OpenPaths } from "./disk-inuse";
-import { ChildGroup, quarantineAndRemove, type DeleteResult, type RmFlavour } from "./disk-remove";
-import { busyReason, homeRelative, realRoot, workspaceState, type DiskPlaces, type WorkspaceInfo } from "./disk-scan";
+import { ChildGroup } from "./disk-children";
+import { gitAllows, gitVerdicts, groupGit, type GitRun } from "./disk-git";
+import { hostSnapshot, usedBeneath, type HostSnapshot } from "./disk-inuse";
+import type { QuarantineInventory } from "./disk-quarantine";
+import { quarantineAndRemove, type DeleteResult, type RmFlavour } from "./disk-remove";
+import { busyReason, canonicalChain, homeRelative, protectionFor, workspaceState, type DiskPlaces, type WorkspaceInfo } from "./disk-scan";
 import { classifyJob, isPackageDownload } from "./jobs";
-import type { RawProcess } from "./platform";
 import { isAgentTool } from "./scope";
 
 /**
- * Clearing (0.14.0, reviewed after a deletion-safety audit), after the person
- * has seen the list and confirmed. Designed to fail closed: any doubt is a
- * refusal with the reason.
+ * Clearing (0.14.0, narrowed after two deletion-safety reviews). Exactly two
+ * things can be cleared, after the person has seen the list and confirmed:
  *
- * Each item is a signed token (HMAC, this process's key, 30 minutes) bound to
- * the folder's path, device, inode and modification time from the scan.
- * Immediately before EACH item, with a fresh read of Paseo's workspaces, this
- * user's processes and what they have open:
- *  - it is the same real folder (lstat: device, inode, mtime; not a symlink),
- *    owned by this user, and outside the protected set (never equal to,
- *    inside, or an ancestor of home, Paseo's data, agents' history, Hosts'
- *    folder or any workspace/worktree root);
- *  - workspace items: the path is its own real path, inside a workspace or
- *    worktree root, allow-listed by name, and git says right now that it is
- *    ignored with nothing tracked and nothing untracked-and-unignored in it;
- *    no agent is working or waiting there, no build/test/install/dev server
- *    runs in it, and no such job runs anywhere with an unknown folder;
- *  - shared caches: a real folder directly inside its known root (itself a
- *    real folder), still allow-listed for its kind, and no package manager or
- *    browser download is running for this user;
- *  - nothing has a file in it open or as a working directory, and the
- *    in-use picture is complete.
- * Then disk-remove.ts quarantines it, re-checks the inode, refuses if a .env
- * file or .git folder is inside, and deletes it with the system rm. pnpm's
- * store is only ever pruned by pnpm. Every step is logged, as this user.
- * Unloading Hosts stops the job between items and kills any running rm,
- * find or pnpm with its whole process group.
+ *  1. Build output inside a Paseo workspace or worktree: an allow-listed
+ *     folder that git says right now is ignored, with nothing tracked and
+ *     nothing untracked-but-not-ignored beneath it. Deleted by quarantine and
+ *     the system rm (disk-remove.ts).
+ *  2. Shared caches, only through each tool's own command: `npm cache clean
+ *     --force`, `pnpm store prune`, `npx --no-install playwright uninstall`.
+ *     Hosts deletes no cache folder itself, and nothing in /tmp, browser
+ *     download folders or other caches at all.
+ *
+ * Immediately before each item, with a fresh, COMPLETE snapshot of this
+ * user's processes and open files (anything less refuses, and says why):
+ *  - workspace folders: same real folder as the scan (lstat device, inode,
+ *    mtime; never a symlink), owned by this user; no ancestor is a symlink and
+ *    the path is its own real path; outside the protected set (never equal to
+ *    or enclosing home, a workspace or worktree root or /; never equal to,
+ *    enclosing or inside agents' history, Paseo's data or Hosts' folder);
+ *    inside a workspace or worktree root; git's three answers; no agent
+ *    working or waiting there; no build, test, install or dev server in it,
+ *    and none anywhere whose folder can't be told; nothing open beneath it;
+ *  - cache commands: the tool is still there, and no package install or
+ *    browser download is running for this user.
+ * Every child (git, rm, the commands) runs in its own process group with a
+ * timeout, killed on unload. Every step is logged, as this user.
  */
 
 export const TOKEN_TTL_MS = 30 * 60_000;
-export type ItemKind = "workspace" | "npm" | "pnpm" | "versions" | "tool" | "tmp";
+/** What a token is for: a workspace build folder (deleted), or a cache cleaned by its own tool. */
+export type ItemKind = "workspace" | "npm" | "pnpm" | "playwright";
 
 /** p path, d device, i inode, m mtime (ms, floored), a action, k kind, o owner label, b bytes the scan measured, n display name, c cost words, x expiry. */
-export interface DiskTokenPayload { p: string; d: number; i: number; m: number; a: "delete" | "prune"; k: ItemKind; o: string; b: number; n?: string; c?: string; x: number }
+export interface DiskTokenPayload { p: string; d: number; i: number; m: number; a: "delete" | "command"; k: ItemKind; o: string; b: number; n?: string; c?: string; x: number }
 
-export interface MintInput { path: string; dev: number; ino: number; mtimeMs: number; action: "delete" | "prune"; kind: ItemKind; owner: string; bytes: number; name?: string; cost?: string }
+export interface MintInput { path: string; dev: number; ino: number; mtimeMs: number; action: "delete" | "command"; kind: ItemKind; owner: string; bytes: number; name?: string; cost?: string }
 
 export class DiskTokens {
   constructor(private readonly key: Buffer = randomBytes(32), private readonly now: () => number = Date.now) {}
@@ -82,12 +78,9 @@ export interface CleanerDeps {
   tokens: DiskTokens;
   listWorkspaces(): Promise<WorkspaceInfo[]>;
   unlinkedWorktrees(claimed: readonly string[]): Promise<string[]>;
-  /** This user's processes now. */
-  processes(): Promise<RawProcess[]>;
-  openPaths?(): Promise<OpenPaths>;
-  /** macOS: working directories for these processes (the process list only knows them for listeners). */
-  cwds?(pids: readonly number[]): Promise<Map<number, string>>;
-  pnpmStore(): Promise<string | null>;
+  /** A fresh, complete-or-refusing look at this user's processes and open files. */
+  snapshot?(): Promise<HostSnapshot>;
+  inventory?: QuarantineInventory;
   log(entry: ActionLogEntry): Promise<void>;
   /** Told what was freed, so the cached scan drops it. */
   cleared?(path: string, bytes: number): void;
@@ -95,21 +88,34 @@ export interface CleanerDeps {
   flavour?(): Promise<RmFlavour>;
   /** Tests only: runs after quarantine and checks, just before rm. */
   beforeRemove?(quarantined: string): Promise<void> | void;
-  prune?(group: ChildGroup): Promise<{ ok: boolean; message: string }>;
+  /** Runs a tool's own cache command (tests swap it). */
+  command?(kind: Exclude<ItemKind, "workspace">, group: ChildGroup): Promise<{ ok: boolean; message: string }>;
+  /** Whether a tool's command is available now. */
+  toolReady?(kind: Exclude<ItemKind, "workspace">, group: ChildGroup): Promise<boolean>;
   now?: () => number;
 }
 
 interface Checked { ok: boolean; reason: string | null; payload: DiskTokenPayload | null; name: string; where: string; bytes: number }
 
-/** One fresh look at the host, taken just before an item. */
-export interface Fresh { open: OpenPaths; workspaces: WorkspaceInfo[] | null; processes: RawProcess[] | null }
-
 const safe = async <T>(action: () => Promise<T>, fallback: T): Promise<T> => { try { return await action(); } catch { return fallback; } };
 
-const defaultPrune = async (group: ChildGroup) => {
-  const result = await group.run("pnpm", ["store", "prune"], { timeoutMs: 15 * 60_000, env: { ...process.env, NO_COLOR: "1" } });
-  return result.code === 0 ? { ok: true, message: "pnpm removed the packages no project uses." } : { ok: false, message: result.killed ? "Pruning was stopped before it finished." : "pnpm couldn't prune its store." };
+/** Each tool's own cache command: argv only, no shell, its own process group, a timeout. */
+export const CACHE_COMMANDS: Record<Exclude<ItemKind, "workspace">, { file: string; args: string[]; check: string[]; done: string }> = {
+  npm: { file: "npm", args: ["cache", "clean", "--force"], check: ["--version"], done: "npm cleared its download cache." },
+  pnpm: { file: "pnpm", args: ["store", "prune"], check: ["--version"], done: "pnpm removed the packages no project uses." },
+  playwright: { file: "npx", args: ["--no-install", "playwright", "uninstall"], check: ["--no-install", "playwright", "--version"], done: "Playwright removed the browsers no installed Playwright uses." },
 };
+
+export async function runCacheCommand(kind: Exclude<ItemKind, "workspace">, group: ChildGroup, home: string): Promise<{ ok: boolean; message: string }> {
+  const command = CACHE_COMMANDS[kind];
+  const result = await group.run(command.file, command.args, { timeoutMs: 15 * 60_000, cwd: home, env: { ...process.env, NO_COLOR: "1", CI: "1" } });
+  return result.code === 0 ? { ok: true, message: command.done } : { ok: false, message: result.killed || result.timedOut ? "It was stopped before it finished." : `${command.file} couldn't finish it.` };
+}
+
+export async function cacheToolReady(kind: Exclude<ItemKind, "workspace">, group: ChildGroup, home: string): Promise<boolean> {
+  const command = CACHE_COMMANDS[kind];
+  return (await group.run(command.file, command.check, { timeoutMs: 20_000, cwd: home, env: { ...process.env, NO_COLOR: "1", CI: "1" } })).code === 0;
+}
 
 export class DiskCleaner {
   private job: DiskJob = { state: "idle", freedBytes: 0, results: [], message: null };
@@ -122,25 +128,22 @@ export class DiskCleaner {
   get isRunning(): boolean { return this.running !== null; }
   status(): DiskJob { return { ...this.job, results: [...this.job.results] }; }
 
-  /** Unloading: stop between items, kill any running rm/find/pnpm group, and wait for the job to end. */
+  /** Unloading: stop between items, kill any running git/rm/command group, and wait for the job to end. */
   async close(): Promise<void> { this.group.killAll(); await this.wait(); }
 
   /** The ask-first list: light checks only (the full checks run again just before each item goes). */
   async preview(tokens: readonly string[]): Promise<DiskPlan> {
     const items: DiskPlan["items"] = [];
-    const guard = await this.protection(await safe(() => this.deps.listWorkspaces(), [] as WorkspaceInfo[]));
+    const guard = await protectionFor(this.deps.places, await safe(() => this.deps.listWorkspaces(), [] as WorkspaceInfo[]), this.deps.unlinkedWorktrees);
     for (const token of tokens) {
       const payload = this.deps.tokens.verify(token);
       if (!payload) { items.push({ name: "Folder", where: "", owner: "", bytes: 0, action: "delete", cost: "", ok: false, reason: "This list is out of date. Check again and try once more." }); continue; }
+      const base = { name: payload.n ?? basename(payload.p), where: homeRelative(payload.p, this.deps.places.home), owner: payload.o, bytes: payload.b, action: payload.a };
+      if (payload.a === "command") { items.push({ ...base, cost: payload.c ?? "", ok: true, reason: null }); continue; }
       const st = await safe(() => lstat(payload.p), null);
       const same = !!st && st.dev === payload.d && st.ino === payload.i && !st.isSymbolicLink() && st.isDirectory();
-      const words = CLEARABLE_NAMES[basename(payload.p)];
       const blocked = protectedReason(payload.p, guard);
-      items.push({
-        name: payload.n ?? basename(payload.p), where: homeRelative(payload.p, this.deps.places.home), owner: payload.o, bytes: payload.b, action: payload.a,
-        cost: payload.c ?? (payload.a === "prune" ? "Removes only packages no project uses." : words?.cost ?? "Made again when it's needed."),
-        ok: same && !blocked, reason: !st ? "It's already gone." : !same ? "It changed since it was checked. Check again first." : blocked,
-      });
+      items.push({ ...base, cost: payload.c ?? CLEARABLE_NAMES[basename(payload.p)]?.cost ?? "Made again when it's needed.", ok: same && !blocked, reason: !st ? "It's already gone." : !same ? "It changed since it was checked. Check again first." : blocked });
     }
     return { items, bytes: items.filter((item) => item.ok).reduce((sum, item) => sum + item.bytes, 0) };
   }
@@ -157,39 +160,29 @@ export class DiskCleaner {
   }
   wait(): Promise<void> { return this.running ?? Promise.resolve(); }
 
-  /** A fresh look at the host: open files, Paseo's workspaces, this user's processes (with macOS cwds for jobs). */
-  async fresh(): Promise<Fresh> {
-    const [open, workspaces, processes] = await Promise.all([
-      (this.deps.openPaths ?? (() => openPaths(this.deps.places.platform, this.deps.uid)))().catch(() => ({ paths: [], complete: false })),
-      safe(() => this.deps.listWorkspaces(), null as WorkspaceInfo[] | null),
-      safe(() => this.deps.processes(), null as RawProcess[] | null),
-    ]);
-    if (processes && this.deps.places.platform === "darwin") {
-      const unknown = processes.filter((proc) => !proc.cwd && (classifyJob(proc.argv) !== null || isAgentTool(proc))).map((proc) => proc.pid);
-      const found = await safe(() => (this.deps.cwds ?? darwinCwds)(unknown), new Map<number, string>());
-      for (const proc of processes) if (!proc.cwd && found.has(proc.pid)) proc.cwd = found.get(proc.pid)!;
-    }
-    return { open, workspaces, processes };
+  private snapshot(): Promise<HostSnapshot> {
+    return (this.deps.snapshot ?? (() => hostSnapshot(this.deps.places.platform, this.deps.uid)))().catch(() => ({ processes: [], open: [], complete: false, why: "This user's processes couldn't be read." }));
   }
 
   private async run(tokens: readonly string[]): Promise<void> {
     for (const token of tokens) {
       if (this.group.closed) { this.job.message = "Hosts was unloaded; clearing stopped between items."; return; }
-      const checked = await this.check(token, await this.fresh());
+      const checked = await this.check(token);
       const owner = checked.payload?.o ?? "";
       if (!checked.ok) {
         this.job.results.push({ name: checked.name, owner, ok: false, bytes: 0, message: checked.reason ?? "Not cleared." });
-        if (checked.payload) await this.record(checked.payload.a === "prune" ? "disk-prune" : "disk-clear", checked, "denied", 0, `Not cleared: ${checked.reason}`);
+        if (checked.payload) await this.record(checked.payload.a === "command" ? "disk-prune" : "disk-clear", checked, "denied", 0, `Not cleared: ${checked.reason}`);
         continue;
       }
       const payload = checked.payload!;
-      if (payload.a === "prune") {
-        const pruned = await (this.deps.prune ?? defaultPrune)(this.group);
-        this.job.results.push({ name: checked.name, owner, ok: pruned.ok, bytes: 0, message: pruned.message });
-        await this.record("disk-prune", checked, pruned.ok ? "done" : "failed", 0, `${pruned.message} Confirmed in the Paseo app.`);
+      if (payload.a === "command") {
+        const kind = payload.k as Exclude<ItemKind, "workspace">;
+        const outcome = await (this.deps.command ?? ((k, group) => runCacheCommand(k, group, this.deps.places.home)))(kind, this.group);
+        this.job.results.push({ name: checked.name, owner, ok: outcome.ok, bytes: 0, message: outcome.message });
+        await this.record("disk-prune", checked, outcome.ok ? "done" : "failed", 0, `${outcome.message} (${CACHE_COMMANDS[kind].file} ${CACHE_COMMANDS[kind].args.join(" ")}) Confirmed in the Paseo app.`);
         continue;
       }
-      const outcome: DeleteResult = await quarantineAndRemove(payload.p, { dev: payload.d, ino: payload.i, bytes: payload.b }, { group: this.group, flavour: this.deps.flavour, beforeRemove: this.deps.beforeRemove });
+      const outcome: DeleteResult = await quarantineAndRemove(payload.p, { dev: payload.d, ino: payload.i, bytes: payload.b }, { group: this.group, flavour: this.deps.flavour, beforeRemove: this.deps.beforeRemove, inventory: this.deps.inventory });
       this.job.freedBytes += outcome.removedBytes;
       if (outcome.ok) this.deps.cleared?.(payload.p, payload.b);
       const message = outcome.ok ? `Cleared ${checked.name} (${formatSize(outcome.removedBytes)}).` : outcome.error ?? "It wasn't cleared.";
@@ -197,23 +190,27 @@ export class DiskCleaner {
       await this.record("disk-clear", checked, outcome.ok ? "done" : "failed", outcome.removedBytes, `${message} Confirmed in the Paseo app.`);
     }
     const ok = this.job.results.filter((result) => result.ok).length;
-    this.job.message = `${ok} of ${tokens.length} cleared, ${formatSize(this.job.freedBytes)} freed.${ok < tokens.length ? " The rest were left; each says why." : ""}`;
+    this.job.message = `${ok} of ${tokens.length} done, ${formatSize(this.job.freedBytes)} freed.${ok < tokens.length ? " The rest were left; each says why." : ""}`;
   }
 
-  private async protection(workspaces: readonly WorkspaceInfo[]): Promise<ProtectedSet> {
-    const roots = (await Promise.all(workspaces.map((workspace) => safe(() => realpath(workspace.directory), workspace.directory)))).concat(workspaces.map((workspace) => workspace.directory));
-    const worktrees = await safe(() => this.deps.unlinkedWorktrees(roots), [] as string[]);
-    const { places } = this.deps;
-    const aliases = await Promise.all([places.home, places.paseoHome, places.stateDir].map((path) => safe(() => realpath(path), path)));
-    return protectedSet(places, roots, worktrees, aliases);
-  }
-
-  /** Every rule, against the fresh look. Public so tests can ask about one item. */
-  async check(token: string, now: Fresh): Promise<Checked> {
+  /** Every rule, against a fresh look. Public so tests can ask about one item. */
+  async check(token: string): Promise<Checked> {
     const { places, uid } = this.deps;
     const payload = this.deps.tokens.verify(token);
     const no = (reason: string): Checked => ({ ok: false, reason, payload, name: payload ? payload.n ?? basename(payload.p) : "Folder", where: payload ? homeRelative(payload.p, places.home) : "", bytes: 0 });
     if (!payload) return no("This list is out of date. Check again and try once more.");
+    const snap = await this.snapshot();
+    if (!snap.complete) return no(`Hosts couldn't get a complete picture of what's running (${(snap.why ?? "unknown reason").replace(/\.$/, "")}), so it cleared nothing.`);
+
+    if (payload.a === "command") {
+      if (payload.k === "workspace") return no("Hosts doesn't know how to clear this.");
+      const download = snap.processes.find((proc) => isPackageDownload(proc.argv));
+      if (download) return no("A package install or browser download is running and may be using its cache. Try again once it's finished.");
+      if (!await (this.deps.toolReady ?? ((k, group) => cacheToolReady(k, group, places.home)))(payload.k, this.group)) return no(`${CACHE_COMMANDS[payload.k].file} isn't available here any more.`);
+      return { ok: true, reason: null, payload, name: payload.n ?? payload.k, where: homeRelative(payload.p, places.home), bytes: payload.b };
+    }
+    if (payload.k !== "workspace" || payload.a !== "delete") return no("Hosts doesn't know how to clear this.");
+
     const path = payload.p;
     const st = await safe(() => lstat(path), null);
     if (!st) return no("It's already gone.");
@@ -222,55 +219,26 @@ export class DiskCleaner {
     if (st.dev !== payload.d || st.ino !== payload.i) return no("It isn't the same folder that was checked any more. Check again first.");
     if (Math.floor(st.mtimeMs) !== payload.m) return no("It changed since it was checked (something wrote to it). Check again first.");
     if (st.uid !== uid) return no("It belongs to another user, and Hosts only clears this user's files.");
-    if (!now.workspaces) return no("Paseo's workspaces couldn't be read, so Hosts can't tell what's protected right now.");
-    if (!now.processes) return no("This host's processes couldn't be read, so Hosts can't tell what's running.");
-    const guard = await this.protection(now.workspaces);
+    if (!await canonicalChain(path)) return no("There's a link somewhere on the way to it, or it isn't where its name says, so Hosts leaves it.");
+    const workspaces = await safe(() => this.deps.listWorkspaces(), null as WorkspaceInfo[] | null);
+    if (!workspaces) return no("Paseo's workspaces couldn't be read, so Hosts can't tell what's protected right now.");
+    const guard = await protectionFor(places, workspaces, this.deps.unlinkedWorktrees);
     const protectedWhy = protectedReason(path, guard);
     if (protectedWhy) return no(protectedWhy);
     const name = basename(path);
-    const parent = dirname(path);
-
-    if (payload.k === "workspace") {
-      if ((await safe(() => realpath(path), null)) !== path) return no("Its real location is somewhere else (a link on the way), so Hosts leaves it.");
-      const folders = await Promise.all(now.workspaces.map(async (workspace) => ({ workspace, path: await safe(() => realpath(workspace.directory), null) })));
-      const claimed = folders.filter((folder) => folder.path).map((folder) => folder.path!);
-      const unlinked = await safe(() => this.deps.unlinkedWorktrees(claimed), [] as string[]);
-      const root = [...claimed, ...unlinked].filter((folder) => isWithin(path, folder)).sort((a, b) => b.length - a.length)[0] ?? null;
-      if (!root) return no("It isn't inside one of your Paseo workspaces any more.");
-      if (!isClearableName(name) && !isIgnoredOnlyName(name)) return no("It isn't on the list of folders Hosts may clear.");
-      const busy = folders.filter((folder) => folder.path === root).map((folder) => busyReason(workspaceState(folder.workspace.status), folder.workspace.devServers)).find(Boolean);
-      if (busy) return no(busy);
-      const jobs = now.processes.filter((proc) => classifyJob(proc.argv) !== null);
-      if (jobs.some((proc) => !proc.cwd)) return no("A build, test or install is running and Hosts can't tell in which folder, so it won't clear any workspace until that finishes.");
-      const worker = now.processes.find((proc) => proc.cwd && (proc.cwd === root || isWithin(proc.cwd, root)) && (isAgentTool(proc) || classifyJob(proc.argv) !== null));
-      if (worker) return no(`Something is running in this workspace (${classifyJob(worker.argv)?.label ?? "an agent"}). Clear it once that's finished.`);
-      const verdict = (await safe(() => gitVerdicts([path], this.deps.git ?? runGit, this.now() + 30_000), new Map())).get(path);
-      if (!gitAllows(verdict)) return no("Git didn't confirm it's ignored build output with nothing else inside, so Hosts leaves it.");
-    } else {
-      if (PROTECTED_NAME.test(name)) return no("Agents' and Paseo's own files are never cleared.");
-      const download = now.processes.find((proc) => isPackageDownload(proc.argv));
-      if (download) return no("A package install or browser download is running and may be using its caches. Try again once it's finished.");
-      // A real folder directly inside a known root that is itself a real folder. No canonicalising.
-      const roots = payload.k === "npm" ? [join(places.home, ".npm")]
-        : payload.k === "versions" ? places.browserRoots
-        : payload.k === "tool" ? places.cacheBases
-        : payload.k === "tmp" ? places.tmpDirs
-        : payload.k === "pnpm" ? [dirname(path)] : [];
-      if (!roots.includes(parent) || !await realRoot(parent)) return no("It isn't directly inside a cache folder Hosts knows, so Hosts leaves it.");
-      if (payload.k === "npm" && name !== "_cacache" && name !== "_npx") return no("It isn't npm's cache.");
-      if (payload.k === "versions" && !olderVersions(await safe(() => readdir(parent), [] as string[])).includes(name)) return no("It's the newest download of its kind now, so it stays.");
-      if (payload.k === "tool" && !toolCacheName(name)) return no("It isn't one of the tool caches Hosts knows.");
-      if (payload.k === "tmp") {
-        if (TMP_NEVER.test(name)) return no("It isn't a leftover in the temporary folder.");
-        if ((this.now() - st.mtimeMs) / 3_600_000 < TMP_MIN_AGE_HOURS) return no("It changed in the last 6 hours, so it may still be in use.");
-      }
-      if (payload.k === "pnpm") {
-        const store = await safe(() => this.deps.pnpmStore(), null);
-        if (!store || store !== path || payload.a !== "prune") return no("It isn't pnpm's store, or pnpm isn't available.");
-      } else if (payload.a !== "delete") return no("Hosts doesn't know how to clear this.");
-    }
-    if (!now.open.complete) return no("Hosts couldn't check what's in use right now, so it left this alone.");
-    if (usedBeneath(path, now.open.paths)) return no("Something has a file in it open right now. Try again once it's closed.");
+    if (!isClearableName(name) && !isIgnoredOnlyName(name)) return no("It isn't on the list of folders Hosts may clear.");
+    const roots = [...guard.workspaceRoots, ...guard.worktreeRoots];
+    const root = roots.filter((folder) => isWithin(path, folder)).sort((a, b) => b.length - a.length)[0] ?? null;
+    if (!root) return no("It isn't inside one of your Paseo workspaces any more.");
+    const busy = workspaces.filter((workspace) => guard.byRoot.get(root)?.includes(workspace.id)).map((workspace) => busyReason(workspaceState(workspace.status), workspace.devServers)).find(Boolean);
+    if (busy) return no(busy);
+    const jobs = snap.processes.filter((proc) => classifyJob(proc.argv) !== null);
+    if (jobs.some((proc) => !proc.cwd)) return no("A build, test or install is running and Hosts can't tell in which folder, so it won't clear any workspace until that finishes.");
+    const worker = snap.processes.find((proc) => proc.cwd && (proc.cwd === root || isWithin(proc.cwd, root)) && (isAgentTool({ argv: proc.argv, comm: "" } as never) || classifyJob(proc.argv) !== null));
+    if (worker) return no(`Something is running in this workspace (${classifyJob(worker.argv)?.label ?? "an agent"}). Clear it once that's finished.`);
+    const verdict = (await safe(() => gitVerdicts([path], this.deps.git ?? groupGit(this.group), this.now() + 30_000), new Map())).get(path);
+    if (!gitAllows(verdict)) return no("Git didn't confirm it's ignored build output with nothing else inside, so Hosts leaves it.");
+    if (usedBeneath(path, snap.open)) return no("Something has a file in it open right now. Try again once it's closed.");
     return { ok: true, reason: null, payload, name: payload.n ?? name, where: homeRelative(path, places.home), bytes: payload.b };
   }
 
