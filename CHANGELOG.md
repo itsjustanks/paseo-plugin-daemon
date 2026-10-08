@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.14.0 — 2026-10-08
+
+Disk usage and safe cleanup, CleanMyMac-style, by workspace. "Dev servers" became **Workspaces**:
+each Paseo workspace with what's running in it, what it uses on disk, and what's safe to clear.
+
+- **Disk at a glance.** Free and used space on the disk your workspaces live on, read with statfs
+  every 10 seconds by the check loop (statfs and stat only, never a folder walk there). Overview gets
+  a Disk row; the sidebar dot warns at 85% full ("Clearing build files and caches under Workspaces can
+  help") and turns red at 95% ("Agents will start failing to write files soon").
+- **By workspace.** Every Paseo workspace from the SDK, biggest first: its size, how much is safe to
+  clear, its status (agent working now, waiting for you, idle since…), branch, and dev servers.
+  Workspaces sharing one folder are one row ("Used by 3 workspaces"). Worktrees under
+  `$PASEO_HOME/worktrees` that no workspace claims are shown as "Not linked to a workspace", with
+  their size and **Ask an agent** (it checks for unpushed work and removes the worktree properly with
+  git, after asking). Hosts never removes a worktree itself: the SDK has no remove for an archived
+  one, and an rm could lose work. Folders and paths appear only when a row is opened.
+- **Clear what's safe, ask first.** Per workspace, or every idle workspace at once ("Clear 4.2 GB
+  from 6 workspaces…"). One sheet lists exactly what goes, grouped by kind, with its size and what
+  clearing costs ("Comes back on the next install (a few minutes)"), and what won't go and why; then
+  one confirm. Inside a workspace only regenerable folders, by name: node_modules, .next, .nuxt,
+  .turbo, .vite, .svelte-kit, .parcel-cache, .cache, coverage, test-results, playwright-report,
+  storybook-static, __pycache__, .pytest_cache; dist/build/out only when git confirms it ignores them.
+  pnpm's hard-linked node_modules say how much is shared with the store, so the size freed is honest.
+- **Shared caches** (folded): npm's cache and npx downloads, pnpm's store (pruned by `pnpm store
+  prune`, never deleted), older Playwright / Puppeteer / agent-browser downloads (the newest of each
+  kind stays), known tool caches (pip, uv, Yarn, Go, node-gyp, TypeScript, Cypress, Prisma…) under
+  `~/.cache` or, on macOS, `~/Library/Caches`, and this user's leftovers in /tmp older than 6 hours.
+  Nothing else in Library is touched.
+- **Never:** anything git tracks (a source folder called "coverage" isn't even listed), .git, .env
+  files, source, `$PASEO_HOME`'s own data, `~/.claude` or `~/.codex`, a whole workspace or worktree
+  folder, or another user's files. **Never anything in use:** a folder something has open, or that is
+  any process's working directory, or in a workspace where an agent is working or waiting or a build,
+  test, install or dev server runs, is refused with the reason. Links are never followed; a path must
+  be its own real path, inside its place and on the same device.
+- **How a clear is checked.** Each item is a signed token (HMAC, 30 minutes) bound to its path,
+  device, inode and modification time from the scan. Immediately before it goes every rule is checked
+  again against a fresh read; then it's renamed aside (atomic), confirmed to be the very same inode,
+  and deleted at low priority by a worker that never follows a link, never leaves the device and never
+  removes a .env file or a .git folder (they're left and reported). Every deletion is logged (what,
+  size, when, "confirmed in the Paseo app"; plugins aren't told who), as the daemon's own user.
+- **Scans are gentle.** On demand (the first visit to Workspaces, then Refresh at the top), cached
+  in memory and `$PASEO_HOME/daemon-link/disk-scan.json` with "Checked 4 min ago", one at a time, in a
+  child process at nice 19 and (Linux) the idle disk class, time-boxed to 4 minutes with a fair share
+  per folder and partial results marked "at least". Plugin calls get 30 seconds, so scans and clears
+  run in the background and the app polls, like 0.13's Restart.
+- **Fewer calls to the daemon.** Passive reads (the sidebar dot, Overview, Processes, Workspaces)
+  now share one cached copy of the project and workspace registry for 60 seconds (was 5), with one
+  read in flight at a time and a 10-second back-off after a failed read. A busy daemon logged about
+  110 slow `project.list` requests an hour from Hosts polling. User actions (Refresh, stop, share or
+  receive a project, start a disk check, clear, the memory guard's stop) still read it fresh, and the
+  Workspaces view adds no polling of its own: it reads the same cache.
+- **Help:** "My disk is filling up. What can I clear?" and "What will Hosts never delete?". Old
+  `tab=servers` links land on Workspaces. No settings change.
+- **Tests:** a temp home with a git workspace, an unlinked worktree, caches, ~/.claude, Paseo's data
+  and /tmp leftovers, run through the real scanner, the real low-priority worker and the real cleaner:
+  tracked folders, symlink escapes (as the item and on the way), files in use, an incomplete in-use
+  picture, inode swaps, writes since the check, working/waiting agents and running builds,
+  $PASEO_HOME data, ~/.claude, whole folders, tampered and expired tokens, a .env appearing inside,
+  newest-browser and fresh-/tmp refusals, and statfs-only disk readings in the loop.
+
 ## 0.13.0 — 2026-10-07
 
 The two things that took a daemon down this week, caught early, each with a one-press fix. A plugin

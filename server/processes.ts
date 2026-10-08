@@ -152,7 +152,8 @@ export class ProcessManager {
     const now = this.clock.now();
     if (!this.fresh || now - this.fresh.at > 1000) {
       this.options.collector.invalidate();
-      if (this.options.scope) await this.options.scope.refresh().catch(() => undefined);
+      // A stop is a user action: the registry is read fresh, not from the passive cache.
+      if (this.options.scope) await this.options.scope.refresh(true).catch(() => undefined);
       this.fresh = { at: now, base: this.options.collector.collect() };
     }
     const base = await this.fresh.base;
@@ -401,7 +402,7 @@ export class ProcessManager {
     this.fresh = null;
     this.options.collector.invalidate();
     // The project list comes through the daemon, which may be starved right now: without it only Paseo-started jobs qualify.
-    if (this.options.scope) await Promise.race([this.options.scope.refresh().catch(() => undefined), new Promise((resolve) => { const timer = setTimeout(resolve, 5000); (timer as { unref?: () => void }).unref?.(); })]);
+    if (this.options.scope) await Promise.race([this.options.scope.refresh(true).catch(() => undefined), new Promise((resolve) => { const timer = setTimeout(resolve, 5000); (timer as { unref?: () => void }).unref?.(); })]);
     const base = await this.options.collector.collect();
     const byPid = new Map(base.details.map((detail) => [detail.raw.pid, detail.raw]));
     const floor = (base.memoryBasisBytes * minPercent) / 100;

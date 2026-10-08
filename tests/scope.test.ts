@@ -1,6 +1,6 @@
 import type { PaseoApi } from "@getpaseo/client";
 import { describe, expect, it, vi } from "vitest";
-import { ProjectScope, containsDirectory } from "../server/scope";
+import { FAILURE_BACKOFF_MS, PASSIVE_TTL_MS, ProjectScope, containsDirectory } from "../server/scope";
 import { createMonitorHandlers } from "../server/handlers";
 import { ProcessGuard } from "../server/safety";
 import { hashArgv } from "../server/redaction";
@@ -16,6 +16,61 @@ function setup() {
   scope.bind(api as unknown as PaseoApi);
   return { scope, api, project };
 }
+
+describe("one shared registry read for passive polling (0.14.0)", () => {
+  function timed() {
+    let now = 1_000_000;
+    const project = { projectId: "website", projectDisplayName: "Website", projectRootPath: "/home/alice/app" };
+    const api = {
+      projects: { list: vi.fn(async () => ({ projects: [project] })) },
+      workspaces: { list: vi.fn(async (_options?: unknown) => ({ entries: [{ id: "w1", projectId: "website", projectDisplayName: "Website", projectRootPath: "/home/alice/app", workspaceDirectory: "/home/alice/app", name: "Main", scripts: [] }] as any[], pageInfo: { hasMore: false, nextCursor: null as string | null } })) },
+    };
+    const scope = new ProjectScope(async (path) => path, "/home/alice", () => now);
+    scope.bind(api as unknown as PaseoApi);
+    return { scope, api, advance: (ms: number) => { now += ms; } };
+  }
+
+  it("two passive polls 10 s apart make one projects.list call", async () => {
+    const { scope, api, advance } = timed();
+    await scope.refresh();
+    advance(10_000);
+    await scope.refresh();
+    expect(api.projects.list).toHaveBeenCalledTimes(1);
+    expect(api.workspaces.list).toHaveBeenCalledTimes(1);
+    // The Workspaces view reads the same cache: no extra daemon call.
+    expect(await scope.workspaceDescriptors()).toHaveLength(1);
+    expect(api.projects.list).toHaveBeenCalledTimes(1);
+    // After the TTL a passive poll reads again.
+    advance(PASSIVE_TTL_MS);
+    await scope.refresh();
+    expect(api.projects.list).toHaveBeenCalledTimes(2);
+  });
+
+  it("user actions (force) always read fresh, and concurrent reads share one call", async () => {
+    const { scope, api, advance } = timed();
+    await scope.refresh();
+    advance(1000);
+    await scope.refresh(true);
+    expect(api.projects.list).toHaveBeenCalledTimes(2);
+    await scope.workspaceDescriptors(true);
+    expect(api.projects.list).toHaveBeenCalledTimes(3);
+    advance(PASSIVE_TTL_MS + 1);
+    await Promise.all([scope.refresh(), scope.refresh(), scope.workspaceDescriptors()]);
+    expect(api.projects.list).toHaveBeenCalledTimes(4);
+  });
+
+  it("after a failed read, passive polls back off; a forced read still tries", async () => {
+    const { scope, api, advance } = timed();
+    api.projects.list.mockRejectedValueOnce(new Error("busy"));
+    await expect(scope.refresh()).rejects.toThrow();
+    advance(1000);
+    await expect(scope.refresh()).rejects.toThrow();
+    expect(api.projects.list).toHaveBeenCalledTimes(1);
+    await scope.refresh(true);
+    expect(api.projects.list).toHaveBeenCalledTimes(2);
+    advance(FAILURE_BACKOFF_MS);
+  });
+});
 
 describe("Paseo project scope", () => {
   it("matches canonical project directories and rejects prefix lookalikes, missing cwd, infrastructure, and outside services", async () => {

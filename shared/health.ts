@@ -4,6 +4,7 @@ import type { Snapshot } from "./contracts";
 import type { ProcessReport } from "./processes";
 import { WatchResultSchema, type WatchResult } from "./watch";
 import { AUTO_STOP_NOTICE_MINUTES, type GuardState } from "./guard";
+import { DiskSpaceSchema } from "./disk";
 import type { LinkState, Profile, Tunnel } from "./link";
 import { cwdWithinDirectory, filterWorkspaceProcesses, workspacePorts, type WorkspaceProcessLike, type WorkspaceTarget } from "./workspace-filter";
 
@@ -29,6 +30,7 @@ import { cwdWithinDirectory, filterWorkspaceProcesses, workspacePorts, type Work
  *  - a watched service on another machine is slow or down
  *  - (0.13.0) a Paseo plugin isn't answering, memory pressure is rising (the
  *    check loop's reading), or the optional guard just stopped a runaway
+ *  - (0.14.0) the disk the workspaces live on is 85% full or more
  * Nothing here contains tokens, URLs, or raw command lines; issues carry only
  * ports, a home-relative cwd, and fixed copy.
  */
@@ -44,6 +46,8 @@ export const HealthIssueCodeSchema = z.enum([
   "too-many-jobs", "runaway", "service-slow", "service-down",
   // 0.13.0
   "plugin-stuck", "auto-stopped",
+  // 0.14.0
+  "disk-full",
 ]);
 export type HealthIssueCode = z.infer<typeof HealthIssueCodeSchema>;
 
@@ -85,6 +89,8 @@ export const HealthVerdictSchema = z.object({
     memoryUsedBytes: z.number(), memoryLimitBytes: z.number(), memoryBasis: z.enum(["container", "machine"]),
     cpuPercent: z.number().nullable(), heavyJobs: z.number().int(), heavyJobLimit: z.number().int(),
   }).nullable().optional(),
+  /** 0.14.0: the fullest disk the workspaces live on (statfs); absent on older daemons. */
+  disk: DiskSpaceSchema.nullable().optional(),
 });
 export type HealthVerdict = z.infer<typeof HealthVerdictSchema>;
 
@@ -194,6 +200,9 @@ export function evaluateHealth(input: HealthInput, memory: HealthMemory = EMPTY_
       : `${plugin.name} isn't answering (${plugin.timeouts} timeout${plugin.timeouts === 1 ? "" : "s"} in ${plugin.windowMinutes} min).`;
     issues.push({ ...host("plugin-stuck", plugin.severity, message), subject: plugin.name, plugin: plugin.id, restartable: plugin.restartable, restartReason: plugin.reason });
   }
+  for (const disk of input.guard?.disks ?? []) {
+    if (disk.level !== "ok" && disk.sentence) issues.push({ ...host("disk-full", disk.level === "critical" ? "critical" : "warning", disk.sentence), subject: disk.label });
+  }
   const auto = input.guard?.autoGuard.last;
   if (auto && now - auto.at < AUTO_STOP_NOTICE_MINUTES * 60_000) issues.push({ ...host("auto-stopped", "warning", auto.message), subject: auto.name, pid: auto.pid });
 
@@ -207,7 +216,7 @@ export function evaluateHealth(input: HealthInput, memory: HealthMemory = EMPTY_
     memoryLimitBytes: report.memoryBasisBytes, memoryBasis: report.memoryBasis,
     cpuPercent: report.host.cpuPercent, heavyJobs: report.heavyJobs.count, heavyJobLimit: report.heavyJobs.limit,
   } : null;
-  return { verdict: { status: healthStatus(issues), checkedAt: now, background: input.background, issues, services, watched: [...(input.watched ?? [])], load }, memory: next };
+  return { verdict: { status: healthStatus(issues), checkedAt: now, background: input.background, issues, services, watched: [...(input.watched ?? [])], load, disk: input.guard?.disks?.[0] ?? null }, memory: next };
 }
 
 /** A short name for a runaway: "A test run", "esbuild" (before " is using", or before " (PID"). */
@@ -286,6 +295,7 @@ export function pillText(health: WorkspaceHealth): string | null {
     if (first.code === "projects-unavailable") return `Projects unverified${more}`;
     if (first.code === "plugin-stuck") return `${first.subject ?? "A plugin"} not answering${more}`;
     if (first.code === "auto-stopped") return `Runaway stopped${more}`;
+    if (first.code === "disk-full") return `Disk nearly full${more}`;
     return `Host issue${more}`;
   }
   if (health.services.length === 0) return null;

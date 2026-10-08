@@ -14,7 +14,9 @@ import { HostsNavigationProvider, OpenTerminalButton } from "./ask";
 import { syncScreenParams } from "./native";
 import { HelpTab, type SetupCheck } from "./guide";
 import { OverviewTab } from "./home";
-import { Accordion, AccordionItem, IconBadge, MessageBar, QuietLine, SPACE, TYPE, type Tone } from "./kit";
+import { Accordion, AccordionItem, IconBadge, MessageBar, QuietLine, SectionTitle, SPACE, TYPE, type Tone } from "./kit";
+import { CacheList, ClearSheet, DiskCard, WorkspaceList, useClear, useDiskReport } from "./workspaces";
+import { formatSize } from "../shared/disk";
 import { TAB_IDS, TabBar, TabLine, type TabId } from "./navigation";
 import { OpenRow } from "./open-row";
 import { errorMessage, useOpenService } from "./open-service";
@@ -31,9 +33,9 @@ import { Button, Card, Facts, Grid, Notice, StatusPill, TokensProvider, formatBy
  *
  * Four tabs (0.11.0), by what someone comes to do: Overview says whether the
  * host is healthy; Processes finds what is slowing it down and stops it after
- * asking; Dev servers opens your apps; Help answers plain questions. Connect
+ * asking; Workspaces opens your apps and shows disk use; Help answers plain questions. Connect
  * and Project Sync were tabs until 0.10: both are about other computers, so
- * they fold out under Dev servers (`shared/tabs.ts` maps the old ids).
+ * they fold out under Workspaces (`shared/tabs.ts` maps the old ids).
  */
 type Message = { text: string; tone: Tone } | null;
 /** `params.tab` (and `params.open`) arrive with Paseo 0.11 screens; `initialTab` is for the preview. */
@@ -73,7 +75,7 @@ function DaemonBody(props: DaemonProps) {
   const asked = props.initialTab ?? props.params?.tab;
   const start = resolveTab(asked, props.params?.open);
   const [tab, setTab] = useState<TabId>(start.tab);
-  // Which Dev servers fold-out a button (or an old link) asked to open; `asked` remounts it so a second press re-opens it.
+  // Which Workspaces fold-out a button (or an old link) asked to open; `asked` remounts it so a second press re-opens it.
   const [fold, setFold] = useState<{ id: Fold | null; asked: number }>({ id: start.fold, asked: 0 });
   const [search, setSearch] = useState("");
   const [message, setMessage] = useState<Message>(null);
@@ -112,9 +114,15 @@ function DaemonBody(props: DaemonProps) {
     setTab(target.tab);
     if (target.fold) setFold((previous) => ({ id: target.fold, asked: previous.asked + 1 }));
   }, [paramTab, paramOpen]);
-  const refreshAll = () => { check.mutate(); void queryClient.invalidateQueries({ queryKey: ["daemon-link", props.host.id] }); };
+  // 0.14.0: on Workspaces, Refresh also checks disk use again (the one way to re-check; it runs in the background).
+  const disk = useDiskReport(props.host.id);
+  const clearFlow = useClear(setMessage, () => { void disk.query.refetch(); void health.refetch(); });
+  const refreshAll = () => { check.mutate(); void queryClient.invalidateQueries({ queryKey: ["daemon-link", props.host.id] }); if (tab === "workspaces") disk.scan.mutate(); };
+  // The first visit to Workspaces checks once by itself (it's what the person came to see); after that, only Refresh does.
+  const neverChecked = disk.report?.scan.state === "never";
+  useEffect(() => { if (tab === "workspaces" && neverChecked && !disk.scan.isPending) disk.scan.mutate(); }, [tab, neverChecked]);
   const toHelp = (next: TabId, nextFold?: Fold) => go(next, nextFold ?? null, nextFold === "private");
-  const privateRoute = (port: number) => { setSshRemotePort(port); go("servers", "ssh"); };
+  const privateRoute = (port: number) => { setSshRemotePort(port); go("workspaces", "ssh"); };
   const ready = local.data?.scope?.status === "ready" && !local.isError;
 
   const checks: SetupCheck[] = [
@@ -147,41 +155,51 @@ function DaemonBody(props: DaemonProps) {
       {message ? <MessageBar theme={theme} tone={message.tone} text={message.text} /> : null}
       <View style={{ gap: t.space.xl }}>
         {links.isError && tab !== "processes" && tab !== "help" && <Notice icon="WifiOff" tone="danger" action={<Button label="Retry connection" onPress={refresh} />}>{errorMessage(links.error)}</Notice>}
-        {local.isError && tab === "servers" && <Notice icon="CircleAlert" tone="danger" action={<Button label="Refresh projects" onPress={refresh} />}>{errorMessage(local.error)}</Notice>}
-        {local.data?.scope?.status === "unavailable" && tab === "servers" && <Notice icon="ShieldAlert" tone="warning" action={<Button label="Refresh project access" onPress={refresh} />}>{local.data.scope.message}</Notice>}
+        {local.isError && tab === "workspaces" && <Notice icon="CircleAlert" tone="danger" action={<Button label="Refresh projects" onPress={refresh} />}>{errorMessage(local.error)}</Notice>}
+        {local.data?.scope?.status === "unavailable" && tab === "workspaces" && <Notice icon="ShieldAlert" tone="warning" action={<Button label="Refresh project access" onPress={refresh} />}>{local.data.scope.message}</Notice>}
       </View>
       {tab === "overview" ? <OverviewTab theme={theme} compact={layout.compact} hostId={props.host.id} verdict={verdict} report={summary.data} devServers={apps.length} liveLinks={liveLinks} setupDone={ready && !links.isError} checks={checks} go={toHelp} say={setMessage}
         sync={<AccordionItem key={foldKey("sync")} theme={theme} compact={layout.compact} icon="FolderSync" title="Copy a project from another computer" summary="Preview its Git history before it arrives (Project Sync)" open={foldOpen("sync")}>
-          <Transfers hostId={props.host.id} openPairing={() => go("servers", "private", true)} />
+          <Transfers hostId={props.host.id} openPairing={() => go("workspaces", "private", true)} />
         </AccordionItem>} /> : null}
       {tab === "processes" ? <ProcessesTab theme={theme} compact={layout.compact} hostId={props.host.id} say={setMessage} issues={verdict?.issues ?? []} onChanged={() => void health.refetch()} /> : null}
       {tab === "help" ? <HelpTab theme={theme} compact={layout.compact} go={toHelp} minutes={formatMinutes(minutes)} shortcuts={!!props.shortcuts} /> : null}
-      {tab === "servers" && <View style={{ gap: t.space.xl }}>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
-          <StatusPill tone={local.isPending ? "neutral" : !ready ? "warning" : apps.length ? "ok" : "neutral"} label={local.isPending ? "Checking…" : ready ? (apps.length ? `${apps.length} running` : "None running") : "Projects need attention"} />
-          {ready ? <Facts items={[{ value: `in ${local.data?.scope?.projects.length || 0} project${local.data?.scope?.projects.length === 1 ? "" : "s"}` }]} /> : null}
-        </View>
-        {!available && links.data ? (
-          <Notice icon="Globe" tone="warning" action={<Button label={opener.installing ? "Setting up…" : "Set up browser links"} variant="primary" loading={opener.installing} disabled={opener.installing} onPress={() => opener.installLinks()} />}>
-            One-time setup for the Open button: install the link helper on {props.host.label}. No account, domain or password is needed.
-          </Notice>
+      {tab === "workspaces" && <View style={{ gap: t.space.xl }}>
+        <DiskCard theme={theme} report={disk.report} loading={disk.query.isPending} scanning={disk.scan.isPending} flow={clearFlow} onScan={() => disk.scan.mutate()} onCaches={() => go("workspaces", "caches")} />
+        {apps.length || !ready ? (
+          <View style={{ gap: t.space.md }}>
+            <SectionTitle theme={theme} icon="Server">{apps.length ? `Dev servers running now · ${apps.length}` : "Dev servers"}</SectionTitle>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
+              <StatusPill tone={local.isPending ? "neutral" : !ready ? "warning" : apps.length ? "ok" : "neutral"} label={local.isPending ? "Checking…" : ready ? (apps.length ? `${apps.length} running` : "None running") : "Projects need attention"} />
+              {ready ? <Facts items={[{ value: `in ${local.data?.scope?.projects.length || 0} project${local.data?.scope?.projects.length === 1 ? "" : "s"}` }]} /> : null}
+            </View>
+            {!available && links.data && apps.length ? (
+              <Notice icon="Globe" tone="warning" action={<Button label={opener.installing ? "Setting up…" : "Set up browser links"} variant="primary" loading={opener.installing} disabled={opener.installing} onPress={() => opener.installLinks()} />}>
+                One-time setup for the Open button: install the link helper on {props.host.label}. No account, domain or password is needed.
+              </Notice>
+            ) : null}
+            {apps.length > 3 ? <TextInput accessibilityLabel="Search dev servers" placeholder="Search project, framework or port" placeholderTextColor={t.color.muted} value={search} onChangeText={setSearch} autoCapitalize="none" autoCorrect={false} style={{ ...t.text.body, padding: t.space.md, borderRadius: t.radius.sm, borderWidth: 1, borderColor: t.color.border, backgroundColor: t.color.surface1 }} /> : null}
+            {local.isPending ? <Text style={t.text.body}>Checking Paseo projects and their dev servers…</Text> : !apps.length ? null : !visible.length ? <Notice icon="Search">No dev servers match that search.</Notice> : (
+              <Grid min={330}>
+                {visible.map((app) => (
+                  <ServiceCard key={processKey(app)} process={app} actions={actions} footer={
+                    <>
+                      <OpenRow ports={app.ports} tunnels={tunnels} minutes={minutes} available={available} opener={opener} onSetup={() => opener.installLinks()} installing={opener.installing} onPrivate={privateRoute} />
+                      <OpenTerminalButton theme={theme} pid={app.pid} />
+                    </>
+                  } />
+                ))}
+              </Grid>
+            )}
+          </View>
         ) : null}
-        {apps.length > 3 ? <TextInput accessibilityLabel="Search dev servers" placeholder="Search project, framework or port" placeholderTextColor={t.color.muted} value={search} onChangeText={setSearch} autoCapitalize="none" autoCorrect={false} style={{ ...t.text.body, padding: t.space.md, borderRadius: t.radius.sm, borderWidth: 1, borderColor: t.color.border, backgroundColor: t.color.surface1 }} /> : null}
-        {local.isPending ? <Text style={t.text.body}>Checking Paseo projects and their dev servers…</Text> : !apps.length ? (
-          <Card><Text style={t.text.heading}>No dev server is running here yet</Text><Text style={t.text.body}>Open a project in Paseo and run its dev command in that project's terminal. It appears here with an Open button.</Text><View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}><Button label="Show me how" variant="primary" onPress={() => go("help")} /></View></Card>
-        ) : !visible.length ? <Notice icon="Search">No dev servers match that search.</Notice> : (
-          <Grid min={330}>
-            {visible.map((app) => (
-              <ServiceCard key={processKey(app)} process={app} actions={actions} footer={
-                <>
-                  <OpenRow ports={app.ports} tunnels={tunnels} minutes={minutes} available={available} opener={opener} onSetup={() => opener.installLinks()} installing={opener.installing} onPrivate={privateRoute} />
-                  <OpenTerminalButton theme={theme} pid={app.pid} />
-                </>
-              } />
-            ))}
-          </Grid>
-        )}
+        <WorkspaceList theme={theme} compact={layout.compact} report={disk.report} flow={clearFlow} />
         <Accordion theme={theme}>
+          {disk.report && disk.report.scan.state !== "never" ? (
+            <AccordionItem key={foldKey("caches")} theme={theme} compact={layout.compact} icon="Archive" title="Shared caches and temporary files" summary={disk.report.caches.length ? `${formatSize(disk.report.caches.reduce((sum, group) => sum + group.totalBytes, 0))} · package downloads, tool caches, old browser downloads, /tmp leftovers` : disk.report.scan.state === "running" ? "Checking…" : "Nothing found"} open={foldOpen("caches")}>
+              <CacheList theme={theme} groups={disk.report.caches} flow={clearFlow} />
+            </AccordionItem>
+          ) : null}
           {tunnels.length > 0 ? (
             <AccordionItem key={foldKey("links")} theme={theme} compact={layout.compact} icon="Globe" title="Browser links you've opened" summary={`${tunnels.length} on this host · ${liveLinks} live · Open adds ${formatMinutes(minutes)}`} open={foldOpen("links")}>
               {tunnels.map((tunnel) => <TunnelCard key={tunnel.id} tunnel={tunnel} minutes={minutes} onExtend={opener.extendLink} onClose={opener.closeLink} busy={opener.extending || opener.closing} />)}
@@ -192,17 +210,19 @@ function DaemonBody(props: DaemonProps) {
             {apps.length ? apps.map((app) => (
               <View key={processKey(app)} style={{ gap: t.space.xs }}>
                 <Text style={t.text.bodyStrong}>{app.project?.name || app.name}</Text>
-                <PrivateRow ports={app.ports} forwards={forwards} onSsh={privateRoute} onPair={() => go("servers", "private", true)} />
+                <PrivateRow ports={app.ports} forwards={forwards} onSsh={privateRoute} onPair={() => go("workspaces", "private", true)} />
               </View>
             )) : null}
-            <Peers initialView={pairingRequested ? "pair" : "apps"} hostId={props.host.id} hostLabel={props.host.label} onBrowserLink={() => go("servers")} onGuide={() => go("help")} />
+            <Peers initialView={pairingRequested ? "pair" : "apps"} hostId={props.host.id} hostLabel={props.host.label} onBrowserLink={() => go("workspaces")} onGuide={() => go("help")} />
           </AccordionItem>
           <AccordionItem key={foldKey("ssh")} theme={theme} compact={layout.compact} icon="KeyRound" title="Use your SSH keys instead" summary={profiles.length ? `${profiles.length} saved forward${profiles.length === 1 ? "" : "s"}` : "For a host you already reach with SSH"} open={foldOpen("ssh")}>
             <Text style={t.text.body}>Save a forward on your own computer's daemon: the server then answers at 127.0.0.1 on your laptop and nothing is published. Pairing is simpler when both computers run Paseo.</Text>
             <Connections profiles={profiles} states={links.data?.connections || []} refresh={() => { void links.refetch(); }} initialRemotePort={sshRemotePort} />
           </AccordionItem>
         </Accordion>
+        {!apps.length && ready ? <QuietLine theme={theme} icon="Server">No dev server is running. Run a project's dev command in its Paseo terminal and it appears here with an Open button.</QuietLine> : null}
         <QuietLine theme={theme} icon="Info">Databases, system services and other listeners are left out. Link length is under Settings → Hosts.</QuietLine>
+        <ClearSheet theme={theme} flow={clearFlow} />
       </View>}
     </ScrollView>
   );

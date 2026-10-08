@@ -24,10 +24,24 @@ export function isInfrastructure(process: RawProcess): boolean {
   return executableWords(process).some((word) => /^(postgres|postmaster|redis-server|mongod|mysqld|sshd|systemd|cloudflared|paseo|agent-browser)(?:[ .-]|$)/.test(word));
 }
 
+/**
+ * How long a passive read (the app's polling: status dot, Overview, Processes,
+ * Workspaces) reuses the registry (0.14.0; was 5 s, which re-read
+ * `projects.list` and every `workspaces.list` page on almost every poll and
+ * showed up as ~110 slow requests an hour on a busy daemon). User actions
+ * (Refresh, stop, share, clear, restart) pass `force` and always read fresh.
+ */
+export const PASSIVE_TTL_MS = 60_000;
+/** After a failed read, passive reads wait this long before trying again (forced reads don't). */
+export const FAILURE_BACKOFF_MS = 10_000;
+
 /** Registry access uses the plugin's own borrowed SDK session, never browser-supplied paths. */
 export class ProjectScope {
   private api?: PaseoApi;
   private roots: Root[] = [];
+  /** Every active workspace descriptor from the last read, unfiltered (0.14.0: disk usage reads these). */
+  private descriptors: unknown[] = [];
+  private failedAt = 0;
   private updated = 0;
   private pending?: Promise<void>;
   private failure = "Open Hosts on this host once to load its Paseo projects.";
@@ -35,12 +49,23 @@ export class ProjectScope {
   constructor(private canonical: (path: string) => Promise<string> = realpath, private home = homedir(), private now = Date.now) {}
   bind(api: PaseoApi) { this.api = api; }
 
+  /**
+   * Every active workspace as Paseo describes it (0.14.0, for disk usage):
+   * the raw descriptors from the shared registry read, so the Workspaces view
+   * adds no daemon calls of its own. `force` reads fresh (a user action).
+   */
+  async workspaceDescriptors(force = false): Promise<unknown[]> {
+    await this.refresh(force);
+    return this.descriptors;
+  }
+
   async refresh(force = false): Promise<void> {
     if (this.pending) return this.pending;
-    if (!force && this.updated && this.now() - this.updated < 5000) return;
+    if (!force && this.updated && this.now() - this.updated < PASSIVE_TTL_MS) return;
     if (!this.api) throw new Error(this.failure);
+    if (!force && !this.updated && this.failedAt && this.now() - this.failedAt < FAILURE_BACKOFF_MS) throw new Error(this.failure);
     this.pending = this.load(this.api).catch(() => {
-      this.roots = []; this.updated = 0;
+      this.roots = []; this.descriptors = []; this.updated = 0; this.failedAt = this.now();
       this.failure = "Paseo projects could not be verified. Refresh this host; sharing and process controls are paused.";
       throw new Error(this.failure);
     }).finally(() => { this.pending = undefined; });
@@ -52,8 +77,10 @@ export class ProjectScope {
     const roots: Root[] = projects.map((p) => ({ id: p.projectId, name: p.projectDisplayName, path: p.projectRootPath, workspace: null, servicePorts: [] }));
     let cursor: string | undefined;
     const seen = new Set<string>();
+    const descriptors: unknown[] = [];
     for (let page = 0; page < 20; page++) {
       const result = await api.workspaces.list({ page: { limit: 100, ...(cursor ? { cursor } : {}) } });
+      descriptors.push(...result.entries);
       for (const workspace of result.entries) {
         if (workspace.archivingAt || !projects.some((project) => project.projectId === workspace.projectId)) continue;
         roots.push({ id: workspace.projectId, name: workspace.projectDisplayName, path: workspace.workspaceDirectory || workspace.projectRootPath, workspace: workspace.name,
@@ -64,6 +91,7 @@ export class ProjectScope {
       if (!next || seen.has(next) || page === 19) throw new Error("Incomplete workspace registry");
       seen.add(next); cursor = next;
     }
+    this.descriptors = descriptors;
     this.broadRoots = 0;
     const canonicalRoots = await Promise.all(roots.map(async (root) => {
       if (!isAbsolute(root.path)) return null;
@@ -90,8 +118,9 @@ export class ProjectScope {
       kind: agent ? "agent" : service ? "dev-server" : "project-tool", shareable: service, canStop: service, shareablePorts };
   }
 
-  async root(id: string): Promise<{ id: string; name: string; path: string }> {
-    await this.refresh();
+  /** `force` for a share or a receive (a user action); listing what can be shared reuses the cache. */
+  async root(id: string, force = false): Promise<{ id: string; name: string; path: string }> {
+    await this.refresh(force);
     const root = this.roots.find((item) => item.id === id && item.workspace === null) || this.roots.find((item) => item.id === id);
     if (!root) throw new Error("This project is no longer registered on this host.");
     return { id: root.id, name: root.name, path: root.path };

@@ -16,12 +16,15 @@ import { formatBytes } from "./ui";
 import { AskAgentButton } from "./ask";
 import { RestartPlugin, StopProcess } from "./guard";
 import { guardState } from "../shared/guard";
+import { formatSize } from "../shared/disk";
 
 type Theme = PluginTheme;
 type Go = (tab: TabId, fold?: Fold) => void;
 
 const WATCH_TONE: Record<WatchResult["state"], Tone> = { up: "success", slow: "warning", down: "danger", unknown: "neutral" };
 const PROCESS_CODES = new Set(["memory-pressure", "cpu-pressure", "too-many-jobs", "runaway", "pressure-driver", "process-zombie", "auto-stopped"]);
+/** 0.14.0: a full disk is fixed on Workspaces. */
+const DISK_CODES = new Set(["disk-full"]);
 
 /** The hero's words: the state first, in plain English, saying each thing once. */
 export function heroState(verdict: HealthVerdict | undefined, setupDone: boolean): { tone: Tone; icon: string; title: string; lead: string | null } {
@@ -137,6 +140,7 @@ function TechnicalDetails({ theme, hostId, verdict, report }: { theme: Theme; ho
     <>
       {values ? <Fact theme={theme} label="Checks every" value={`${values.snapshotIntervalSeconds} seconds${values.backgroundHealthChecks ? ", even with Paseo closed" : ", while Hosts is open"}`} /> : null}
       {values ? <Fact theme={theme} label="Heavy-job limit" value={`${values.maxHeavyJobs} at once`} /> : null}
+      <Fact theme={theme} label="Disk checks" value="Free space every 10 seconds; folder sizes only when you ask (Workspaces)" />
       {values ? <Fact theme={theme} label="Browser links last" value={formatMinutes(values.tunnelMinutes)} /> : null}
       {report ? <Fact theme={theme} label="Memory measured" value={report.memoryBasis === "container" ? "against this container's limit" : "against the whole machine"} /> : null}
       {report ? <Fact theme={theme} label="Processes" value={`${report.total} running · Paseo uses ${formatBytes(report.paseoBytes)}`} /> : null}
@@ -177,14 +181,17 @@ export function OverviewTab({ theme, compact, hostId, verdict, report, devServer
   // A reload isn't a stop (0.13.0): "Last stop" names the last process actually signalled.
   const last = report?.recentActions.find((entry) => entry.action !== "plugin-reload" && entry.status === "signaled");
   // One way to refresh (0.12.1): the header's Refresh link, so the hero offers where to go, not "Check again".
-  const primary: "processes" | "servers" = processIssue || !devServers ? "processes" : "servers";
+  const diskIssue = verdict?.issues.some((issue) => DISK_CODES.has(issue.code)) ?? false;
+  const primary: "processes" | "workspaces" = diskIssue && !processIssue ? "workspaces" : processIssue || !devServers ? "processes" : "workspaces";
   return (
     <>
       <HeroCard theme={theme} tone={hero.tone} icon={hero.icon} title={hero.title} lead={hero.lead ?? undefined}>
         <View style={{ gap: SPACE.xs }}>
           {memory ? <StatusLine theme={theme} label="Memory" value={`${formatBytes(memory.used)} of ${formatBytes(memory.limit)}`} tone={shareTone(memory.percent)} action={{ label: "Processes", onPress: () => go("processes") }} /> : null}
-          {jobs ? <StatusLine theme={theme} label="Heavy jobs" value={`${jobs.count} of ${jobs.limit}`} tone={jobs.count > jobs.limit ? "warning" : "success"} hint={`builds, tests and dev servers running now; ${jobs.limit} at once is the limit`} /> : null}
-          <StatusLine theme={theme} label="Dev servers" value={devServers ? `${devServers} running` : "None running"} tone={devServers ? "success" : "neutral"} hint={liveLinks ? `${liveLinks} browser link${liveLinks === 1 ? "" : "s"} open` : null} action={{ label: "Dev servers", onPress: () => go("servers") }} />
+          {verdict?.disk ? <StatusLine theme={theme} label="Disk" value={`${formatSize(verdict.disk.freeBytes)} free`} tone={verdict.disk.level === "critical" ? "danger" : verdict.disk.level === "warning" ? "warning" : "success"} hint={`${Math.round(verdict.disk.percent)}% used`} action={{ label: "Workspaces", onPress: () => go("workspaces") }} /> : null}
+          {/* 0.14.0: four rows at most; heavy jobs only when there are some. */}
+          {jobs && (jobs.count > 0 || !verdict?.disk) ? <StatusLine theme={theme} label="Heavy jobs" value={`${jobs.count} of ${jobs.limit}`} tone={jobs.count > jobs.limit ? "warning" : "success"} hint={`builds, tests and dev servers running now; ${jobs.limit} at once is the limit`} /> : null}
+          <StatusLine theme={theme} label="Dev servers" value={devServers ? `${devServers} running` : "None running"} tone={devServers ? "success" : "neutral"} hint={liveLinks ? `${liveLinks} browser link${liveLinks === 1 ? "" : "s"} open` : null} action={{ label: "Workspaces", onPress: () => go("workspaces") }} />
           {watched.length ? <StatusLine theme={theme} label="Watched services" value={watchedNow.value} tone={watchedNow.tone} /> : null}
         </View>
         {last ? (
@@ -194,7 +201,7 @@ export function OverviewTab({ theme, compact, hostId, verdict, report, devServer
           </Row>
         ) : null}
         <Row>
-          {primary === "servers" ? <Button theme={theme} label="Open dev servers" icon="Server" primary onPress={() => go("servers")} /> : null}
+          {primary === "workspaces" ? <Button theme={theme} label={diskIssue ? "Free up space" : "Open workspaces"} icon={diskIssue ? "HardDrive" : "FolderTree"} primary onPress={() => go("workspaces")} /> : null}
           <Button theme={theme} label={processIssue ? "Review processes" : "See processes"} icon="Cpu" primary={primary === "processes"} onPress={() => go("processes")} />
         </Row>
       </HeroCard>

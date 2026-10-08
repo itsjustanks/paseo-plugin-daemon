@@ -7,6 +7,7 @@ import { seconds } from "../shared/watch";
 import { Button, Dot, Meta, Note, SPACE, TYPE, toneColor, type Tone } from "./kit";
 import type { PopoverProps } from "./native";
 import { RestartPlugin } from "./guard";
+import { formatSize } from "../shared/disk";
 import { formatBytes } from "./ui";
 
 /**
@@ -62,7 +63,7 @@ export function makeQuickHealth(screenId: string): ComponentType<PopoverProps> {
     const state = quickState(verdict);
     const load = verdict?.load;
     // 0.13.0: a stuck plugin and an automatic stop come first; they are the ones that take a daemon down or explain why something vanished.
-    const rank = (code: string) => (code === "plugin-stuck" ? 0 : code === "auto-stopped" ? 1 : code === "memory-pressure" || code === "runaway" ? 2 : 3);
+    const rank = (code: string) => (code === "plugin-stuck" ? 0 : code === "auto-stopped" ? 1 : code === "memory-pressure" || code === "runaway" || code === "disk-full" ? 2 : 3);
     const issues = (verdict?.issues ?? []).filter((issue) => issue.code !== "service-slow" && issue.code !== "service-down" && issue.code !== "projects-unavailable")
       .map((issue, index) => ({ issue, index })).sort((a, b) => rank(a.issue.code) - rank(b.issue.code) || a.index - b.index).map(({ issue }) => issue).slice(0, 3);
     return (
@@ -75,6 +76,7 @@ export function makeQuickHealth(screenId: string): ComponentType<PopoverProps> {
           <View style={{ gap: SPACE.hair }}>
             <Note theme={theme}>{`Memory: ${formatBytes(load.memoryUsedBytes)} of ${formatBytes(load.memoryLimitBytes)}${load.memoryBasis === "container" ? " (container limit)" : ""}`}</Note>
             <Note theme={theme}>{`Heavy jobs: ${load.heavyJobs} running, ${load.heavyJobLimit} at once is the limit${load.cpuPercent === null ? "" : ` · CPU ${Math.round(load.cpuPercent)}%`}`}</Note>
+            {verdict?.disk ? <Note theme={theme}>{`Disk: ${formatSize(verdict.disk.freeBytes)} free (${Math.round(verdict.disk.percent)}% used)`}</Note> : null}
           </View>
         ) : null}
         {issues.map((issue, index) => (

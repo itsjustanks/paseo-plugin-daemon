@@ -78,7 +78,7 @@ export class ProjectTransfers implements ProjectSource {
     try {
       for (const [token, entry] of this.exports) if (entry.preview.expiresAt <= this.now()) { this.exports.delete(token); await rm(entry.directory, { recursive: true, force: true }); }
       if (this.exports.size >= 4) throw new Error("Four project previews are already reserved. Wait for one to expire.");
-      const root = await this.scope.root(projectId);
+      const root = await this.scope.root(projectId, true);
       const top = (await this.git(root.path, ["rev-parse", "--show-toplevel"])).stdout.trim();
       if (await realpath(top) !== root.path) throw new Error("Register the Git repository root before preparing this project.");
       const head = (await this.git(root.path, ["rev-parse", "--verify", "HEAD"])).stdout.trim();
@@ -107,7 +107,7 @@ export class ProjectTransfers implements ProjectSource {
   async download(token: string, grantId: string) {
     const entry = this.exports.get(token);
     if (!entry || entry.grantId !== grantId || entry.preview.expiresAt <= this.now() || this.stopped) throw new Error("Project preview expired. Build a new preview.");
-    await this.scope.root(entry.preview.project.id);
+    await this.scope.root(entry.preview.project.id, true);
     return { preview: entry.preview, bytes: await readFile(entry.file) };
   }
   async inspect(peer: ProjectPeer, peerId: string, projectId: string) {

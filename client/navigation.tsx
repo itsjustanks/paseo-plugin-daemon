@@ -19,7 +19,7 @@ type Theme = PluginTheme;
 export const TABS: ReadonlyArray<{ id: TabId; label: string; icon: string; line?: string }> = [
   { id: "overview", label: "Overview", icon: "LayoutDashboard" },
   { id: "processes", label: "Processes", icon: "Cpu", line: "What is using this computer's memory and CPU, heaviest first. Nothing is stopped without asking you." },
-  { id: "servers", label: "Dev servers", icon: "Server", line: "The apps running in your Paseo projects here. Press Open to see one in your browser." },
+  { id: "workspaces", label: "Workspaces", icon: "FolderTree", line: "Your Paseo workspaces: what's running in each, what each uses on disk, and what's safe to clear." },
   { id: "help", label: "Help", icon: "CircleHelp" },
 ];
 export { TAB_IDS, type TabId };

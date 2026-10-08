@@ -48,7 +48,7 @@ export function memoryWords(report: Pick<ProcessReport, "container" | "host" | "
   return { used, limit, percent: limit > 0 ? Math.round((used / limit) * 1000) / 10 : null, where: "this machine's memory" };
 }
 
-function Meter({ theme, percent, tone }: { theme: Theme; percent: number | null; tone: Tone }) {
+export function Meter({ theme, percent, tone }: { theme: Theme; percent: number | null; tone: Tone }) {
   const value = percent === null ? 0 : Math.max(0, Math.min(100, percent));
   const color = tone === "success" ? theme.colors.accent : toneColor(theme, tone);
   return (
@@ -202,6 +202,7 @@ function ProcessItem({ theme, row, compact, byTree, selected, onSelect, onStop, 
 const ACTION_WORD: Record<ActionLogEntry["action"], string> = {
   stop: "Asked to stop", "force-stop": "Force stopped", "auto-force-stop": "Stopped forcefully",
   "plugin-reload": "Reloaded plugin", "plugin-stop": "Stopped stuck plugin", "plugin-force-stop": "Force stopped stuck plugin", "auto-stop": "Stopped automatically (memory nearly full)",
+  "disk-clear": "Cleared to free space", "disk-prune": "Pruned pnpm's store",
 };
 
 /** Every stop, newest first, from this host's action log: the content of the "Recent stops" fold-out. */

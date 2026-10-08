@@ -1,5 +1,6 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
+import { DiskSpaceSchema } from "./disk";
 
 /**
  * 0.13.0: the two things that took a daemon down, caught early.
@@ -221,6 +222,8 @@ export const GuardStateSchema = z.object({
     sentence: z.string().nullable(),
   }),
   autoGuard: z.object({ enabled: z.boolean(), last: AutoStopSchema.nullable() }),
+  /** 0.14.0: the disks workspaces live on, from statfs (instant); absent on older daemons. */
+  disks: z.array(DiskSpaceSchema).optional(),
 });
 export type GuardState = z.infer<typeof GuardStateSchema>;
 

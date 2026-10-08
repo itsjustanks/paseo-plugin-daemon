@@ -7,6 +7,8 @@ import { readCgroup, type CgroupFs } from "./cgroup";
 import { DaemonLogTail, PluginLogState } from "./daemon-log";
 import { parseMeminfo, parseProcPidStat, parseProcStatus } from "./linux";
 import { mapLimit, type PlatformAdapter } from "./platform";
+import { disksFor } from "./disk-scan";
+import type { DiskSpace } from "../shared/disk";
 
 /**
  * The daemon-side check loop (0.13.0). It starts when the plugin loads and
@@ -147,6 +149,13 @@ export interface GuardLoopOptions {
   intervalMs?: number;
   /** How long a pass waits for an automatic stop before moving on (tests shorten it). */
   autoStopLimitMs?: number;
+  /**
+   * 0.14.0: folders whose disks to watch (Paseo's home, workspaces). Each pass
+   * calls stat and statfs on them and nothing else: never a directory walk.
+   */
+  diskPaths?: () => readonly string[];
+  /** statfs, swappable in tests. */
+  disks?: (paths: readonly string[]) => Promise<DiskSpace[]>;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (timer: unknown) => void;
 }
@@ -187,6 +196,7 @@ export class GuardLoop {
   /** Offered until the check says otherwise: a restart re-checks the paseo command itself and says why if it can't. */
   private restart: { ok: boolean; reason: string | null; at: number } = { ok: true, reason: null, at: 0 };
   private checkedAt = 0;
+  private diskReadings: DiskSpace[] = [];
 
   constructor(private readonly options: GuardLoopOptions) {
     this.now = options.now ?? Date.now;
@@ -237,6 +247,10 @@ export class GuardLoop {
       this.lastSampleAt = null;
     }
     await bounded(this.pollLog(), STEP_LIMIT_MS, undefined);
+    if (this.options.diskPaths) {
+      const read = await bounded((this.options.disks ?? disksFor)(this.options.diskPaths().slice(0, 32)), STEP_LIMIT_MS, null);
+      if (read) this.diskReadings = read;
+    }
     if (now - this.restart.at > 5 * 60_000 && this.options.restartCheck) {
       this.restart = { ...(await bounded(this.options.restartCheck(), 20_000, { ok: false, reason: "Hosts couldn't check whether plugins can be restarted here." })), at: now };
     }
@@ -281,6 +295,7 @@ export class GuardLoop {
       slowPluginRequests: this.logState.slowRequests(now),
       memory: { level: this.level, some10: signal.some10, full10: signal.full10, percent: signal.percent === null ? null : Math.round(signal.percent * 10) / 10, criticalSince: this.criticalSince, sentence: pressureSentence(signal, this.level) },
       autoGuard: { enabled: this.autoEnabled, last: this.lastAuto },
+      disks: this.diskReadings,
     };
   }
 

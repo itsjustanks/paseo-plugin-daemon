@@ -42,7 +42,7 @@ function WhatIs({ theme }: { theme: Theme }) {
 
 const FLOW = [
   { icon: "Eye", title: "Your daemon watches", text: "Every 30 seconds it measures memory, CPU and running jobs, and checks the services you watch." },
-  { icon: "TriangleAlert", title: "It spots trouble", text: "A job stuck at full CPU or eating memory, memory near the limit, a plugin that stopped answering, or a slow service." },
+  { icon: "TriangleAlert", title: "It spots trouble", text: "A job stuck at full CPU or eating memory, a disk filling up, a plugin that stopped answering, or a slow service." },
   { icon: "Hand", title: "You decide", text: "The sidebar dot and this page say what's wrong in plain words. Nothing is stopped without asking." },
   { icon: "ExternalLink", title: "Open what's running", text: "Each dev server opens in your browser with one press, or privately on your own computer." },
 ] as const;
@@ -112,8 +112,8 @@ function HowToUse({ theme, go }: { theme: Theme; go: Go }) {
       </Step>
       <Step theme={theme} n={3}><Text style={body}>To stop a runaway, select it and press <Text style={bold}>Stop</Text>. You see exactly what will stop, children included, before anything happens.</Text></Step>
       <Step theme={theme} n={4}>
-        <Text style={body}>Run a project's dev command in its Paseo terminal (such as <Text style={{ ...TYPE.mono }}>npm run dev</Text>). It appears under <Text style={bold}>Dev servers</Text> with an Open button.</Text>
-        <Link theme={theme} label="Open Dev servers" onPress={() => go("servers")} />
+        <Text style={body}>Run a project's dev command in its Paseo terminal (such as <Text style={{ ...TYPE.mono }}>npm run dev</Text>). It appears under <Text style={bold}>Workspaces</Text> with an Open button.</Text>
+        <Link theme={theme} label="Open Workspaces" onPress={() => go("workspaces")} />
       </Step>
       <Step theme={theme} n={5}><Text style={body}>Watch a service on another machine, such as OmniRoute, under <Text style={bold}>Settings → Hosts → Watched services</Text>. A slow or failing answer shows up here.</Text></Step>
     </Part>
@@ -179,18 +179,18 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
     {
       icon: "Globe", question: "How do I open my app in a browser?",
       answer: [
-        "Start its dev command (such as npm run dev) in that project's terminal in Paseo. It appears under Dev servers with an Open button.",
+        "Start its dev command (such as npm run dev) in that project's terminal in Paseo. It appears under Workspaces with an Open button.",
         `Open makes a temporary web address that works on any device, including your phone, with nothing to install. It lasts ${minutes} and can be extended; anyone with the address can see the app until then. The first time, Hosts asks to set up the link helper once. No account is needed.`,
       ],
-      action: { label: "Open Dev servers", tab: "servers" },
+      action: { label: "Open Workspaces", tab: "workspaces" },
     },
     {
       icon: "Laptop", question: "Can I open it privately, only on my own computer?",
       answer: [
         "Yes. Pair this host with your own computer once (both need Paseo and Hosts), and its dev servers open at 127.0.0.1 on your computer. Nothing is published.",
-        "Already reach this host with SSH keys? Save an SSH forward instead. Both live under Dev servers.",
+        "Already reach this host with SSH keys? Save an SSH forward instead. Both live under Workspaces.",
       ],
-      action: { label: "Pair my computer", tab: "servers", fold: "private" },
+      action: { label: "Pair my computer", tab: "workspaces", fold: "private" },
     },
     {
       icon: "SearchX", question: "My dev server isn't listed",
@@ -208,6 +208,24 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
         "To stop one, select it and press Stop. You see exactly what will stop, children included, before anything happens.",
       ],
       action: { label: "See processes", tab: "processes" },
+    },
+    {
+      icon: "HardDrive", question: "My disk is filling up. What can I clear?",
+      answer: [
+        "Open Workspaces. It shows how much space is free, what each Paseo workspace uses (biggest first, with whether an agent is working in it) and how much of it is safe to clear. The sidebar dot warns when the disk is 85% full and turns red at 95%.",
+        "Safe to clear means things that come back by themselves: installed packages (node_modules), build files (.next, .nuxt, .turbo, dist when git ignores it), test reports, Python caches, npm's download cache, old browser downloads, tool caches, and leftovers in the temporary folder older than 6 hours. Each one says what clearing it costs, such as \"comes back on the next install (a few minutes)\".",
+        "Press Clear on one workspace, or clear every idle workspace at once. You see exactly what goes and its size first, then confirm once. pnpm's shared store is pruned by pnpm itself, which removes only packages no project uses.",
+        "Checking sizes reads a lot of files, so it runs in the background at low priority, one check at a time, and stops after a few minutes with what it found. Press Refresh at the top to check again.",
+      ],
+      action: { label: "Open Workspaces", tab: "workspaces" },
+    },
+    {
+      icon: "ShieldBan", question: "What will Hosts never delete?",
+      answer: [
+        "Anything git tracks, .git folders, .env files, your source code, Paseo's own data (settings, history, logs), agents' history (~/.claude and ~/.codex), and never a whole workspace or worktree folder.",
+        "Nothing that's in use: if a program has a file open in it, an agent is working or waiting in that workspace, or a dev server, build or test is running there, Hosts leaves it and says why. Each folder is checked again just before it goes, links are never followed, and every deletion is logged.",
+        "A worktree no workspace uses any more (usually an archived one) shows its size, but Hosts won't remove it: it may hold work that isn't pushed. Ask an agent instead; it checks the worktree and removes it properly with git, after asking you.",
+      ],
     },
     {
       icon: "MemoryStick", question: "A job is eating all the memory. What happens?",
@@ -276,7 +294,7 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
       answer: [
         "Both computers must be online with Hosts running. If it still won't connect, use a browser link or your SSH keys instead.",
       ],
-      action: { label: "Open private links", tab: "servers", fold: "private" },
+      action: { label: "Open private links", tab: "workspaces", fold: "private" },
     },
   ];
 }
