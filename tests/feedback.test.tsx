@@ -34,7 +34,8 @@ vi.mock("react-native", async () => {
   };
 });
 
-const { Confirm, SayProvider, copyToClipboard, useCopy, useSafeToast, useSay } = await import("../client/feedback");
+const { Confirm, SayProvider, SayRoot, copyToClipboard, useCopy, usePageSay, useSafeToast, useSay } = await import("../client/feedback");
+const { ForceStopModal } = await import("../client/surface");
 const { ConfirmButton, TokensProvider, useUi } = await import("../client/ui");
 const { StopSheet } = await import("../client/processes");
 
@@ -236,3 +237,65 @@ describe("toasts and their fallback", () => {
     await act(async () => { renderer.unmount(); });
   });
 });
+
+describe("review fixes: no Modal, no toast", () => {
+  const plan = { graceSeconds: 5, targets: [{ ok: true, pid: 4402, name: "tsc", rssBytes: 1e9, cpuPercent: 99, children: [] }] } as never;
+
+  it("StopSheet without Modal: nothing when closed, in place when open, stops once", async () => {
+    withApp({});
+    const confirm = vi.fn(), cancel = vi.fn();
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<StopSheet theme={theme} plan={null} busy={false} onCancel={cancel} onConfirm={confirm} />); });
+    expect(renderer.toJSON()).toBeNull();
+    await act(async () => { renderer.update(<StopSheet theme={theme} plan={plan} busy={false} onCancel={cancel} onConfirm={confirm} />); });
+    expect(text(renderer.toJSON())).toContain("Stop tsc?");
+    expect(text(renderer.toJSON())).toContain("tsc (PID 4402)");
+    await press(renderer, "Stop it", 2);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    await press(renderer, "Cancel");
+    expect(cancel).toHaveBeenCalledTimes(1);
+    await act(async () => { renderer.unmount(); });
+  });
+
+  it("ForceStopModal without Modal: nothing when closed, in place when open, force-stops once", async () => {
+    withApp({});
+    const confirm = vi.fn();
+    const target = { pid: 77, name: "node", ports: [3000] } as never;
+    const Harness = ({ open }: { open: boolean }) => <TokensProvider value={useUi(theme, false)}><ForceStopModal target={open ? target : null} busy={false} onCancel={() => undefined} onConfirm={confirm} /></TokensProvider>;
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<Harness open={false} />); });
+    expect(renderer.toJSON()).toBeNull();
+    await act(async () => { renderer.update(<Harness open />); });
+    expect(text(renderer.toJSON())).toContain("Force stop process");
+    await press(renderer, "Confirm force stop of node, PID 77", 2);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    await act(async () => { renderer.unmount(); });
+  });
+
+  it("without a toast, a hook called by the page body itself reaches the page's message bar (SayRoot above the body)", async () => {
+    withApp({});
+    function Body() {
+      const toast = useSafeToast();
+      const [message] = usePageSay();
+      return (
+        <>
+          <Pressable accessibilityLabel="stop" onPress={() => toast.error(`Could not stop next-server: token=${SECRET}`)} />
+          {message ? <Text>{`bar: ${message.text}`}</Text> : null}
+        </>
+      );
+    }
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<SayRoot><Body /></SayRoot>); });
+    await press(renderer, "stop");
+    expect(text(renderer.toJSON())).toContain("bar: Could not stop next-server");
+    expect(text(renderer.toJSON())).not.toContain(SECRET);
+    await act(async () => { renderer.unmount(); });
+  });
+
+  it("the Hosts screen and the workspace tab put SayRoot above their bodies", async () => {
+    const { readFileSync } = await import("node:fs");
+    expect(readFileSync(new URL("../client/daemon.tsx", import.meta.url), "utf8")).toMatch(/<SayRoot><DaemonBody /);
+    expect(readFileSync(new URL("../client/workspace-panel.tsx", import.meta.url), "utf8")).toMatch(/<SayRoot><WorkspaceBody /);
+  });
+});
+const Text = (props: Record<string, unknown>) => React.createElement("Text", props);

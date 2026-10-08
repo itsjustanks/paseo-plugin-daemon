@@ -1,9 +1,8 @@
-import { errorText, useCopy, useOnce } from "./feedback";
+import { errorText, useCopy, useOnce, Sheet } from "./feedback";
 import React, { useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc } from "@getpaseo/plugin/client";
-import { Modal } from "@getpaseo/plugin/client/react-native";
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
 import { processDetails, processPreview, processReport, processStop, sameness, twinKeys, type ActionLogEntry, type ProcessReport, type ProcessRow, type ReportSort, type StopPlan } from "../shared/processes";
 import { Accordion, AccordionItem, Banner, Button, Card, Chip, Divider, HostIcon, ItemTitle, Meta, Note, QuietLine, RADIUS, Row, SPACE, TYPE, tint, toneColor, type Tone } from "./kit";
@@ -230,8 +229,7 @@ export function StopSheet({ theme, plan, busy, onCancel, onConfirm }: { theme: T
   // Single use (0.15.0): two quick presses stop once.
   const confirmOnce = useOnce(plan !== null, onConfirm);
   return (
-    <Modal title={plan ? (ready.length ? title : "Nothing can be stopped") : "Stop processes"} icon={HostIcon ? <HostIcon name="OctagonX" size={18} color={theme.colors.statusDanger} /> : undefined} open={plan !== null} onOpenChange={(open: boolean) => { if (!open && !busy) onCancel(); }}>
-      <Modal.Content>
+    <Sheet title={plan ? (ready.length ? title : "Nothing can be stopped") : "Stop processes"} icon={HostIcon ? <HostIcon name="OctagonX" size={18} color={theme.colors.statusDanger} /> : undefined} open={plan !== null} busy={busy} onClose={() => onCancel()} colors={{ surface: theme.colors.surface1, border: theme.colors.border, foreground: theme.colors.foreground }}>
         <View style={{ gap: SPACE.row, padding: SPACE.card }}>
           {ready.map((target) => (
             <View key={target.pid ?? target.name} style={{ gap: SPACE.hair }}>
@@ -254,8 +252,7 @@ export function StopSheet({ theme, plan, busy, onCancel, onConfirm }: { theme: T
             {ready.length ? <Button theme={theme} label={ready.length + children === 1 ? "Stop it" : `Stop ${ready.length + children} processes`} icon="OctagonX" danger busy={busy} onPress={confirmOnce} /> : null}
           </View>
         </View>
-      </Modal.Content>
-    </Modal>
+    </Sheet>
   );
 }
 

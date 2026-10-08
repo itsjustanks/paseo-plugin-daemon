@@ -1,8 +1,7 @@
-import { errorText, useSafeToast } from "./feedback";
+import { errorText, useSafeToast, Sheet } from "./feedback";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { usePaseo, useRpc } from "@getpaseo/plugin/client";
-import { Modal } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
@@ -100,8 +99,7 @@ function AskSheet({ theme, paseo, subject, open, onClose }: { theme: Theme; pase
   const sent = send.data;
   const body = { ...TYPE.body, color: theme.colors.foreground };
   return (
-    <Modal title={sent ? "Sent" : "Ask an agent"} icon={HostIcon ? <HostIcon name="Bot" size={18} color={theme.colors.accent} /> : undefined} open={open} onOpenChange={(next: boolean) => { if (!next) close(); }}>
-      <Modal.Content>
+    <Sheet title={sent ? "Sent" : "Ask an agent"} icon={HostIcon ? <HostIcon name="Bot" size={18} color={theme.colors.accent} /> : undefined} open={open} onClose={close} colors={{ surface: theme.colors.surface1, border: theme.colors.border, foreground: theme.colors.foreground }}>
         <View style={{ gap: SPACE.row, padding: SPACE.card, maxWidth: 640 }}>
           {sent ? (
             <>
@@ -144,8 +142,7 @@ function AskSheet({ theme, paseo, subject, open, onClose }: { theme: Theme; pase
             </>
           )}
         </View>
-      </Modal.Content>
-    </Modal>
+    </Sheet>
   );
 }
 

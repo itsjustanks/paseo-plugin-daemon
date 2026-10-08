@@ -110,3 +110,44 @@ describe("archived workspaces' leftovers", () => {
     checker.close();
   });
 });
+
+describe("archived workspaces (review fixes)", () => {
+  it("a symlinked folder also matches the kernel's real path, resolved after the hook returned", async () => {
+    let now = 1_000_000;
+    class Linked extends ArchivedWorkspaces { protected override resolve() { return Promise.resolve("/home/alice/real/site"); } }
+    const archived = new Linked("/home/alice", () => now);
+    archived.record({ id: "w1", name: "site", cwd: "/home/alice/link/site" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    now += ARCHIVED_GRACE_MS;
+    const found = await archived.leftovers(report([row({ pid: 20, name: "next-server", ports: [3000], cwd: "~/real/site" })]));
+    expect(found.map((item) => item.pid)).toEqual([20]);
+  });
+
+  it("a failing real-path lookup keeps the given folder", async () => {
+    let now = 1_000_000;
+    class Broken extends ArchivedWorkspaces { protected override resolve(): Promise<string | null> { return Promise.reject(new Error("gone")); } }
+    const archived = new Broken("/home/alice", () => now);
+    archived.record({ id: "w1", name: "site", cwd: "/home/alice/site" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    now += ARCHIVED_GRACE_MS;
+    expect((await archived.leftovers(report([row({ pid: 21, ports: [4000], cwd: "~/site" })]))).map((item) => item.pid)).toEqual([21]);
+  });
+
+  it("reads every page: a listener behind 200 heavier matches is still found", async () => {
+    let now = 1_000_000;
+    const archived = new ArchivedWorkspaces("/home/alice", () => now);
+    archived.record({ id: "w1", name: "site", cwd: "/home/alice/site" });
+    now += ARCHIVED_GRACE_MS;
+    const heavy = Array.from({ length: 260 }, (_, index) => row({ pid: 1000 + index, ports: [], cwd: "~/site" }));
+    const all = [...heavy, row({ pid: 99, name: "vite", ports: [5173], cwd: "~/site/web" })];
+    const offsets: number[] = [];
+    const paged = async (input: { offset?: number; limit?: number }) => {
+      offsets.push(input.offset ?? 0);
+      const start = input.offset ?? 0;
+      return { processes: all.slice(start, start + (input.limit ?? 25)), matched: all.length } as unknown as ProcessReport;
+    };
+    const found = await archived.leftovers(paged as never);
+    expect(found.map((item) => item.pid)).toEqual([99]);
+    expect(offsets).toEqual([0, 200]);
+  });
+});

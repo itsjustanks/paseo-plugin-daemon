@@ -21,13 +21,27 @@ const REDACTED = "[redacted]";
 
 /**
  * Flag, env, query-parameter, header, or JSON-property names whose *value*
- * must never be shown. Matched case-insensitively against the bare name.
+ * must never be shown. Matched on whole name parts (0.15.0 review fix), so
+ * `token`, `GITHUB_TOKEN`, `x-api-key`, `apiKey`, `client_secret`,
+ * `PGPASSWORD` and `Authorization` are secret while `tokenizer`, `author`,
+ * `monkey`, `keyboard` and `max_tokens` stay visible. A name is secret when
+ *  - squeezed of separators, it ends in password, passwd, passphrase, secret,
+ *    token, apikey or credential(s) (GITHUB_TOKEN, PGPASSWORD, x-auth-token); or
+ *  - its last part (split on _ - . and camelCase) is auth, authorization,
+ *    bearer, cookie, session, signature, sig, dsn, key, pass or pwd
+ *    (api_key, SIGNING_KEY, REDIS_PASS, SENTRY_DSN); or
+ *  - it names a connection string or database URL.
  */
-const SECRET_NAME =
-  /(token|secret|passw(or)?d|passphrase|(^|[_-])pass($|[_-])|(^|[_-])pwd$|auth|cookie|credential|api[-_]?key|private[-_]?key|access[-_]?key|client[-_]?secret|session|signature|(^|[_-])sig$|\bkey\b|_key$|-key$|(^|[_-])dsn$|connection[-_]?string|database[-_]?ur[il])/i;
+const SECRET_SUFFIX = /(password|passwd|passphrase|secret|token|apikey|credentials?)$/i;
+const SECRET_LAST_PART = new Set(["auth", "authorization", "bearer", "cookie", "session", "signature", "sig", "dsn", "key", "pass", "pwd"]);
+const SECRET_SPECIAL = /(database[_-]?ur[il]|connection[_-]?string)$/i;
 
 export function isSecretName(name: string): boolean {
-  return SECRET_NAME.test(name);
+  const bare = name.replace(/^-+/, "").replace(/^["']|["']$/g, "").trim();
+  if (!bare) return false;
+  if (SECRET_SUFFIX.test(bare.replace(/[_\-.\s]/g, "")) || SECRET_SPECIAL.test(bare)) return true;
+  const parts = bare.replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/[\s_\-.]+/).filter(Boolean);
+  return SECRET_LAST_PART.has((parts[parts.length - 1] ?? "").toLowerCase());
 }
 
 /** Values that look like credentials regardless of the flag they follow. */
@@ -261,9 +275,29 @@ export function displayName(argv: readonly string[], comm: string): string {
  */
 export function redactText(lines: readonly string[], home: string): string[] {
   return lines.map((line) => {
-    const words = redactArgv(line.split(" "), home);
+    const words = redactArgv(redactSpans(line).split(" "), home);
     return redactLongTokens(redactValue(homeRelative(words.join(" "), home)));
   });
+}
+
+/**
+ * Whole spans in one line of text, before it's split into words (0.15.0
+ * review fix): a quoted value is masked to its closing quote (or the end of
+ * the line), so `password="correct horse battery staple"` hides all four
+ * words; an `Authorization:` header with any scheme, any case and any
+ * length is masked; and so is a quoted value after a secret flag
+ * (`--password "a b"`, `--token='x y'`).
+ */
+export function redactSpans(line: string): string {
+  return line
+    .replace(/\b((?:proxy-)?authorization)(["']?\s*[:=]\s*)("[^"\n]*"?|'[^'\n]*'?|[^\n"']*)/gi, (_match, name: string, sep: string, value: string) => {
+      const quote = value[0] === '"' || value[0] === "'" ? value[0] : "";
+      return `${name}${sep}${quote}${REDACTED}${quote && value.length > 1 && value.endsWith(quote) ? quote : ""}`;
+    })
+    .replace(/(["']?)([A-Za-z_][\w.-]*)\1(\s*[:=]\s*)(["'])((?:\\.|(?!\4)[^\\\n])*)(\4|$)/g, (match, q1: string, name: string, sep: string, q: string, _value: string, end: string) =>
+      (isSecretName(name) ? `${q1}${name}${q1}${sep}${q}${REDACTED}${end}` : match))
+    .replace(/(^|\s)(--?[A-Za-z][\w.-]*)(\s+|=)(["'])((?:\\.|(?!\4)[^\\\n])*)(\4|$)/g, (match, lead: string, flag: string, sep: string, q: string, _value: string, end: string) =>
+      (isSecretName(flag) ? `${lead}${flag}${sep}${q}${REDACTED}${end}` : match));
 }
 
 /**

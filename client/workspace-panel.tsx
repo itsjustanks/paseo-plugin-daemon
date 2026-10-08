@@ -15,7 +15,7 @@ import { rollupResources, type ResourceRollup } from "../shared/workspace-resour
 import { AskAgentButton, HostsNavigationProvider, OpenTerminalButton } from "./ask";
 import { DaemonSurface, PageHeader } from "./daemon";
 import { Accordion, AccordionItem, Dot, Fact, MessageBar, Meta, Row, SectionTitle, SPACE, TYPE, toneColor, type Tone as KitTone } from "./kit";
-import { SayProvider, useSay } from "./feedback";
+import { SayRoot, usePageSay } from "./feedback";
 import { OpenRow } from "./open-row";
 import { useOpenService } from "./open-service";
 import { PROCESS_LIMIT, processKey, useMonitorRpc, type Process, type Snapshot } from "./rpc";
@@ -46,7 +46,7 @@ export function WorkspacePanel(props: PluginWorkspacePanelProps) {
   return (
     <TokensProvider value={tokens}>
       <HostsNavigationProvider navigation={props.navigation}>
-      <WorkspaceBody key={`${props.host.id}:${props.workspaceId}`} theme={props.theme} hostId={props.host.id} workspaceId={props.workspaceId} intervalSeconds={values.snapshotIntervalSeconds} minutes={values.tunnelMinutes} settingsLoading={settings.status === "loading"} />
+      <SayRoot><WorkspaceBody key={`${props.host.id}:${props.workspaceId}`} theme={props.theme} hostId={props.host.id} workspaceId={props.workspaceId} intervalSeconds={values.snapshotIntervalSeconds} minutes={values.tunnelMinutes} settingsLoading={settings.status === "loading"} /></SayRoot>
       </HostsNavigationProvider>
     </TokensProvider>
   );
@@ -145,7 +145,7 @@ function DiskSection({ theme, view }: { theme: PluginTheme; view: WorkspaceDiskV
 function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, settingsLoading }: { theme: PluginTheme; hostId: string; workspaceId: string; intervalSeconds: number; minutes: TunnelMinutes; settingsLoading: boolean }) {
   const t = useTokens();
   // 0.15.0: replies are toasts; on an app without them, a message bar under the header.
-  const [message, say] = useSay();
+  const [message] = usePageSay();
   const queryClient = useQueryClient();
   const rpc = useMonitorRpc();
   const linkStatus = useRpc(link.linkStatus);
@@ -222,7 +222,6 @@ function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, s
   // 0.12.1: the new Hosts style. The workspace's name and state up top with one Refresh link, its dev servers, then
   // anything wrong; resources, other processes, links and the technical bits (folder, schedule) fold away.
   return (
-    <SayProvider say={say}>
     <ScrollView style={{ flex: 1, backgroundColor: t.color.surface0 }} contentContainerStyle={{ padding: t.compact ? SPACE.md : SPACE.section, paddingBottom: SPACE.section * 2, alignItems: "stretch" }}>
       <View style={{ width: "100%", maxWidth: t.maxWidth, alignSelf: "center", gap: SPACE.section }}>
         <PageHeader theme={theme} host={workspace?.name ?? "This workspace"} tone={tone} line={line} onRefresh={refreshNow} refreshing={refreshing} />
@@ -312,6 +311,5 @@ function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, s
       </View>
       <ForceStopModal target={liveForceTarget} busy={forceMutation.isPending} onCancel={() => setForceTarget(null)} onConfirm={(process) => forceMutation.mutate(process)} />
     </ScrollView>
-    </SayProvider>
   );
 }

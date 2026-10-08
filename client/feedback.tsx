@@ -15,7 +15,7 @@ import { Button, Note, Row, SPACE, TYPE, type Tone } from "./kit";
 export type Message = { text: string; tone: Tone } | null;
 type ToastVariant = "default" | "info" | "success" | "warning" | "error";
 export type ToastApi = { show(message: string, options?: { variant?: ToastVariant; durationMs?: number }): void; error(message: string): void };
-type ModalComponent = ComponentType<{ title: string; open: boolean; onOpenChange(open: boolean): void; children: ReactNode }> & { Content?: ComponentType<{ children: ReactNode }> };
+type ModalComponent = ComponentType<{ title: string; icon?: ReactNode; open: boolean; onOpenChange(open: boolean): void; children: ReactNode }> & { Content?: ComponentType<{ children: ReactNode }> };
 const host = HostRN as unknown as { useToast?: () => ToastApi; copyText?: (text: string) => Promise<void>; Modal?: ModalComponent };
 
 const isComponent = (value: unknown) => typeof value === "function" || (typeof value === "object" && value !== null);
@@ -54,8 +54,25 @@ export function useSay(): [Message, (message: Message) => void] {
 
 /** Where an older app's replies go when it has no toast: the page's message bar. Screens provide it. */
 const SayContext = createContext<((message: Message) => void) | null>(null);
+const MessageContext = createContext<Message>(null);
 export function SayProvider({ say, children }: { say: (message: Message) => void; children: ReactNode }) {
   return <SayContext.Provider value={say}>{children}</SayContext.Provider>;
+}
+
+/**
+ * The page's say, held ABOVE everything on the page (0.15.0 review fix), so
+ * hooks called by the page body itself (stop, open, copy) reach the message
+ * bar on an app without toasts. The body reads it with `usePageSay`.
+ */
+export function SayRoot({ children }: { children: ReactNode }) {
+  const [message, say] = useSay();
+  return <SayContext.Provider value={say}><MessageContext.Provider value={message}>{children}</MessageContext.Provider></SayContext.Provider>;
+}
+
+const ignore = () => undefined;
+/** The message bar's current message and the page's say (from SayRoot). */
+export function usePageSay(): [Message, (message: Message) => void] {
+  return [useContext(MessageContext), useContext(SayContext) ?? ignore];
 }
 
 /**
@@ -125,6 +142,42 @@ export function useOnce(open: boolean, action: () => void): () => void {
     used.current = true;
     action();
   };
+}
+
+/**
+ * A sheet (0.15.0 review fix): Paseo's dialog where the app has one; on an
+ * app without it, the same content in place, framed like a card, so Stop,
+ * Force stop and Ask an agent never crash for want of a Modal. `busy` keeps
+ * it from being dismissed mid-action.
+ */
+export function Sheet({ title, icon, open, busy, onClose, colors, children }: {
+  title: string;
+  icon?: ReactNode;
+  open: boolean;
+  busy?: boolean;
+  onClose(): void;
+  colors: { surface: string; border: string; foreground: string };
+  children: ReactNode;
+}) {
+  const HostModal = hostModal();
+  if (HostModal) {
+    const Content = HostModal.Content;
+    return (
+      <HostModal title={redactSecrets(title)} icon={icon} open={open} onOpenChange={(next) => { if (!next && !busy) onClose(); }}>
+        {Content ? <Content>{children}</Content> : children}
+      </HostModal>
+    );
+  }
+  if (!open) return null;
+  return (
+    <View accessibilityLabel={redactSecrets(title)} style={{ borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, borderRadius: 16, marginVertical: SPACE.sm }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm, paddingHorizontal: SPACE.card, paddingTop: SPACE.card }}>
+        {icon ?? null}
+        <Text style={{ ...TYPE.item, color: colors.foreground, flexShrink: 1 }}>{redactSecrets(title)}</Text>
+      </View>
+      {children}
+    </View>
+  );
 }
 
 /** Paseo's dialog, or null on an app without one. */

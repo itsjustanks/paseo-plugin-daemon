@@ -10,7 +10,7 @@ import { processReport } from "../shared/processes";
 import { hostsSettings } from "../shared/settings";
 import { TUNNEL_MINUTES_DEFAULT, formatMinutes, type TunnelMinutes } from "../shared/tunnel-lease";
 import { resolveTab, type Fold } from "../shared/tabs";
-import { SayProvider, useSay } from "./feedback";
+import { SayRoot, usePageSay } from "./feedback";
 import { HostsNavigationProvider, OpenTerminalButton } from "./ask";
 import { syncScreenParams } from "./native";
 import { HelpTab, type SetupCheck } from "./guide";
@@ -42,7 +42,7 @@ import { Button, Card, Facts, Grid, Notice, StatusPill, TokensProvider, formatBy
 type DaemonProps = PluginSurfaceProps & { shortcuts?: boolean; params?: Record<string, string>; initialTab?: string };
 
 export function DaemonSurface(props: DaemonProps) {
-  return <TokensProvider value={useUi(props.theme, props.layout.compact)}><HostsNavigationProvider navigation={props.navigation}><DaemonBody key={props.host.id} {...props} /></HostsNavigationProvider></TokensProvider>;
+  return <TokensProvider value={useUi(props.theme, props.layout.compact)}><HostsNavigationProvider navigation={props.navigation}><SayRoot><DaemonBody key={props.host.id} {...props} /></SayRoot></HostsNavigationProvider></TokensProvider>;
 }
 
 /** The page header: the plugin's icon and name, one line on this host with a coloured dot, and the page's one Refresh link (0.12.1). */
@@ -79,7 +79,7 @@ function DaemonBody(props: DaemonProps) {
   const [fold, setFold] = useState<{ id: Fold | null; asked: number }>({ id: start.fold, asked: 0 });
   const [search, setSearch] = useState("");
   // 0.15.0: replies are Paseo toasts where the app has them; the message bar stays only for older apps.
-  const [message, setMessage] = useSay();
+  const [message, setMessage] = usePageSay();
   const [pairingRequested, setPairingRequested] = useState(start.fold === "private" && asked === "pair");
   const [sshRemotePort, setSshRemotePort] = useState<number | undefined>();
   const settings = useSettings(hostsSettings);
@@ -156,7 +156,6 @@ function DaemonBody(props: DaemonProps) {
   const foldKey = (id: Fold) => `${id}-${fold.id === id ? fold.asked : "closed"}`;
 
   return (
-    <SayProvider say={setMessage}>
     <ScrollView style={{ flex: 1, backgroundColor: t.color.surface0 }} contentContainerStyle={{ padding: pad, paddingBottom: SPACE.section * 2, maxWidth: t.maxWidth, width: "100%", alignSelf: "center" }}>
       <PageHeader theme={theme} host={props.host.label} tone={headerTone} line={headerLine} onRefresh={refreshAll} refreshing={check.isPending} />
       <TabBar theme={theme} compact={layout.compact} tabs={TAB_IDS} active={tab} onSelect={(next) => go(next)} />
@@ -233,7 +232,6 @@ function DaemonBody(props: DaemonProps) {
         <QuietLine theme={theme} icon="Info">Databases, system services and other listeners are left out. Link length is under Settings → Hosts.</QuietLine>
       </View>}
     </ScrollView>
-    </SayProvider>
   );
 }
 

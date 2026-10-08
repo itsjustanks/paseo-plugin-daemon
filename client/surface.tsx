@@ -1,5 +1,5 @@
-import { errorText, useOnce, useSafeToast } from "./feedback";
-import { Icon, Modal } from "@getpaseo/plugin/client/react-native";
+import { errorText, useOnce, useSafeToast, Sheet } from "./feedback";
+import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useMutation } from "@tanstack/react-query";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
@@ -344,15 +344,11 @@ export function ForceStopModal({ target, busy, onCancel, onConfirm }: { target: 
   // Single use (0.15.0): two quick presses force-stop once.
   const confirmOnce = useOnce(target !== null, () => { if (target) onConfirm(target); });
   return (
-    <Modal
+    <Sheet
       title="Force stop process"
       icon={<Icon name="OctagonX" size={18} color={t.color.danger} />}
       open={target !== null}
-      onOpenChange={(open) => {
-        if (!open && !busy) onCancel();
-      }}
-    >
-      <Modal.Content>
+      busy={busy} onClose={() => onCancel()} colors={{ surface: t.color.surface1, border: t.color.border, foreground: t.color.fg }}>
         <View style={{ gap: t.space.md, padding: t.compact ? t.space.md : t.space.lg }}>
           {target ? (
             <>
@@ -370,7 +366,6 @@ export function ForceStopModal({ target, busy, onCancel, onConfirm }: { target: 
             </>
           ) : null}
         </View>
-      </Modal.Content>
-    </Modal>
+    </Sheet>
   );
 }

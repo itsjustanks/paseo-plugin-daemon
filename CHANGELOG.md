@@ -27,6 +27,16 @@ stays `>=0.9.0`; no settings change; nothing stops by itself.
   archived workspace's folder for a day for anything still listening on a port, and lists it under
   What needs attention with Stop (asks first) and Ask an agent.
 - **Help:** "I archived a workspace. Is anything still running?".
+- **Review fixes (before release):**
+  - The redactor masks a quoted value to its closing quote (`password="correct horse battery
+    staple"`), an `Authorization:` header with any scheme, case or length, and quoted values after
+    secret flags. Secret names match whole parts (token, secret, password, api_key, auth, bearer,
+    client_secret, `*_TOKEN`…), so tokenizer, author, monkey and keyboard stay visible.
+  - Stop, Force stop and Ask an agent show in place on an app without Paseo's dialog, instead of
+    failing.
+  - On an app without toasts, results from the page itself (Stop, Open, copy) reach the message bar.
+  - An archived workspace reached through a symlink is matched by its real path too, and every page
+    of matching processes is read, so a listener isn't hidden behind heavier ones.
 
 ## 0.14.0 — 2026-10-08
 
