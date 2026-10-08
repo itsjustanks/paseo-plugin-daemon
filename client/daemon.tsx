@@ -1,7 +1,7 @@
 import { Transfers } from "./transfers";
 import { type PluginSurfaceProps, useRpc, useSettings } from "@getpaseo/plugin/client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { hostHealth } from "../shared/health";
 import * as rpc from "../shared/link";
@@ -10,12 +10,13 @@ import { processReport } from "../shared/processes";
 import { hostsSettings } from "../shared/settings";
 import { TUNNEL_MINUTES_DEFAULT, formatMinutes, type TunnelMinutes } from "../shared/tunnel-lease";
 import { resolveTab, type Fold } from "../shared/tabs";
+import { SayProvider, useSay } from "./feedback";
 import { HostsNavigationProvider, OpenTerminalButton } from "./ask";
 import { syncScreenParams } from "./native";
 import { HelpTab, type SetupCheck } from "./guide";
 import { OverviewTab } from "./home";
 import { Accordion, AccordionItem, IconBadge, MessageBar, QuietLine, SectionTitle, SPACE, TYPE, type Tone } from "./kit";
-import { CacheList, DiskCard, WorkspaceList, useDiskReport } from "./workspaces";
+import { CacheList, DiskCard, WorkspaceList, idleClearable, useDiskReport } from "./workspaces";
 import { formatSize } from "../shared/disk";
 import { TAB_IDS, TabBar, TabLine, type TabId } from "./navigation";
 import { OpenRow } from "./open-row";
@@ -37,7 +38,6 @@ import { Button, Card, Facts, Grid, Notice, StatusPill, TokensProvider, formatBy
  * and Project Sync were tabs until 0.10: both are about other computers, so
  * they fold out under Workspaces (`shared/tabs.ts` maps the old ids).
  */
-type Message = { text: string; tone: Tone } | null;
 /** `params.tab` (and `params.open`) arrive with Paseo 0.11 screens; `initialTab` is for the preview. */
 type DaemonProps = PluginSurfaceProps & { shortcuts?: boolean; params?: Record<string, string>; initialTab?: string };
 
@@ -78,7 +78,8 @@ function DaemonBody(props: DaemonProps) {
   // Which Workspaces fold-out a button (or an old link) asked to open; `asked` remounts it so a second press re-opens it.
   const [fold, setFold] = useState<{ id: Fold | null; asked: number }>({ id: start.fold, asked: 0 });
   const [search, setSearch] = useState("");
-  const [message, setMessage] = useState<Message>(null);
+  // 0.15.0: replies are Paseo toasts where the app has them; the message bar stays only for older apps.
+  const [message, setMessage] = useSay();
   const [pairingRequested, setPairingRequested] = useState(start.fold === "private" && asked === "pair");
   const [sshRemotePort, setSshRemotePort] = useState<number | undefined>();
   const settings = useSettings(hostsSettings);
@@ -118,6 +119,16 @@ function DaemonBody(props: DaemonProps) {
   // "Check disk space" there, Refresh on Workspaces, or the Command Center's "Check disk space" starts one.
   const disk = useDiskReport(props.host.id, tab === "workspaces");
   const refreshAll = () => { check.mutate(); void queryClient.invalidateQueries({ queryKey: ["daemon-link", props.host.id] }); if (tab === "workspaces") disk.scan.mutate(); };
+  // 0.15.0: a check takes a minute or two, so say when it's done (a toast, or the message bar on older apps).
+  const scanState = disk.report?.scan.state;
+  const lastScanState = useRef(scanState);
+  useEffect(() => {
+    const before = lastScanState.current;
+    lastScanState.current = scanState;
+    if (before !== "running" || scanState !== "done" || !disk.report) return;
+    const safe = idleClearable(disk.report);
+    setMessage({ tone: "success", text: safe.bytes > 0 ? `Disk check finished: about ${formatSize(safe.bytes)} looks safe to clear in ${safe.workspaces} idle workspace${safe.workspaces === 1 ? "" : "s"}.` : "Disk check finished: nothing looks safe to clear in your idle workspaces right now." });
+  }, [scanState]);
   const toHelp = (next: TabId, nextFold?: Fold) => go(next, nextFold ?? null, nextFold === "private");
   const privateRoute = (port: number) => { setSshRemotePort(port); go("workspaces", "ssh"); };
   const ready = local.data?.scope?.status === "ready" && !local.isError;
@@ -145,6 +156,7 @@ function DaemonBody(props: DaemonProps) {
   const foldKey = (id: Fold) => `${id}-${fold.id === id ? fold.asked : "closed"}`;
 
   return (
+    <SayProvider say={setMessage}>
     <ScrollView style={{ flex: 1, backgroundColor: t.color.surface0 }} contentContainerStyle={{ padding: pad, paddingBottom: SPACE.section * 2, maxWidth: t.maxWidth, width: "100%", alignSelf: "center" }}>
       <PageHeader theme={theme} host={props.host.label} tone={headerTone} line={headerLine} onRefresh={refreshAll} refreshing={check.isPending} />
       <TabBar theme={theme} compact={layout.compact} tabs={TAB_IDS} active={tab} onSelect={(next) => go(next)} />
@@ -221,6 +233,7 @@ function DaemonBody(props: DaemonProps) {
         <QuietLine theme={theme} icon="Info">Databases, system services and other listeners are left out. Link length is under Settings → Hosts.</QuietLine>
       </View>}
     </ScrollView>
+    </SayProvider>
   );
 }
 

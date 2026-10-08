@@ -13,12 +13,6 @@ declare const navigator: { clipboard?: { writeText(text: string): Promise<void> 
  */
 const hostOpen = () => externalUrlOpener(pluginClient);
 
-export async function sharePairingCode(text: string) {
-  if (Platform.OS === "web" && typeof navigator !== "undefined" && navigator.clipboard) await navigator.clipboard.writeText(text);
-  else if (Platform.OS !== "web") await Share.share({ message: text });
-  else throw new Error("Select the pairing code and copy it from the text below.");
-}
-
 export async function openExternal(url: string) {
   const open = hostOpen();
   if (open) return open(url);

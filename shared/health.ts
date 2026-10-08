@@ -48,6 +48,8 @@ export const HealthIssueCodeSchema = z.enum([
   "plugin-stuck", "auto-stopped",
   // 0.14.0
   "disk-full",
+  // 0.15.0
+  "archived-leftover",
 ]);
 export type HealthIssueCode = z.infer<typeof HealthIssueCodeSchema>;
 
@@ -104,6 +106,9 @@ export interface LostRecord extends ServingRecord { lostAt: number }
 export interface HealthMemory { serving: Record<number, ServingRecord>; lost: Record<number, LostRecord> }
 export const EMPTY_HEALTH_MEMORY: HealthMemory = { serving: {}, lost: {} };
 
+/** 0.15.0: a process still listening in the folder of a workspace archived in the last day. */
+export interface ArchivedLeftover { pid: number; name: string; ports: number[]; cwd: string; stoppable: boolean; workspace: string }
+
 export interface HealthInput {
   now: number;
   /** Null when the host could not be read; `error` then says why, in safe copy. */
@@ -118,6 +123,8 @@ export interface HealthInput {
   watched?: readonly WatchResult[];
   /** 0.13.0: the check loop's latest reading; absent in tests and on unsupported hosts. */
   guard?: GuardState | null;
+  /** 0.15.0: dev servers archived workspaces left running. */
+  archived?: readonly ArchivedLeftover[];
 }
 
 const host = (code: HealthIssueCode, severity: HealthIssue["severity"], message: string): HealthIssue => ({ code, severity, scope: "host", message, ports: [], cwd: null });
@@ -206,6 +213,10 @@ export function evaluateHealth(input: HealthInput, memory: HealthMemory = EMPTY_
   const auto = input.guard?.autoGuard.last;
   if (auto && now - auto.at < AUTO_STOP_NOTICE_MINUTES * 60_000) issues.push({ ...host("auto-stopped", "warning", auto.message), subject: auto.name, pid: auto.pid });
 
+  for (const left of input.archived ?? []) {
+    const ports = left.ports.map((port) => `:${port}`).join(", ");
+    issues.push({ ...process_("archived-leftover", "warning", `${left.name} (${ports}) is still running from the archived workspace "${left.workspace}".`, left.ports, left.cwd), subject: left.name, pid: left.pid, stoppable: left.stoppable });
+  }
   for (const result of input.watched ?? []) {
     if (result.state === "slow") issues.push({ ...host("service-slow", "warning", result.message), subject: result.name });
     if (result.state === "down") issues.push({ ...host("service-down", "warning", result.message), subject: result.name });
@@ -296,6 +307,7 @@ export function pillText(health: WorkspaceHealth): string | null {
     if (first.code === "plugin-stuck") return `${first.subject ?? "A plugin"} not answering${more}`;
     if (first.code === "auto-stopped") return `Runaway stopped${more}`;
     if (first.code === "disk-full") return `Disk nearly full${more}`;
+    if (first.code === "archived-leftover") return `Left running: ${first.subject ?? "dev server"}${more}`;
     return `Host issue${more}`;
   }
   if (health.services.length === 0) return null;
@@ -323,7 +335,7 @@ export function chipIssues(health: WorkspaceHealth): HealthIssue[] {
 /** The chip's words, or null when the workspace is calm. Never a count of healthy dev servers. */
 /** Issues an agent can be asked about (0.12.0), and how to point at them. */
 export function askSubjectFor(issue: HealthIssue, watched: readonly { id: string; name: string }[] = []): { kind: "process"; pid: number } | { kind: "port"; port: number } | { kind: "service"; id: string } | null {
-  if ((issue.code === "runaway" || issue.code === "pressure-driver") && issue.pid) return { kind: "process", pid: issue.pid };
+  if ((issue.code === "runaway" || issue.code === "pressure-driver" || issue.code === "archived-leftover") && issue.pid) return { kind: "process", pid: issue.pid };
   if (issue.code === "port-gone" && issue.ports[0] !== undefined) return { kind: "port", port: issue.ports[0] };
   if (issue.code === "service-slow" || issue.code === "service-down") {
     const service = watched.find((item) => item.name === issue.subject);

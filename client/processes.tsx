@@ -1,10 +1,11 @@
+import { errorText, useCopy, useOnce } from "./feedback";
 import React, { useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc } from "@getpaseo/plugin/client";
 import { Modal } from "@getpaseo/plugin/client/react-native";
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
-import { processPreview, processReport, processStop, sameness, twinKeys, type ActionLogEntry, type ProcessReport, type ProcessRow, type ReportSort, type StopPlan } from "../shared/processes";
+import { processDetails, processPreview, processReport, processStop, sameness, twinKeys, type ActionLogEntry, type ProcessReport, type ProcessRow, type ReportSort, type StopPlan } from "../shared/processes";
 import { Accordion, AccordionItem, Banner, Button, Card, Chip, Divider, HostIcon, ItemTitle, Meta, Note, QuietLine, RADIUS, Row, SPACE, TYPE, tint, toneColor, type Tone } from "./kit";
 import { formatBytes, formatDuration, formatPercent } from "./ui";
 import { AskAgentButton } from "./ask";
@@ -155,6 +156,7 @@ function Stat({ theme, label, value, tone }: { theme: Theme; label: string; valu
 /** One process: name, what it is, whose it is, its figures; details and the stop control behind a press. */
 function ProcessItem({ theme, row, compact, byTree, selected, onSelect, onStop, first, twin }: { theme: Theme; row: ProcessRow; compact: boolean; byTree: boolean; selected: boolean; onSelect(): void; onStop(): void; first: boolean; twin: boolean }) {
   const [open, setOpen] = useState(false);
+  const copy = useCopy();
   const flagged = row.flags.length > 0;
   const cpu = byTree ? row.tree.cpuPercent : row.cpuPercent;
   const rss = byTree ? row.tree.rssBytes : row.rssBytes;
@@ -186,12 +188,11 @@ function ProcessItem({ theme, row, compact, byTree, selected, onSelect, onStop, 
             <Text selectable style={{ ...TYPE.mono, color: theme.colors.foreground }}>{row.command}</Text>
           </View>
           <Meta theme={theme}>{[`PID ${row.pid}`, `parent ${row.ppid}`, row.cwd ? `in ${row.cwd}` : null, row.tree.count > 1 ? `${row.tree.count - 1} child process${row.tree.count === 2 ? "" : "es"}, ${formatBytes(row.tree.rssBytes)} together` : null].filter(Boolean).join(" · ")}</Meta>
-          {row.stoppable || row.flags.length ? (
-            <Row>
-              {row.flags.length ? <AskAgentButton theme={theme} subject={{ kind: "process", pid: row.pid }} /> : null}
-              {row.stoppable ? <Button theme={theme} label="Stop…" icon="OctagonX" danger accessibilityLabel={`Stop ${row.name} (PID ${row.pid})…`} onPress={onStop} /> : null}
-            </Row>
-          ) : null}
+          <Row>
+            {row.flags.length ? <AskAgentButton theme={theme} subject={{ kind: "process", pid: row.pid }} /> : null}
+            {row.stoppable ? <Button theme={theme} label="Stop…" icon="OctagonX" danger accessibilityLabel={`Stop ${row.name} (PID ${row.pid})…`} onPress={onStop} /> : null}
+            <Button theme={theme} label="Copy details" icon="Copy" accessibilityLabel={`Copy details of ${row.name} (PID ${row.pid})`} onPress={() => void copy(processDetails(row), "Details copied")} />
+          </Row>
           {!row.stoppable ? <Note theme={theme}>{row.protectedReason ?? "It can't be stopped here."}</Note> : null}
         </View>
       ) : null}
@@ -226,6 +227,8 @@ export function StopSheet({ theme, plan, busy, onCancel, onConfirm }: { theme: T
   const refused = plan?.targets.filter((target) => !target.ok) ?? [];
   const children = ready.reduce((sum, target) => sum + target.children.length, 0);
   const title = ready.length === 1 ? `Stop ${ready[0]!.name}?` : `Stop ${ready.length} processes?`;
+  // Single use (0.15.0): two quick presses stop once.
+  const confirmOnce = useOnce(plan !== null, onConfirm);
   return (
     <Modal title={plan ? (ready.length ? title : "Nothing can be stopped") : "Stop processes"} icon={HostIcon ? <HostIcon name="OctagonX" size={18} color={theme.colors.statusDanger} /> : undefined} open={plan !== null} onOpenChange={(open: boolean) => { if (!open && !busy) onCancel(); }}>
       <Modal.Content>
@@ -248,7 +251,7 @@ export function StopSheet({ theme, plan, busy, onCancel, onConfirm }: { theme: T
           ) : null}
           <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: SPACE.sm }}>
             <Button theme={theme} label={ready.length ? "Cancel" : "Close"} onPress={onCancel} disabled={busy} />
-            {ready.length ? <Button theme={theme} label={ready.length + children === 1 ? "Stop it" : `Stop ${ready.length + children} processes`} icon="OctagonX" danger busy={busy} onPress={onConfirm} /> : null}
+            {ready.length ? <Button theme={theme} label={ready.length + children === 1 ? "Stop it" : `Stop ${ready.length + children} processes`} icon="OctagonX" danger busy={busy} onPress={confirmOnce} /> : null}
           </View>
         </View>
       </Modal.Content>
@@ -289,7 +292,7 @@ export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChang
       return preview({ tokens });
     },
     onSuccess: setPlan,
-    onError: (error) => say({ text: error instanceof Error ? error.message : String(error), tone: "danger" }),
+    onError: (error) => say({ text: errorText(error), tone: "danger" }),
   });
   const confirm = useMutation({
     mutationFn: () => stop({ tokens: planTokens }),
@@ -300,7 +303,7 @@ export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChang
       say({ text: outcome.results.map((result) => (result.ok ? result.message : `${result.name}: ${result.message}`)).join(" "), tone: failed.length === outcome.results.length ? "danger" : failed.length ? "warning" : "success" });
       void query.refetch();
     },
-    onError: (error) => { setPlan(null); say({ text: error instanceof Error ? error.message : String(error), tone: "danger" }); },
+    onError: (error) => { setPlan(null); say({ text: errorText(error), tone: "danger" }); },
   });
 
   if (!data) {

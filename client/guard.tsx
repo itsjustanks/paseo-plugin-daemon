@@ -1,3 +1,5 @@
+import { redactSecrets } from "../shared/redaction";
+import { Confirm, errorText, hasDialog } from "./feedback";
 import React, { useState } from "react";
 import { Text, View } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
@@ -15,8 +17,8 @@ type Theme = PluginTheme;
  * 0.13.0's two one-press fixes, shared by Overview, Processes and the
  * sidebar dot's popover so they look and behave the same everywhere.
  *
- * Restart asks first in place (no sheet, so it also works inside the
- * popover): it says exactly what will happen and what won't, then runs.
+ * Restart asks first (0.15.0: in Paseo's dialog on a page, in place inside
+ * the popover): it says exactly what will happen and what won't, then runs.
  * Stop opens the same ask-first sheet as the Processes tab.
  */
 
@@ -31,49 +33,45 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * posts the result to the page's message bar; without it the result shows
  * here. Plain state, no query client: the sidebar popover has none.
  */
-export function RestartPlugin({ theme, issue, say, onDone }: { theme: Theme; issue: HealthIssue; say?: Say; onDone?: () => void }) {
+export function RestartPlugin({ theme, issue, say, onDone, inPlace }: { theme: Theme; issue: HealthIssue; say?: Say; onDone?: () => void; inPlace?: boolean }) {
   const restart = useRpc(pluginRestart);
   const status = useRpc(pluginRestartStatus);
   const [asking, setAsking] = useState(false);
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<RestartOutcome | null>(null);
   const name = issue.subject ?? "this plugin";
-  const run = {
-    isPending: pending,
-    mutate: () => {
-      setPending(true);
-      const pluginId = issue.plugin!;
-      // The first call answers within 20 seconds; a longer restart answers "running" and is followed here.
-      const follow = async () => {
-        let outcome = await restart({ pluginId });
-        for (let polls = 0; outcome.outcome === "running" && polls < POLL_LIMIT; polls += 1) {
-          setResult(outcome);
-          await wait(POLL_MS);
-          outcome = await status({ pluginId }).catch(() => outcome);
-        }
-        return outcome;
-      };
-      void follow()
-        .then((outcome) => { setResult(outcome); say?.({ text: outcome.message, tone: toneOf(outcome) }); onDone?.(); })
-        .catch((error: unknown) => { const text = error instanceof Error ? error.message : String(error); setResult({ ok: false, outcome: "failed", message: text, steps: [] }); say?.({ text, tone: "danger" }); })
-        .finally(() => { setPending(false); setAsking(false); });
-    },
+  const run = () => {
+    setAsking(false);
+    setPending(true);
+    const pluginId = issue.plugin!;
+    // The first call answers within 20 seconds; a longer restart answers "running" and is followed here.
+    const follow = async () => {
+      let outcome = await restart({ pluginId });
+      for (let polls = 0; outcome.outcome === "running" && polls < POLL_LIMIT; polls += 1) {
+        setResult(outcome);
+        await wait(POLL_MS);
+        outcome = await status({ pluginId }).catch(() => outcome);
+      }
+      return outcome;
+    };
+    void follow()
+      .then((outcome) => { setResult(outcome); say?.({ text: outcome.message, tone: toneOf(outcome) }); onDone?.(); })
+      .catch((error: unknown) => { const text = errorText(error); setResult({ ok: false, outcome: "failed", message: text, steps: [] }); say?.({ text, tone: "danger" }); })
+      .finally(() => { setPending(false); });
   };
   if (!issue.plugin) return null;
   if (issue.restartable === false) return <Meta theme={theme}>{issue.restartReason ?? "Restart isn't available on this host."}</Meta>;
+  // 0.15.0: the ask is Paseo's dialog on a page (in place inside the sidebar popover), single use, so a double press restarts once.
   return (
     <View style={{ gap: SPACE.sm }}>
-      {asking || run.isPending ? (
-        <>
-          <Note theme={theme}>{`Hosts asks Paseo to reload ${name}. If Paseo's plugin manager is stuck on it, Hosts then stops only ${name}'s own process and reloads it. Paseo itself, your agents and the other plugins keep running. It can take up to a minute.`}</Note>
-          <Row>
-            <Button theme={theme} label="Cancel" onPress={() => setAsking(false)} disabled={run.isPending} />
-            <Button theme={theme} label={run.isPending ? "Restarting…" : `Restart ${name}`} icon="RotateCw" primary busy={run.isPending} onPress={() => run.mutate()} />
-          </Row>
-        </>
-      ) : (
+      {pending ? (
+        <Note theme={theme}>{`Restarting ${name}… It can take up to a minute.`}</Note>
+      ) : !(asking && (inPlace || !hasDialog())) ? (
         <Row><Button theme={theme} label={`Restart ${name}…`} icon="RotateCw" accessibilityLabel={`Restart ${name}. Asks first.`} onPress={() => { setResult(null); setAsking(true); }} /></Row>
-      )}
+      ) : null}
+      <Confirm theme={theme} open={asking && !pending} inPlace={inPlace} title={`Restart ${name}?`} confirmLabel={`Restart ${name}`}
+        text={`Hosts asks Paseo to reload ${name}. If Paseo's plugin manager is stuck on it, Hosts then stops only ${name}'s own process and reloads it. Paseo itself, your agents and the other plugins keep running. It can take up to a minute.`}
+        onConfirm={run} onCancel={() => setAsking(false)} />
       {result && (!say || result.outcome === "running") ? <Note theme={theme} tone={toneOf(result)}>{result.message}</Note> : null}
       {result?.steps.length ? (
         <Disclosure theme={theme} label="What Hosts did" quiet>
@@ -98,7 +96,7 @@ export function StopProcess({ theme, pid, say, onDone }: { theme: Theme; pid: nu
       return preview({ tokens: [row.actionToken!] });
     },
     onSuccess: setPlan,
-    onError: (error) => say({ text: error instanceof Error ? error.message : String(error), tone: "warning" }),
+    onError: (error) => say({ text: errorText(error), tone: "warning" }),
   });
   const confirm = useMutation({
     mutationFn: () => stop({ tokens }),
@@ -108,7 +106,7 @@ export function StopProcess({ theme, pid, say, onDone }: { theme: Theme; pid: nu
       say({ text: outcome.results.map((item) => (item.ok ? item.message : `${item.name}: ${item.message}`)).join(" "), tone: failed.length ? "danger" : "success" });
       onDone?.();
     },
-    onError: (error) => { setPlan(null); say({ text: error instanceof Error ? error.message : String(error), tone: "danger" }); },
+    onError: (error) => { setPlan(null); say({ text: errorText(error), tone: "danger" }); },
   });
   return (
     <>
@@ -126,7 +124,7 @@ export function StuckPlugins({ theme, issues, say, onDone }: { theme: Theme; iss
     <View style={{ gap: SPACE.row }}>
       {stuck.map((issue) => (
         <View key={issue.plugin ?? issue.message} style={{ gap: SPACE.sm }}>
-          <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{issue.message}</Text>
+          <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{redactSecrets(issue.message)}</Text>
           <RestartPlugin theme={theme} issue={issue} say={say} onDone={onDone} />
         </View>
       ))}

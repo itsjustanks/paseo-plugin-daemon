@@ -1,3 +1,5 @@
+import { redactSecrets } from "../shared/redaction";
+import { errorText } from "./feedback";
 import React from "react";
 import { Text, View } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
@@ -22,7 +24,7 @@ type Theme = PluginTheme;
 type Go = (tab: TabId, fold?: Fold) => void;
 
 const WATCH_TONE: Record<WatchResult["state"], Tone> = { up: "success", slow: "warning", down: "danger", unknown: "neutral" };
-const PROCESS_CODES = new Set(["memory-pressure", "cpu-pressure", "too-many-jobs", "runaway", "pressure-driver", "process-zombie", "auto-stopped"]);
+const PROCESS_CODES = new Set(["memory-pressure", "cpu-pressure", "too-many-jobs", "runaway", "pressure-driver", "process-zombie", "auto-stopped", "archived-leftover"]);
 /** 0.14.0: a full disk is fixed on Workspaces. */
 const DISK_CODES = new Set(["disk-full"]);
 
@@ -79,13 +81,13 @@ function AttentionList({ theme, verdict, say, onDone }: { theme: Theme; verdict:
           <View key={`${issue.code}-${index}`} style={{ gap: SPACE.sm }}>
             <View style={{ flexDirection: "row", alignItems: "flex-start", gap: SPACE.sm }}>
               <View style={{ paddingTop: SPACE.sm }}><Dot color={toneColor(theme, issue.severity === "critical" ? "danger" : "warning")} /></View>
-              <Text style={{ ...TYPE.body, color: theme.colors.foreground, flex: 1 }}>{issue.message}</Text>
+              <Text style={{ ...TYPE.body, color: theme.colors.foreground, flex: 1 }}>{redactSecrets(issue.message)}</Text>
             </View>
-            {subject || (issue.code === "runaway" && issue.stoppable && issue.pid) ? (
+            {subject || ((issue.code === "runaway" || issue.code === "archived-leftover") && issue.stoppable && issue.pid) ? (
               <View style={{ paddingLeft: SPACE.md }}>
                 <Row>
                   {subject ? <AskAgentButton theme={theme} subject={subject} /> : null}
-                  {issue.code === "runaway" && issue.stoppable && issue.pid ? <StopProcess theme={theme} pid={issue.pid} say={say} onDone={onDone} /> : null}
+                  {(issue.code === "runaway" || issue.code === "archived-leftover") && issue.stoppable && issue.pid ? <StopProcess theme={theme} pid={issue.pid} say={say} onDone={onDone} /> : null}
                 </Row>
               </View>
             ) : null}
@@ -110,7 +112,7 @@ function WatchSuggestion({ theme, hostId, say }: { theme: Theme; hostId: string;
       if (!await settings.save({ ...settings.values, watchedServices: [...current, { id, name: suggestion.name, url: suggestion.url, expectedStatus: null }] }, settings.revision)) throw new Error(settings.saveError ?? "The setting couldn't be saved.");
     },
     onSuccess: () => { say({ text: "Watching OmniRoute. Its first answer shows here within a minute.", tone: "success" }); void query.refetch(); },
-    onError: (error) => say({ text: error instanceof Error ? error.message : String(error), tone: "danger" }),
+    onError: (error) => say({ text: errorText(error), tone: "danger" }),
   });
   const suggestion = query.data?.suggestions[0];
   if (!suggestion || settings.status !== "ready") return null;

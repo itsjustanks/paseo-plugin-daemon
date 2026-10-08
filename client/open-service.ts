@@ -1,5 +1,5 @@
+import { errorText, useSafeToast } from "./feedback";
 import { useRpc } from "@getpaseo/plugin/client";
-import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useMutation, type UseQueryResult } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef } from "react";
 import type { z } from "zod";
@@ -21,10 +21,10 @@ import { prepareExternal } from "./web";
 export type LinkStatus = z.output<typeof rpc.linkStatus.output>;
 type Popup = ReturnType<typeof prepareExternal>;
 
-export const errorMessage = (error: unknown) => error instanceof Error ? error.message : "Something went wrong. Please retry.";
+export const errorMessage = (error: unknown) => errorText(error, "Something went wrong. Please retry.");
 
 export function useOpenService({ links, minutes }: { links: UseQueryResult<LinkStatus>; minutes: TunnelMinutes }) {
-  const toast = useToast();
+  const toast = useSafeToast();
   const start = useRpc(rpc.tunnelStart), stop = useRpc(rpc.tunnelStop), open = useRpc(rpc.tunnelOpen), extend = useRpc(rpc.tunnelExtend), install = useRpc(rpc.tunnelInstall);
   /** Tabs reserved for ports whose link is still starting. */
   const pending = useRef(new Map<number, Popup>());

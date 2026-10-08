@@ -60,3 +60,7 @@ export const tunnelOpen = defineRpc({
   name: "daemon-link.tunnel.open", input: Id,
   output: z.object({ url: z.string().url() }),
 });
+
+/** A saved forward as the command to run by hand (0.15.0, "Copy SSH command"): the same tunnel Hosts runs, with no key, password or option that holds one. */
+export const sshCommand = (profile: Pick<Profile, "destination" | "sshPort" | "remotePort" | "localPort">) =>
+  `ssh -N -L 127.0.0.1:${profile.localPort}:127.0.0.1:${profile.remotePort} -p ${profile.sshPort} ${profile.destination}`;

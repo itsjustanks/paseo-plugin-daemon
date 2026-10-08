@@ -1,12 +1,14 @@
+import { redactSecrets } from "../shared/redaction";
+import { errorText, useCopy, useSafeToast } from "./feedback";
+import { sshCommand } from "../shared/link";
 import { useRpc } from "@getpaseo/plugin/client";
-import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useMutation } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { Switch, Text, TextInput, View } from "react-native";
 import * as rpc from "../shared/link";
-import { Button, Card, Notice, Section, useTokens } from "./ui";
+import { Button, Card, ConfirmButton, Notice, Section, useTokens } from "./ui";
 import { openExternal } from "./web";
-const errorMessage = (error: unknown) => error instanceof Error ? error.message : "Connection failed. Please retry.";
+const errorMessage = (error: unknown) => errorText(error, "Connection failed. Please retry.");
 
 function Field({ label, value, onChange, numeric = false }: { label: string; value: string; onChange(value: string): void; numeric?: boolean }) {
   const t = useTokens();
@@ -16,7 +18,8 @@ function Field({ label, value, onChange, numeric = false }: { label: string; val
 /** `initialRemotePort` comes from a dev-server card's "Private forward" press, so the form starts on the right port. */
 export function Connections({ profiles, states, refresh, initialRemotePort }: { profiles: rpc.Profile[]; states: rpc.LinkState[]; refresh(): void; initialRemotePort?: number }) {
   const t = useTokens();
-  const toast = useToast();
+  const toast = useSafeToast();
+  const copy = useCopy();
   const save = useRpc(rpc.linkSave), connect = useRpc(rpc.linkConnect), disconnect = useRpc(rpc.linkDisconnect), remove = useRpc(rpc.linkRemove);
   const [editing, setEditing] = useState<string | undefined>();
   const [name, setName] = useState(""), [destination, setDestination] = useState("");
@@ -30,12 +33,15 @@ export function Connections({ profiles, states, refresh, initialRemotePort }: { 
       const state = states.find((s) => s.id === profile.id);
       return <Card key={profile.id}>
         <Text style={t.text.heading}>{profile.name}</Text><Text style={t.text.label}>{profile.destination}:{profile.remotePort} → localhost:{profile.localPort}</Text>
-        <Text style={t.text.body}>{state?.message || "Disconnected"}</Text>
+        <Text style={t.text.body}>{redactSecrets(state?.message || "Disconnected")}</Text>
         <View style={{ flexDirection: "row", gap: t.space.sm, flexWrap: "wrap" }}>
           <Button label={state ? "Disconnect" : "Connect"} disabled={mutation.isPending} onPress={() => mutation.mutate(() => state ? disconnect({ id: profile.id }) : connect({ id: profile.id }))} />
+          <Button label="Copy SSH command" accessibilityLabel={`Copy the SSH command for ${profile.name}`} onPress={() => void copy(sshCommand(profile), "SSH command copied")} />
           {state?.state === "connected" && <Button label="Open on this computer" onPress={() => { void openExternal(`http://localhost:${profile.localPort}`).catch((err) => toast.error(errorMessage(err))); }} />}
           <Button label="Edit" onPress={() => { setEditing(profile.id); setName(profile.name); setDestination(profile.destination); setSshPort(String(profile.sshPort)); setRemotePort(String(profile.remotePort)); setLocalPort(String(profile.localPort)); setAutoConnect(profile.autoConnect); }} />
-          <Button label="Remove" disabled={mutation.isPending} onPress={() => mutation.mutate(() => remove({ id: profile.id }))} />
+          <ConfirmButton label="Remove…" confirmLabel="Remove connection" target={profile.name} disabled={mutation.isPending} loading={mutation.isPending} title={`Remove ${profile.name}?`}
+            text={`The saved connection to ${profile.destination} is deleted${state ? " and its forward closes" : ""}. Nothing on that computer changes. To use it again, save it again.`}
+            onConfirm={() => mutation.mutate(async () => { await remove({ id: profile.id }); toast.show("Connection removed", { variant: "success" }); })} />
         </View>
       </Card>;
     })}

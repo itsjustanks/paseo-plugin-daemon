@@ -1,5 +1,7 @@
+import { redactSecrets } from "../shared/redaction";
+import { errorText, useCopy } from "./feedback";
 import React, { useState } from "react";
-import { Clipboard, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { useRpc } from "@getpaseo/plugin/client";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import * as rpc from "../shared/sync";
@@ -8,6 +10,7 @@ import { Button, Card, Notice, StatusPill, formatBytes, useTokens } from "./ui";
 
 export function Transfers({ hostId, openPairing }: { hostId: string; openPairing(): void }) {
   const t = useTokens();
+  const copy = useCopy();
   const [view, setView] = useState<"receive" | "share" | "history">("receive");
   const [peerId, setPeerId] = useState("");
   const statusRpc = useRpc(rpc.syncStatus), peersRpc = useRpc(peer.peerStatus), projectsRpc = useRpc(rpc.syncProjects);
@@ -23,7 +26,7 @@ export function Transfers({ hostId, openPairing }: { hostId: string; openPairing
   return <View style={{ gap: t.space.lg }}>
     <Text style={t.text.caption}>Transfers run only when you ask, and copy committed Git history (up to 32 MiB) into a separate checkout. Folders, chat sessions, uncommitted files, Git LFS objects and submodule contents are not copied.</Text>
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>{([ ["receive", "Receive a project"], ["share", "Share with a host"], ["history", "Transfer history"] ] as const).map(([id, label]) => <Button key={id} label={label} variant={view === id ? "primary" : "secondary"} onPress={() => setView(id)} />)}</View>
-    {error ? <Notice icon="TriangleAlert" tone="danger">{error instanceof Error ? error.message : "Transfer information could not be loaded."}</Notice> : null}
+    {error ? <Notice icon="TriangleAlert" tone="danger">{errorText(error, "Transfer information could not be loaded.")}</Notice> : null}
     {view === "receive" ? <>
       <Card><Text style={t.text.heading}>Choose the receiving host first</Text><Text style={t.text.body}>The selected Paseo host receives the checkout. Choose a paired source below. On that source, open Hosts → Overview → Copy a project from another computer → Share with a host, and allow this pairing to download the project.</Text><Button label="Open host pairing" onPress={openPairing} /></Card>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>{peers.data?.peers.map((item) => <Button key={item.id} label={item.label} variant={peerId === item.id ? "primary" : "secondary"} onPress={() => { setPeerId(item.id); preview.reset(); receive.reset(); }} />)}</View>
@@ -39,7 +42,7 @@ export function Transfers({ hostId, openPairing }: { hostId: string; openPairing
     {view === "history" ? <>
       <Card><Text style={t.text.heading}>Recent transfers on this host</Text><Text style={t.text.body}>History records the latest 50 receives, including failures and interruptions. It is a transfer log, not an automatic backup or a rollback command.</Text><Button label="Refresh transfer history" loading={status.isFetching} onPress={() => { void status.refetch(); }} /></Card>
       {!status.data?.history.length ? <Notice icon="Info">No transfers yet. Pair a source, enable project sharing there, then preview a project here.</Notice> : null}
-      {status.data?.history.map((entry) => <Card key={entry.id}><View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: t.space.sm }}><Text style={t.text.heading}>{entry.projectName}</Text><StatusPill label={entry.state} tone={entry.state === "done" ? "ok" : entry.state === "receiving" ? "neutral" : "warning"} /></View><Text style={t.text.caption}>{new Date(entry.startedAt).toLocaleString()} · {entry.head.slice(0, 12)} · {formatBytes(entry.bytes)}</Text><Text style={t.text.body}>{entry.message}</Text>{entry.directory ? <><Text selectable style={t.text.caption}>{entry.directory}</Text><Button label="Copy received project path" onPress={() => Clipboard.setString(entry.directory!)} /><Text style={t.text.caption}>Open this directory as a project in Paseo when you want to use the received checkout.</Text></> : null}</Card>)}
+      {status.data?.history.map((entry) => <Card key={entry.id}><View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: t.space.sm }}><Text style={t.text.heading}>{entry.projectName}</Text><StatusPill label={entry.state} tone={entry.state === "done" ? "ok" : entry.state === "receiving" ? "neutral" : "warning"} /></View><Text style={t.text.caption}>{new Date(entry.startedAt).toLocaleString()} · {entry.head.slice(0, 12)} · {formatBytes(entry.bytes)}</Text><Text style={t.text.body}>{redactSecrets(entry.message)}</Text>{entry.directory ? <><Text selectable style={t.text.caption}>{entry.directory}</Text><Button label="Copy received project path" onPress={() => void copy(entry.directory!, "Path copied")} /><Text style={t.text.caption}>Open this directory as a project in Paseo when you want to use the received checkout.</Text></> : null}</Card>)}
     </> : null}
   </View>;
 }

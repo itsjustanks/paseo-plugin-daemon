@@ -1,6 +1,6 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import type { Snapshot, SnapshotInput } from "../shared/contracts";
-import { EMPTY_HEALTH_MEMORY, evaluateHealth, type HealthInput, type HealthMemory, type HealthVerdict } from "../shared/health";
+import { EMPTY_HEALTH_MEMORY, evaluateHealth, type ArchivedLeftover, type HealthInput, type HealthMemory, type HealthVerdict } from "../shared/health";
 import type { LinkState, Profile, Tunnel } from "../shared/link";
 import type { ProcessReport, ReportInput } from "../shared/processes";
 import type { WatchedService, WatchResult } from "../shared/watch";
@@ -26,6 +26,8 @@ export interface HealthCheckerOptions {
   onVerdict?: (verdict: HealthVerdict) => void;
   /** 0.13.0: the check loop's latest reading (no I/O). */
   guard?: () => GuardState;
+  /** 0.15.0: archived workspaces to look in for dev servers left running. */
+  archived?: { readonly size: number; leftovers(report: (input: ReportInput) => Promise<ProcessReport>): Promise<ArchivedLeftover[]> };
 }
 
 /**
@@ -100,6 +102,8 @@ export class HealthChecker {
     input.report = report;
     input.watched = watched;
     try { input.guard = this.options.guard?.() ?? null; } catch { input.guard = null; }
+    const archived = this.options.archived;
+    input.archived = processes && archived && archived.size > 0 ? await archived.leftovers((query) => processes.report(query)).catch(() => []) : [];
     const result = evaluateHealth(input, this.memory);
     this.memory = result.memory;
     this.verdict = result.verdict;

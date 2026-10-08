@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ["tests/**/*.test.ts"],
+    include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
     environment: "node",
     testTimeout: 15_000,
     coverage: {
@@ -19,7 +19,7 @@ export default defineConfig({
         functions: 85,
         lines: 85,
         // The redaction boundary is safety-critical and must stay fully covered.
-        "server/redaction.ts": {
+        "shared/redaction.ts": {
           statements: 95,
           branches: 85,
           functions: 100,

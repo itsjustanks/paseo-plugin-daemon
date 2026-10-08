@@ -84,7 +84,7 @@ export function makeQuickHealth(screenId: string): ComponentType<PopoverProps> {
         {issues.map((issue, index) => (
           <View key={`${issue.code}-${index}`} style={{ gap: SPACE.sm }}>
             <Note theme={theme} tone={issue.severity === "critical" ? "danger" : "warning"}>{issue.message}</Note>
-            {issue.code === "plugin-stuck" ? <RestartPlugin theme={theme} issue={issue} onDone={() => void refresh()} /> : null}
+            {issue.code === "plugin-stuck" ? <RestartPlugin theme={theme} issue={issue} inPlace onDone={() => void refresh()} /> : null}
           </View>
         ))}
         {(verdict?.watched ?? []).map((service) => (

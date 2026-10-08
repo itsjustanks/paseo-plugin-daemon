@@ -1,3 +1,4 @@
+import { redactSecrets } from "../shared/redaction";
 import React from "react";
 import { Text, View } from "react-native";
 import type { Tunnel } from "../shared/link";
@@ -39,7 +40,7 @@ export function OpenRow({ ports, tunnels, minutes, available, opener, onSetup, i
               <Text style={t.text.bodyStrong}>localhost:{port}</Text>
               <TunnelState tunnel={tunnel} waiting={waiting} />
             </View>
-            {status?.phase === "error" ? <Text style={[t.text.caption, { color: t.color.danger }]}>{tunnel!.message}</Text> : null}
+            {status?.phase === "error" ? <Text style={[t.text.caption, { color: t.color.danger }]}>{redactSecrets(tunnel!.message)}</Text> : null}
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
               {available ? (
                 <Button

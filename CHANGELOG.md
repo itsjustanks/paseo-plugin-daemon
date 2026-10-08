@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.15.0 — 2026-10-08
+
+Paseo's own toasts, clipboard and dialogs where the app has them, one redactor for everything you
+see or copy, and a check for dev servers an archived workspace left running. Older apps keep what
+0.14 did (the message bar, react-native's clipboard, questions in place). `requirements.paseo`
+stays `>=0.9.0`; no settings change; nothing stops by itself.
+
+- **Replies are toasts.** Stop, force stop, Restart, watch OmniRoute, browser links, terminals, SSH
+  saves and Command Center checks show as Paseo's toast (errors stay up longer) instead of the
+  message bar under the tabs, on the Hosts screen and in a workspace's Hosts tab. One way, never
+  both. A disk check you started says when it's done ("about 3.2 GB looks safe to clear").
+- **Ask first, in a dialog, once.** Stop dev server, Revoke access and Remove pairing now ask in
+  Paseo's dialog and say what happens next. Removing a saved SSH connection asks first (it didn't).
+  Restart asks in a dialog on a page and in place in the sidebar popover. Every confirm, the Stop and
+  Force stop sheets included, acts once however fast it's pressed.
+- **Copy.** "Copy details" on a process (name, PID, ports, folder, command), "Copy SSH command" on
+  a saved connection, the local link and the pairing code. Copying uses Paseo's clipboard, falls
+  back to react-native's, and says "Couldn't copy" when the browser refuses. Browser links are still
+  never shown or copied.
+- **One redactor.** The rules that cleaned commands and agent messages now live in
+  `shared/redaction.ts` and also cover every toast, message bar, note, dialog, error and copied text,
+  plus long hex and mixed-case base64 runs in free text. A pairing code you just created is copied
+  as shown (carrying it to the other computer is the point).
+- **Archived workspaces.** With Paseo's `workspace.archived` hook (newer Paseo), Hosts looks in an
+  archived workspace's folder for a day for anything still listening on a port, and lists it under
+  What needs attention with Stop (asks first) and Ask an agent.
+- **Help:** "I archived a workspace. Is anything still running?".
+
 ## 0.14.0 — 2026-10-08
 
 Disk usage by workspace, and an agent to clean up. "Dev servers" became **Workspaces**: each Paseo

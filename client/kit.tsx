@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import type { PluginTheme } from "@getpaseo/plugin";
 import * as HostRN from "@getpaseo/plugin/client/react-native";
 import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
+import { redactNode, redactSecrets } from "../shared/redaction";
 
 type Theme = PluginTheme;
 export type Tone = "success" | "warning" | "danger" | "neutral";
@@ -157,12 +158,12 @@ export function Field({ theme, label, value, onChangeText, placeholder, secure }
 
 /** A sentence of body text. Neutral notes use the full foreground colour, so what matters is never faint. */
 export function Note({ theme, children, tone = "neutral" }: { theme: Theme; children: React.ReactNode; tone?: Tone }) {
-  return <Text style={{ ...TYPE.body, color: tone === "neutral" ? theme.colors.foreground : toneColor(theme, tone) }}>{children}</Text>;
+  return <Text style={{ ...TYPE.body, color: tone === "neutral" ? theme.colors.foreground : toneColor(theme, tone) }}>{redactNode(children)}</Text>;
 }
 
 /** Secondary detail: times, ids, where something is stored. Muted, and never below 14 px. */
 export function Meta({ theme, children, selectable }: { theme: Theme; children: React.ReactNode; selectable?: boolean }) {
-  return <Text selectable={selectable} style={{ ...TYPE.secondary, color: theme.colors.foregroundMuted }}>{children}</Text>;
+  return <Text selectable={selectable} style={{ ...TYPE.secondary, color: theme.colors.foregroundMuted }}>{redactNode(children)}</Text>;
 }
 
 /** A heading for one item inside a card, such as a provider or an account. */
@@ -225,7 +226,7 @@ export function Fact({ theme, label, value }: { theme: Theme; label: string; val
   return (
     <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "baseline", columnGap: SPACE.row, rowGap: SPACE.hair }}>
       <Text style={{ ...TYPE.secondary, color: theme.colors.foregroundMuted, width: 140 }}>{label}</Text>
-      <Text selectable style={{ ...TYPE.body, color: theme.colors.foreground, flexShrink: 1 }}>{value}</Text>
+      <Text selectable style={{ ...TYPE.body, color: theme.colors.foreground, flexShrink: 1 }}>{redactSecrets(value)}</Text>
     </View>
   );
 }
@@ -415,7 +416,7 @@ export function MessageBar({ theme, tone, text }: { theme: Theme; tone: Tone; te
   return (
     <View accessibilityLiveRegion="polite" style={{ flexDirection: "row", alignItems: "flex-start", gap: SPACE.sm + SPACE.hair, padding: SPACE.row, borderRadius: RADIUS.control, marginBottom: SPACE.section, backgroundColor: tint(color, 0.08) ?? theme.colors.surface1, borderWidth: 1, borderColor: tint(color, 0.3) ?? theme.colors.border }}>
       {HostIcon ? <View style={{ paddingTop: SPACE.xs }}><HostIcon name={BANNER_ICON[tone]} size={16} color={color} /></View> : null}
-      <Text style={{ ...TYPE.body, color: tone === "neutral" ? theme.colors.foreground : color, flex: 1 }}>{text}</Text>
+      <Text style={{ ...TYPE.body, color: tone === "neutral" ? theme.colors.foreground : color, flex: 1 }}>{redactSecrets(text)}</Text>
     </View>
   );
 }

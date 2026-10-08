@@ -1,7 +1,8 @@
+import { errorText, useSafeToast } from "./feedback";
 import type { PaseoApi } from "@getpaseo/client";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { usePaseo, useRpc } from "@getpaseo/plugin/client";
-import { Modal, useToast } from "@getpaseo/plugin/client/react-native";
+import { Modal } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
@@ -167,7 +168,7 @@ export function AskAgentButton({ theme, subject, label = "Ask an agent", primary
 export function OpenTerminalButton({ theme, pid }: { theme: Theme; pid: number }) {
   const paseo = useOptionalPaseo();
   const navigation = useContext(HostsNavigation);
-  const toast = useToast();
+  const toast = useSafeToast();
   const openRpc = useRpc(terminalOpen);
   const opening = useMutation({
     mutationFn: () => openRpc({ pid }),
@@ -176,7 +177,7 @@ export function OpenTerminalButton({ theme, pid }: { theme: Theme; pid: number }
       toast.show(result.message, { variant: "success" });
       if (result.workspaceId && navigation?.openWorkspace) navigation.openWorkspace({ workspaceId: result.workspaceId });
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : String(error)),
+    onError: (error) => toast.error(errorText(error)),
   });
   if (!canOpenTerminal(paseo)) return null;
   return <Row><Button theme={theme} label="Open a terminal here" icon="SquareTerminal" busy={opening.isPending} onPress={() => opening.mutate()} /></Row>;

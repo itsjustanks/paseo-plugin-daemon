@@ -1,3 +1,4 @@
+import { redactSecrets } from "../shared/redaction";
 import React, { useEffect, useState } from "react";
 import { Text, View } from "react-native";
 import type { Tunnel } from "../shared/link";
@@ -47,7 +48,7 @@ export function TunnelCard({ tunnel, minutes, onExtend, onClose, busy }: { tunne
         live ? { value: formatRemaining(status.remainingMs) } : null,
         { value: `started ${new Date(tunnel.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` },
       ]} />
-      <Text style={t.text.caption}>{tunnel.message}</Text>
+      <Text style={t.text.caption}>{redactSecrets(tunnel.message)}</Text>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
         {live ? <Button label={`Extend by ${formatMinutes(minutes)}`} icon="TimerReset" disabled={busy} accessibilityLabel={`Extend browser link for port ${tunnel.port} by ${formatMinutes(minutes)}`} onPress={() => onExtend(tunnel.id)} /> : null}
         <Button label="Close browser link" disabled={busy} accessibilityLabel={`Close browser link for port ${tunnel.port}`} onPress={() => onClose(tunnel)} />

@@ -17,6 +17,8 @@ import { suggestions } from "./server/watch";
 import { askContext, terminalOpen } from "./shared/ask";
 import { hostsAttachmentSearch } from "./shared/attachments";
 import { createAsk } from "./server/ask";
+import { ArchivedWorkspaces } from "./server/archived";
+import { homedir } from "node:os";
 import { guardState, pluginRestart, pluginRestartStatus } from "./shared/guard";
 import { diskReport } from "./shared/disk";
 
@@ -43,7 +45,11 @@ export default function contribute(server: PluginServerContext) {
   const runtime = createRuntime({ readSettings });
   const removeHooks = registerHooks(server, runtime, readSettings);
   // One cached verdict per host; pills and panels read it instead of probing.
-  const health = new HealthChecker({ runtime, readSettings, onVerdict: summaryWriter(), guard: runtime.guard ? () => runtime.guard!.state() : undefined });
+  // 0.15.0: Paseo's workspace.archived hook (newer servers; looked up at runtime). Recording is instant and never throws.
+  const archived = new ArchivedWorkspaces(homedir());
+  const hooks = server as unknown as { on?: (name: string, handler: (event: { workspace?: { id?: unknown; name?: unknown; cwd?: unknown } }) => void) => (() => void) | void };
+  const offArchived = typeof hooks.on === "function" ? hooks.on("workspace.archived", (event) => { try { if (event?.workspace) archived.record(event.workspace); } catch { /* Never blocks archiving. */ } }) : undefined;
+  const health = new HealthChecker({ runtime, readSettings, onVerdict: summaryWriter(), guard: runtime.guard ? () => runtime.guard!.state() : undefined, archived });
   // 0.13.0: the check loop starts now, not on the first app visit: it matters most when the daemon is too busy to answer.
   runtime.guard?.start();
   // 0.10+: a settings change (say, a new watched service) is checked at once, not on the next tick.
@@ -102,5 +108,5 @@ export default function contribute(server: PluginServerContext) {
   server.handle(peer.peerServices, ({ id }, context) => runtime.withContext(context, () => runtime.peers.services(id)));
   server.handle(peer.peerForward, ({ id, port }, context) => runtime.withContext(context, () => runtime.peers.forward(id, port)));
   server.handle(peer.peerDisconnect, ({ id }, context) => runtime.withContext(context, () => runtime.peers.disconnect(id)));
-  return async () => { removeHooks(); unsubscribe(); health.close(); runtime.guard?.close(); await runtime.disk.close().catch(() => undefined); runtime.processes.close(); await Promise.all([runtime.links.close(), runtime.peers.close(), runtime.transfers.close()]); };
+  return async () => { removeHooks(); if (typeof offArchived === "function") offArchived(); unsubscribe(); health.close(); runtime.guard?.close(); await runtime.disk.close().catch(() => undefined); runtime.processes.close(); await Promise.all([runtime.links.close(), runtime.peers.close(), runtime.transfers.close()]); };
 }

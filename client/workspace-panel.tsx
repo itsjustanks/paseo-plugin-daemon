@@ -1,3 +1,4 @@
+import { redactSecrets } from "../shared/redaction";
 import { type PluginWorkspacePanelProps, useRpc, useSettings, useWorkspace } from "@getpaseo/plugin/client";
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useCallback, useMemo, useState } from "react";
@@ -13,7 +14,8 @@ import { filterWorkspaceProcesses, workspacePorts } from "../shared/workspace-fi
 import { rollupResources, type ResourceRollup } from "../shared/workspace-resources";
 import { AskAgentButton, HostsNavigationProvider, OpenTerminalButton } from "./ask";
 import { DaemonSurface, PageHeader } from "./daemon";
-import { Accordion, AccordionItem, Dot, Fact, Meta, Row, SectionTitle, SPACE, TYPE, toneColor, type Tone as KitTone } from "./kit";
+import { Accordion, AccordionItem, Dot, Fact, MessageBar, Meta, Row, SectionTitle, SPACE, TYPE, toneColor, type Tone as KitTone } from "./kit";
+import { SayProvider, useSay } from "./feedback";
 import { OpenRow } from "./open-row";
 import { useOpenService } from "./open-service";
 import { PROCESS_LIMIT, processKey, useMonitorRpc, type Process, type Snapshot } from "./rpc";
@@ -114,7 +116,7 @@ function IssueRow({ theme, issue, watched }: { theme: PluginTheme; issue: Health
     <View style={{ gap: SPACE.sm }}>
       <View style={{ flexDirection: "row", alignItems: "flex-start", gap: SPACE.sm }}>
         <View style={{ paddingTop: SPACE.sm }}><Dot color={toneColor(theme, issue.severity === "critical" ? "danger" : "warning")} /></View>
-        <Text style={{ ...TYPE.body, color: theme.colors.foreground, flex: 1 }}>{issue.message}</Text>
+        <Text style={{ ...TYPE.body, color: theme.colors.foreground, flex: 1 }}>{redactSecrets(issue.message)}</Text>
       </View>
       {subject ? <View style={{ paddingLeft: SPACE.md }}><Row><AskAgentButton theme={theme} subject={subject} /></Row></View> : null}
     </View>
@@ -142,6 +144,8 @@ function DiskSection({ theme, view }: { theme: PluginTheme; view: WorkspaceDiskV
 
 function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, settingsLoading }: { theme: PluginTheme; hostId: string; workspaceId: string; intervalSeconds: number; minutes: TunnelMinutes; settingsLoading: boolean }) {
   const t = useTokens();
+  // 0.15.0: replies are toasts; on an app without them, a message bar under the header.
+  const [message, say] = useSay();
   const queryClient = useQueryClient();
   const rpc = useMonitorRpc();
   const linkStatus = useRpc(link.linkStatus);
@@ -218,9 +222,11 @@ function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, s
   // 0.12.1: the new Hosts style. The workspace's name and state up top with one Refresh link, its dev servers, then
   // anything wrong; resources, other processes, links and the technical bits (folder, schedule) fold away.
   return (
+    <SayProvider say={say}>
     <ScrollView style={{ flex: 1, backgroundColor: t.color.surface0 }} contentContainerStyle={{ padding: t.compact ? SPACE.md : SPACE.section, paddingBottom: SPACE.section * 2, alignItems: "stretch" }}>
       <View style={{ width: "100%", maxWidth: t.maxWidth, alignSelf: "center", gap: SPACE.section }}>
         <PageHeader theme={theme} host={workspace?.name ?? "This workspace"} tone={tone} line={line} onRefresh={refreshNow} refreshing={refreshing} />
+        {message ? <MessageBar theme={theme} tone={message.tone} text={message.text} /> : null}
         {snapshotQuery.isError ? (
           <Notice icon="CircleAlert" tone="danger" action={<Button label="Try again" onPress={refreshNow} loading={snapshotQuery.isFetching} />}>
             {snapshot ? `The latest reading failed: ${errorText(snapshotQuery.error)}. Showing the last good one.` : `This host can't be read: ${errorText(snapshotQuery.error)}`}
@@ -306,5 +312,6 @@ function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, s
       </View>
       <ForceStopModal target={liveForceTarget} busy={forceMutation.isPending} onCancel={() => setForceTarget(null)} onConfirm={(process) => forceMutation.mutate(process)} />
     </ScrollView>
+    </SayProvider>
   );
 }

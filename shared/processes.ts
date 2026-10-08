@@ -187,3 +187,8 @@ export function twinKeys(rows: ReadonlyArray<{ name: string; owner: { label: str
   for (const row of rows) seen.set(sameness(row), (seen.get(sameness(row)) ?? 0) + 1);
   return new Set([...seen].filter(([, count]) => count > 1).map(([key]) => key));
 }
+
+/** One process for a chat or a ticket (0.15.0, "Copy details"): name, PID, ports, folder, and its already redacted command. */
+export function processDetails(row: Pick<ProcessRow, "name" | "pid" | "ports" | "cwd" | "command">): string {
+  return [[`${row.name} (PID ${row.pid})`, row.ports.length ? `ports ${row.ports.map((port) => `:${port}`).join(" ")}` : null, row.cwd ? `in ${row.cwd}` : null].filter(Boolean).join(" · "), row.command].join("\n");
+}

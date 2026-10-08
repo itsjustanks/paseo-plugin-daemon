@@ -256,6 +256,14 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
       action: { label: "See what needs attention", tab: "overview" },
     },
     {
+      icon: "Archive", question: "I archived a workspace. Is anything still running?",
+      answer: [
+        "For a day after you archive a workspace, Hosts looks in its folder for anything still listening on a port, such as a dev server started outside Paseo's terminals. Each one shows under What needs attention, with Stop and Ask an agent.",
+        "Nothing is stopped by itself. Stop shows exactly what will stop, and asks first.",
+      ],
+      action: { label: "See what needs attention", tab: "overview" },
+    },
+    {
       icon: "Bot", question: "Can an agent help fix it?",
       answer: [
         "Yes. Beside a runaway process, a dev server that stopped, or a slow or down watched service, press Ask an agent. Pick a chat in that workspace, or start a new one, and read exactly what will be sent first: what's wrong, the figures, the last lines of the dev server's output when Hosts can find them, and a suggested next step.",

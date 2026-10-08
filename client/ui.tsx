@@ -3,6 +3,8 @@ import { Icon } from "@getpaseo/plugin/client/react-native";
 import React, { createContext, useContext, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import { RADIUS, SPACE, TYPE } from "./kit";
+import { redactNode, redactSecrets } from "../shared/redaction";
+import { appModal, useOnce } from "./feedback";
 
 /**
  * The older screens' design language, derived entirely from the Paseo theme
@@ -239,7 +241,7 @@ export function Notice({ icon, tone = "neutral", children, action }: { icon: str
     >
       <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm, flex: 1 }}>
         <Icon name={icon} size={16} color={tone === "neutral" ? t.color.muted : toneColor(t, tone)} />
-        <Text style={[t.text.body, { flex: 1 }]}>{children}</Text>
+        <Text style={[t.text.body, { flex: 1 }]}>{redactNode(children)}</Text>
       </View>
       {action}
     </View>
@@ -339,6 +341,8 @@ export function ConfirmButton({
   target,
   disabled,
   loading,
+  title,
+  text,
 }: {
   label: string;
   confirmLabel: string;
@@ -347,33 +351,45 @@ export function ConfirmButton({
   target: string;
   disabled?: boolean;
   loading?: boolean;
+  /** 0.15.0: the question, and what happens if they say yes, shown in Paseo's dialog where the app has one. */
+  title?: string;
+  text?: string;
 }) {
   const t = useTokens();
   const [armed, setArmed] = useState(false);
-  if (!armed) {
+  // Single use: two quick presses act once; it re-arms when the question opens again.
+  const confirmOnce = useOnce(armed, () => { setArmed(false); onConfirm(); });
+  const cancel = () => setArmed(false);
+  const trigger = <Button label={label} variant="danger" disabled={disabled} loading={loading} accessibilityLabel={`${label} ${target}`} onPress={() => setArmed(true)} />;
+  const buttons = (
+    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
+      <Button label={confirmLabel} variant="danger" accessibilityLabel={`Confirm: ${confirmLabel} ${target}`} onPress={confirmOnce} />
+      <Button label="Cancel" variant="ghost" accessibilityLabel={`Cancel: ${confirmLabel} ${target}`} onPress={cancel} />
+    </View>
+  );
+  const HostModal = appModal();
+  if (HostModal && text) {
+    const Content = HostModal.Content;
+    const body = (
+      <View style={{ gap: t.space.md, padding: Content ? 0 : t.space.lg }}>
+        <Text style={t.text.body}>{redactSecrets(text)}</Text>
+        {buttons}
+      </View>
+    );
     return (
-      <Button
-        label={label}
-        variant="danger"
-        disabled={disabled}
-        loading={loading}
-        accessibilityLabel={`${label} ${target}`}
-        onPress={() => setArmed(true)}
-      />
+      <>
+        {trigger}
+        <HostModal title={redactSecrets(title ?? confirmLabel)} open={armed} onOpenChange={(open) => { if (!open) cancel(); }}>
+          {Content ? <Content>{body}</Content> : body}
+        </HostModal>
+      </>
     );
   }
+  if (!armed) return trigger;
   return (
-    <View style={{ flexDirection: "row", gap: t.space.sm }}>
-      <Button
-        label={confirmLabel}
-        variant="danger"
-        accessibilityLabel={`Confirm: ${confirmLabel} ${target}`}
-        onPress={() => {
-          setArmed(false);
-          onConfirm();
-        }}
-      />
-      <Button label="Cancel" variant="ghost" accessibilityLabel={`Cancel stopping ${target}`} onPress={() => setArmed(false)} />
+    <View style={{ gap: t.space.sm }}>
+      {text ? <Text style={t.text.caption}>{redactSecrets(text)}</Text> : null}
+      {buttons}
     </View>
   );
 }

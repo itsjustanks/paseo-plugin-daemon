@@ -1,4 +1,5 @@
-import { Icon, Modal, useToast } from "@getpaseo/plugin/client/react-native";
+import { errorText, useOnce, useSafeToast } from "./feedback";
+import { Icon, Modal } from "@getpaseo/plugin/client/react-native";
 import { useMutation } from "@tanstack/react-query";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
@@ -101,7 +102,7 @@ export function usePendingStops(snapshot: Snapshot | undefined) {
   return { pending, mark, clear };
 }
 
-export const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+export { errorText };
 
 /**
  * Stop / force-stop mutations plus the row action bag. Shared by the host
@@ -113,7 +114,7 @@ export function useProcessActions({ rpc, snapshot, pendingStops, refresh }: {
   pendingStops: ReturnType<typeof usePendingStops>;
   refresh: () => void;
 }) {
-  const toast = useToast();
+  const toast = useSafeToast();
   const { pending, mark, clear } = pendingStops;
   const [forceTarget, setForceTarget] = useState<Process | null>(null);
 
@@ -329,7 +330,9 @@ function ProcessActions({ process, actions }: { process: Process; actions: RowAc
   }
   return (
     <View style={{ flexDirection: "row", alignItems: "center" }}>
-      <ConfirmButton label="Stop dev server…" confirmLabel="Confirm stop server" target={`${process.project?.name || "Project"}: ${target}`} loading={busy} onConfirm={() => actions.onStop(process)} />
+      <ConfirmButton label="Stop dev server…" confirmLabel="Stop dev server" target={`${process.project?.name || "Project"}: ${target}`} loading={busy} onConfirm={() => actions.onStop(process)}
+        title={`Stop ${process.name}?`}
+        text={`Hosts asks ${process.name} (PID ${process.pid})${process.ports.length ? `, on ${process.ports.map((port) => `:${port}`).join(", ")},` : ""} to stop, and waits for it to exit. If it's still running after that, you can force-stop it. Anything it hasn't saved may be lost; its browser links stop working.`} />
     </View>
   );
 }
@@ -338,6 +341,8 @@ function ProcessActions({ process, actions }: { process: Process; actions: RowAc
 
 export function ForceStopModal({ target, busy, onCancel, onConfirm }: { target: Process | null; busy: boolean; onCancel: () => void; onConfirm: (process: Process) => void }) {
   const t = useTokens();
+  // Single use (0.15.0): two quick presses force-stop once.
+  const confirmOnce = useOnce(target !== null, () => { if (target) onConfirm(target); });
   return (
     <Modal
       title="Force stop process"
@@ -360,7 +365,7 @@ export function ForceStopModal({ target, busy, onCancel, onConfirm }: { target: 
               {target.ports.length > 0 ? <Text style={t.text.caption}>Listening on {target.ports.map((port) => `:${port}`).join(", ")}.</Text> : null}
               <View style={{ flexDirection: t.compact ? "column-reverse" : "row", justifyContent: "flex-end", gap: t.space.sm }}>
                 <Button label="Cancel" variant="secondary" accessibilityLabel={`Cancel force stop of ${target.name}`} onPress={onCancel} disabled={busy} />
-                <Button label="Force stop" variant="danger" accessibilityLabel={`Confirm force stop of ${target.name}, PID ${target.pid}`} onPress={() => onConfirm(target)} loading={busy} />
+                <Button label="Force stop" variant="danger" accessibilityLabel={`Confirm force stop of ${target.name}, PID ${target.pid}`} onPress={confirmOnce} loading={busy} />
               </View>
             </>
           ) : null}
