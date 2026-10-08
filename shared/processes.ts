@@ -81,14 +81,17 @@ export const RunawaySchema = z.object({
   cwd: z.string().nullable(),
   /** 0.13.0: whether Hosts may stop the process it is about (Stop is offered next to it). */
   stoppable: z.boolean().optional(),
+  /** 0.16.0: who it belongs to, as on Processes ("project-hub · feature-x", "Outside Paseo"). */
+  owner: z.string().nullable().optional(),
 });
 export type Runaway = z.infer<typeof RunawaySchema>;
 
 export const ActionLogEntrySchema = z.object({
   at: z.number(),
   /** 0.13.0 adds plugin restarts and the optional memory guard's automatic stop. */
-  action: z.enum(["stop", "force-stop", "auto-force-stop", "plugin-reload", "plugin-stop", "plugin-force-stop", "auto-stop"]),
-  source: z.enum(["processes", "monitor", "plugins", "guard"]),
+  action: z.enum(["stop", "force-stop", "auto-force-stop", "plugin-reload", "plugin-stop", "plugin-force-stop", "auto-stop", "disk-clear"]),
+  /** 0.16.0 adds "disk": clearing build folders inside a workspace. */
+  source: z.enum(["processes", "monitor", "plugins", "guard", "disk"]),
   pid: z.number().int().nullable(),
   name: z.string(),
   owner: z.string().nullable(),
@@ -97,6 +100,8 @@ export const ActionLogEntrySchema = z.object({
   /** Processes that received the signal, the target included. */
   signaled: z.number().int().min(0),
   message: z.string(),
+  /** 0.16.0, disk clears: the bytes it freed. */
+  bytes: z.number().min(0).optional(),
 });
 export type ActionLogEntry = z.infer<typeof ActionLogEntrySchema>;
 
@@ -198,4 +203,39 @@ export function processDetails(row: Pick<ProcessRow, "name" | "pid" | "ports" | 
   const folder = row.where ?? row.cwd;
   const full = row.cwdPath && row.cwdPath !== folder ? row.cwdPath : null;
   return [[`${row.name} (PID ${row.pid})`, row.ports.length ? `ports ${row.ports.map((port) => `:${port}`).join(" ")}` : null, folder ? `in ${folder}` : null].filter(Boolean).join(" · "), full ? `folder ${full}` : null, row.command].filter(Boolean).join("\n");
+}
+
+/** Where a process belongs, said once (0.16.0): "project-hub · feature-x", "Paseo itself", "Not in a workspace". */
+export function ownerGroup(owner: ProcessRow["owner"]): string {
+  if (owner.project) return owner.workspace ? `${owner.project} · ${owner.workspace}` : owner.project;
+  if (owner.kind === "paseo" || owner.kind === "plugin") return "Paseo itself";
+  return "Not in a workspace";
+}
+
+export interface ProcessGroup { title: string; rows: ProcessRow[]; rssBytes: number; flagged: boolean }
+
+/**
+ * Rows under their project or workspace (0.16.0), keeping each group's rows
+ * in the order given (highest first). Groups with something flagged come
+ * first, then the heaviest group, then by name, so headings don't jump.
+ */
+export function processGroups(rows: readonly ProcessRow[]): ProcessGroup[] {
+  const groups = new Map<string, ProcessGroup>();
+  for (const row of rows) {
+    const title = ownerGroup(row.owner);
+    const group = groups.get(title) ?? { title, rows: [], rssBytes: 0, flagged: false };
+    group.rows.push(row);
+    group.rssBytes += row.rssBytes;
+    group.flagged ||= row.flags.length > 0;
+    groups.set(title, group);
+  }
+  return [...groups.values()].sort((a, b) => Number(b.flagged) - Number(a.flagged) || b.rssBytes - a.rssBytes || a.title.localeCompare(b.title));
+}
+
+/** A workspace's processes (0.16.0, Running here): those whose folder is the workspace's folder or inside it, heaviest first. */
+export function runningIn(rows: readonly ProcessRow[], workspace: { path?: string | null }): ProcessRow[] {
+  const root = (workspace.path ?? "").replace(/\/+$/, "");
+  if (!root) return [];
+  return rows.filter((row) => !!row.cwdPath && (row.cwdPath === root || row.cwdPath.startsWith(`${root}/`)))
+    .sort((a, b) => b.rssBytes - a.rssBytes || a.name.localeCompare(b.name) || a.pid - b.pid);
 }

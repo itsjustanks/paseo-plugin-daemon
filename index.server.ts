@@ -20,7 +20,7 @@ import { createAsk } from "./server/ask";
 import { ArchivedWorkspaces } from "./server/archived";
 import { homedir } from "node:os";
 import { guardState, pluginRestart, pluginRestartStatus } from "./shared/guard";
-import { diskReport } from "./shared/disk";
+import { diskClear, diskClearStatus, diskPreview, diskReport } from "./shared/disk";
 
 type SettingsHandle = { read?: () => Promise<{ status: string; values?: unknown }>; subscribe?: (listener: () => void) => () => void } | undefined;
 
@@ -79,6 +79,10 @@ export default function contribute(server: PluginServerContext) {
   server.handle(pluginRestartStatus, async ({ pluginId }) => { const outcome = runtime.plugins.status(pluginId); settled(outcome); return outcome; });
   // 0.14.0: disk usage, read-only. A scan runs in the background; the app polls. Cleaning up is an agent's job (ask.ts).
   server.handle(diskReport, ({ scan }, context) => runtime.withContext(context, () => runtime.disk.report(scan === true)));
+  // 0.16.0: one-press Clear for build folders inside a workspace. Preview re-checks everything; clear runs in the background.
+  server.handle(diskPreview, ({ tokens }, context) => runtime.withContext(context, () => runtime.disk.preview(tokens)));
+  server.handle(diskClear, ({ tokens }, context) => runtime.withContext(context, async () => runtime.disk.clear(tokens)));
+  server.handle(diskClearStatus, async () => runtime.disk.status());
   server.handle(watchSuggestions, async () => ({ suggestions: await suggestions((await readSettings().catch(() => HOSTS_SETTINGS_DEFAULTS)).watchedServices) }));
   server.handle(sync.syncStatus, (_input, context) => runtime!.withContext(context, async () => {
     await runtime!.scope.refresh(); return { projects: runtime!.scope.status().projects.map((p) => ({ id: p.id, name: p.name })), history: await runtime!.transfers.history(), grants: await runtime!.peers.projectGrants() };

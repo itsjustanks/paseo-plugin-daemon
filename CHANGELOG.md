@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.16.0 — 2026-10-08
+
+Workspaces is the one place to manage a workspace: what runs in it, what it uses on disk, and one-press
+Delete for its build folders, behind a proper warning. Processes says which project each process
+belongs to. `requirements.paseo` stays `>=0.9.0`; no settings change, so no migration.
+
+- **The Workspaces hub.** A collapsed row is one line (name · status · size · N running). Open, it
+  shows the status and branch; **Running here**: that workspace's processes (dev servers, builds,
+  tests, installs, agents, others) heaviest first, each with memory and CPU and the usual ask-first
+  Stop; **Disk**: its size and the build folders that look safe to clear, biggest first, with
+  **Delete N folders (X GB)…**; the last delete's results; and Ask an agent.
+- **Delete, with a warning.** "Delete N folders (X GB)?" opens on a fresh check of every folder and
+  lists exactly what goes, by workspace, with sizes and kinds, and what won't and why, with
+  "Checked just now". A red warning line: "This permanently deletes these folders. They can't be
+  restored from Paseo." The red button says how much it deletes; Cancel is the default and Enter
+  never confirms. Over 10 GB or 20 folders, "I understand these will be deleted" must be ticked
+  first. It confirms once and starts fresh each time it opens. Afterwards, a toast ("Deleted 4.2 GB
+  from 6 folders") and each row lists what was deleted or skipped and why. Every delete is logged.
+  The Stop sheet in the hub follows the same rules.
+- **What Delete can remove:** only allow-listed build folders inside a workspace or worktree root
+  that git says right now are ignored, with nothing tracked and nothing new-and-unignored beneath.
+  Never caches, browser downloads, /tmp, a workspace in a temporary folder, a whole workspace or
+  worktree, .git, .env, agents' history or Paseo's data (those stay Ask an agent). Ported from the
+  reviewed 0.14 cleanup branch (quarantine beside the folder, an inode check, a look inside for
+  .env, .git and bare repositories, then the system rm that stays on one disk, as argv), with its
+  third review closed:
+  - Linux: installs and scripts are recognised by npm/pnpm/yarn/bun's rewritten process titles
+    ("npm install", "npm exec …"); anything running in the workspace other than an idle terminal
+    shell refuses.
+  - macOS: a process lsof says nothing about, or any lsof error, timeout or nonzero exit, refuses.
+  - A workspace whose root is under a temporary folder is refused.
+  - The quarantine journal: unreadable, not JSON or holding an entry Hosts doesn't understand is
+    reported ("Left over from an interrupted clear: check"), never rewritten, and stops every
+    delete. Putting a folder back never replaces anything; on a conflict it stays set aside and
+    listed with Ask an agent.
+  - One deadline for the whole delete; reading Paseo's workspaces is bounded and cancellable; the
+    look inside and rm get only what's left of it.
+  - A fresh process snapshot right before each folder, taken after git's checks.
+- **Where processes belong.** Processes groups rows under their project and workspace ("project-hub ·
+  feature-x", "Not in a workspace", "Paseo itself") and each row shows its project chip. What needs
+  attention on Overview and in the sidebar popover says which project it's in.
+- **Help:** "What can Delete remove, and what can't it?"; "My disk is filling up" updated.
+
 ## 0.15.0 — 2026-10-08
 
 Paseo's own toasts, clipboard and dialogs where the app has them, one redactor for everything you

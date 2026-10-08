@@ -196,6 +196,8 @@ export const ClearItemSchema = z.object({
   askId: z.string().nullable().optional(),
   /** 0.15.0: the full path, shown only when a row is opened (with Copy path). */
   path: z.string().optional(),
+  /** 0.16.0: signed handle for one-press Clear (a build folder inside a workspace only); null when Hosts won't clear it. */
+  token: z.string().nullable().optional(),
 });
 export type ClearItem = z.infer<typeof ClearItemSchema>;
 
@@ -252,11 +254,66 @@ export const DiskReportSchema = z.object({
   caches: z.array(CacheGroupSchema),
   clearableBytes: z.number().min(0),
   warnings: z.array(z.string()),
+  /** 0.16.0: what an interrupted clear set aside and couldn't put back; shown, never deleted by Hosts. */
+  leftovers: z.array(z.object({ id: z.string(), name: z.string(), where: z.string(), bytes: z.number().min(0), at: z.number() })).optional(),
+  /** 0.16.0: the record of interrupted clears is damaged; nothing is cleared until it's checked. */
+  journalProblem: z.string().nullable().optional(),
 });
 export type DiskReport = z.infer<typeof DiskReportSchema>;
 
 /** The cached report; `scan: true` starts a fresh scan in the background (one at a time) and answers at once. */
 export const diskReport = defineRpc({ name: "daemon-link.disk.report", input: z.object({ scan: z.boolean().optional() }), output: DiskReportSchema });
+
+// ------------------------------------------------- one-press Clear (0.16.0)
+
+/** Big deletes need a second step in the warning dialog. */
+export const BIG_DELETE_BYTES = 10 * 1024 ** 3;
+export const BIG_DELETE_COUNT = 20;
+export const isBigDelete = (bytes: number, count: number) => bytes > BIG_DELETE_BYTES || count > BIG_DELETE_COUNT;
+
+/** The warning dialog's list, from a fresh check of every item (nothing in use, nothing changed). */
+export const DiskPlanSchema = z.object({
+  items: z.array(z.object({
+    /** The workspace it's in (its name, or its folder). */
+    workspace: z.string(),
+    /** Its friendly path inside the workspace ("apps/web/node_modules"). */
+    where: z.string(),
+    /** The full path, for the opened row. */
+    path: z.string(),
+    /** What it is ("Installed packages"). */
+    what: z.string(),
+    /** What deleting it costs ("Comes back on the next install"). */
+    cost: z.string(),
+    bytes: z.number().min(0),
+    ok: z.boolean(),
+    /** Why it won't be deleted; null when it will. */
+    reason: z.string().nullable(),
+  })),
+  /** What will go, in all (ok items only). */
+  bytes: z.number().min(0),
+  count: z.number().int().min(0),
+  /** When these checks ran (epoch ms): "Checked just now". */
+  checkedAt: z.number(),
+});
+export type DiskPlan = z.infer<typeof DiskPlanSchema>;
+
+export const DiskJobSchema = z.object({
+  state: z.enum(["idle", "running", "done"]),
+  freedBytes: z.number().min(0),
+  results: z.array(z.object({ workspace: z.string(), where: z.string(), ok: z.boolean(), bytes: z.number().min(0), message: z.string() })),
+  message: z.string().nullable(),
+  /** When this job finished (epoch ms), so the app shows one result per job. */
+  finishedAt: z.number().nullable().optional(),
+});
+export type DiskJob = z.infer<typeof DiskJobSchema>;
+
+export const TOKENS_MAX = 200;
+const Tokens = z.object({ tokens: z.array(z.string().min(1).max(2048)).min(1).max(TOKENS_MAX) });
+/** Re-checks every item fresh and returns exactly what would go. Deletes nothing. */
+export const diskPreview = defineRpc({ name: "daemon-link.disk.preview", input: Tokens, output: DiskPlanSchema });
+/** Starts deleting in the background, each item checked again just before it goes; poll `diskClearStatus`. */
+export const diskClear = defineRpc({ name: "daemon-link.disk.clear", input: Tokens, output: DiskJobSchema });
+export const diskClearStatus = defineRpc({ name: "daemon-link.disk.clear-status", input: z.object({}), output: DiskJobSchema });
 
 /** "Idle 3 days", "Agent working now". */
 export function stateWords(state: WorkspaceState, activeAt: number | null, now = Date.now()): string {

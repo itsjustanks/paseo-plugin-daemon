@@ -68,6 +68,8 @@ export const HealthIssueSchema = z.object({
   pid: z.number().int().nullable().optional(),
   /** 0.13.0: Hosts may stop that process (Stop is offered next to it). */
   stoppable: z.boolean().optional(),
+  /** 0.16.0: the project or workspace it belongs to, shown inline ("project-hub · feature-x"). */
+  owner: z.string().nullable().optional(),
   /** 0.13.0, plugin-stuck: the plugin's id, whether Restart can be offered, and why not. */
   plugin: z.string().optional(),
   restartable: z.boolean().optional(),
@@ -164,7 +166,7 @@ export function evaluateHealth(input: HealthInput, memory: HealthMemory = EMPTY_
     if (!near && loop && loop.level !== "normal" && loop.sentence && !issues.some((issue) => issue.code === "memory-pressure")) issues.push(host("memory-pressure", loop.level === "critical" ? "critical" : "warning", loop.sentence));
     for (const runaway of runaways) {
       if (runaway.code === "too-many-jobs") issues.push(host("too-many-jobs", "warning", runaway.title));
-      if (runaway.code === "cpu-runaway" || runaway.code === "memory-heavy") issues.push({ ...process_("runaway", runaway.severity, runaway.title, [], runaway.cwd), subject: runawaySubject(runaway.title), pid: runaway.pids[0] ?? null, ...(runaway.stoppable === undefined ? {} : { stoppable: runaway.stoppable }) });
+      if (runaway.code === "cpu-runaway" || runaway.code === "memory-heavy") issues.push({ ...process_("runaway", runaway.severity, runaway.title, [], runaway.cwd), subject: runawaySubject(runaway.title), pid: runaway.pids[0] ?? null, ...(runaway.owner ? { owner: runaway.owner } : {}), ...(runaway.stoppable === undefined ? {} : { stoppable: runaway.stoppable }) });
     }
     services = snapshot.services.map((service) => ({ name: service.name, cwd: service.cwd, ports: service.ports, project: service.project ? { path: service.project.path, workspace: service.project.workspace } : null }));
     // A dev server is in both lists; report each process once.
@@ -178,7 +180,7 @@ export function evaluateHealth(input: HealthInput, memory: HealthMemory = EMPTY_
       // is under matching pressure, so this is attribution, not a busy host's echo.
       if (process.impact === "pressure-driver") {
         const kind = process.reasons.some((reason) => reason.startsWith("top memory")) ? "memory" : "CPU";
-        issues.push({ ...process_("pressure-driver", "warning", `${process.name} (PID ${process.pid}) is a top ${kind} user while the host is under ${kind} pressure.`, process.ports, process.cwd), pid: process.pid });
+        issues.push({ ...process_("pressure-driver", "warning", `${process.name} (PID ${process.pid}) is a top ${kind} user while the host is under ${kind} pressure.`, process.ports, process.cwd), pid: process.pid, ...(process.project ? { owner: process.project.workspace ? `${process.project.name} · ${process.project.workspace}` : process.project.name } : {}) });
       }
     }
     if (snapshot.scope?.status !== "unavailable") next = trackPorts(snapshot, memory, now);
@@ -215,7 +217,7 @@ export function evaluateHealth(input: HealthInput, memory: HealthMemory = EMPTY_
 
   for (const left of input.archived ?? []) {
     const ports = left.ports.map((port) => `:${port}`).join(", ");
-    issues.push({ ...process_("archived-leftover", "warning", `${left.name} (${ports}) is still running from the archived workspace "${left.workspace}".`, left.ports, left.cwd), subject: left.name, pid: left.pid, stoppable: left.stoppable });
+    issues.push({ ...process_("archived-leftover", "warning", `${left.name} (${ports}) is still running from the archived workspace "${left.workspace}".`, left.ports, left.cwd), subject: left.name, pid: left.pid, stoppable: left.stoppable, owner: left.workspace });
   }
   for (const result of input.watched ?? []) {
     if (result.state === "slow") issues.push({ ...host("service-slow", "warning", result.message), subject: result.name });

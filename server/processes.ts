@@ -283,7 +283,7 @@ export class ProcessManager {
     }
     for (const row of rows) {
       const hot = row.flags.find((flag) => flag.code === "cpu-runaway");
-      if (hot) out.push({ code: "cpu-runaway", severity: "warning", title: `${row.name} (PID ${row.pid}) has used a full CPU core for ${minutes(row.hotSeconds)}.`, pids: [row.pid], cwd: row.cwd, stoppable: row.stoppable });
+      if (hot) out.push({ code: "cpu-runaway", severity: "warning", title: `${row.name} (PID ${row.pid}) has used a full CPU core for ${minutes(row.hotSeconds)}.`, pids: [row.pid], cwd: row.cwd, stoppable: row.stoppable, owner: row.owner.label });
       // 0.13.0: a big share of memory, or fast growth, said the way a person would say it.
       const heavy = row.flags.find((flag) => flag.code === "memory-heavy" || flag.code === "memory-growing");
       if (heavy) {
@@ -292,7 +292,7 @@ export class ProcessManager {
         const verdict = runawayVerdict(row.rssBytes, base.memoryBasisBytes, grew, level);
         const job = (row.job?.kind ?? null) as JobWord | null;
         const title = runawaySentence({ job, name: row.name, rssBytes: row.rssBytes, percent: row.memoryPercent, growthBytes: verdict.growing ? grew : null, level });
-        out.push({ code: "memory-heavy", severity: verdict.severity, title, pids: [row.pid], cwd: row.cwd, stoppable: row.stoppable });
+        out.push({ code: "memory-heavy", severity: verdict.severity, title, pids: [row.pid], cwd: row.cwd, stoppable: row.stoppable, owner: row.owner.label });
       }
     }
     const rank = (runaway: Runaway) => (runaway.code === "memory-heavy" ? (runaway.severity === "critical" ? 0 : 1) : runaway.code === "memory-near-limit" ? 2 : 3);

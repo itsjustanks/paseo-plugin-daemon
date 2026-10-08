@@ -26,7 +26,9 @@ import { friendlyPath } from "../shared/paths";
 import { homeRelative } from "../shared/redaction";
 import type { AskContext } from "../shared/ask";
 import { join } from "node:path";
-import type { DiskReport } from "../shared/disk";
+import { isWithin, type DiskJob, type DiskPlan, type DiskReport } from "../shared/disk";
+import { DiskCleaner, DiskTokens, defaultTmpRoots } from "./disk-clear";
+import { JOURNAL_PROBLEM, QuarantineInventory } from "./disk-quarantine";
 
 /** A disk report or ask waits this long for the registry or a process snapshot, then uses what it has. */
 export const REPORT_READ_MS = 5000;
@@ -84,16 +86,27 @@ export function createRuntime(options: RuntimeOptions = {}) {
   /** Dev servers the monitor last saw, with absolute folders, for "dev server running here". */
   let lastServices: Array<{ cwd: string | null; label: string; ports: number[] }> | null = null;
   let servicesAt = 0;
-  let disk: { scanner: DiskScanner; places: ReturnType<typeof defaultPlaces> } | null = null;
+  let disk: { scanner: DiskScanner; places: ReturnType<typeof defaultPlaces>; cleaner: DiskCleaner; tokens: DiskTokens; inventory: QuarantineInventory; tmpRoots: string[] } | null = null;
   if (monitor.internals) {
     const { adapter, uid } = monitor.internals;
     const places = defaultPlaces(adapter.platform);
     const devServersIn = (folder: string) => (lastServices ?? []).filter((service) => service.cwd && (service.cwd === folder || service.cwd.startsWith(`${folder}/`))).map((service) => `${service.label}${service.ports[0] ? ` :${service.ports[0]}` : ""}`);
-    // Read-only (0.14.0): the scan measures and classifies; nothing in Hosts deletes.
     const scanner = new DiskScanner({
       places, uid, listWorkspaces: () => listWorkspaces(true), devServersIn,
     });
-    disk = { scanner, places };
+    // 0.16.0: one-press Clear, for build folders inside a workspace or worktree only (disk-clear.ts).
+    const tokens = new DiskTokens();
+    const inventory = new QuarantineInventory(join(places.stateDir, "quarantine.json"));
+    void inventory.recover().then((outcome) => {
+      if (outcome.restored.length) console.log(`daemon-link: put back ${outcome.restored.length} folder(s) an interrupted clear had set aside`);
+    }).catch(() => undefined);
+    const tmpRoots = defaultTmpRoots();
+    const cleaner = new DiskCleaner({
+      places, uid, tokens, inventory, tmpRoots, listWorkspaces: () => listWorkspaces(true),
+      unlinkedWorktrees: (claimed) => scanner.unlinkedWorktrees(claimed),
+      log: (entry) => log.append(entry), cleared: (path, bytes) => scanner.forget(path, bytes),
+    });
+    disk = { scanner, places, cleaner, tokens, inventory, tmpRoots };
   }
   if (manager && monitor.internals && options.guard !== false) {
     const { adapter, uid, selfPid, parentPid } = monitor.internals;
@@ -134,7 +147,8 @@ export function createRuntime(options: RuntimeOptions = {}) {
     async report(scan: boolean): Promise<DiskReport> {
       if (!disk) throw new Error("Disk usage isn't available on this host.");
       // First, so nothing below can hold it up: the scan reads the registry itself, inside its own deadline.
-      if (scan) disk.scanner.start();
+      // A check never starts while a clear is deleting (it would measure half-deleted folders).
+      if (scan && !disk.cleaner.isRunning) disk.scanner.start();
       const workspaces = await currentWorkspaces();
       if (workspaces.length) knownFolders = workspaces.map((workspace) => workspace.directory).slice(0, 30);
       // The app polls this while a check runs; the process snapshot behind "dev server running here" is reused for 30 s.
@@ -146,15 +160,36 @@ export function createRuntime(options: RuntimeOptions = {}) {
         lastServices = snap.services.map((service) => ({ cwd: absolute(service.cwd), label: service.service?.label ?? service.name, ports: service.ports }));
       } catch { /* Dev servers are a courtesy here. */ }
       const disks = await disksFor([disk.places.paseoHome, disk.places.home, ...disk.places.tmpDirs, ...knownFolders]);
-      return disk.scanner.report(workspaces, disks);
+      const { tokens, tmpRoots } = disk;
+      const report = await disk.scanner.report(workspaces, disks, (item) => (tmpRoots.some((tmp) => item.root === tmp || isWithin(item.root, tmp)) ? null : tokens.mint(item)));
+      const journal = await disk.inventory.inspect().catch(() => ({ entries: [], problem: JOURNAL_PROBLEM }));
+      const leftovers = disk.cleaner.isRunning ? [] : journal.entries.map((entry) => ({ id: `leftover:${entry.quarantine}`, name: entry.name, where: friendlyPath(entry.original, { home: disk!.places.home, paseoHome: disk!.places.paseoHome }).label, bytes: entry.bytes, at: entry.at }));
+      return { ...report, leftovers, journalProblem: journal.problem };
     },
+    /** The warning dialog's list: every check, fresh. Deletes nothing. */
+    async preview(tokenList: readonly string[]): Promise<DiskPlan> {
+      if (!disk) throw new Error("Disk usage isn't available on this host.");
+      return disk.cleaner.preview(tokenList);
+    },
+    /** Start deleting what the person confirmed; each item is checked again just before it goes. */
+    clear(tokenList: readonly string[]): DiskJob {
+      if (!disk) throw new Error("Disk usage isn't available on this host.");
+      if (disk.scanner.isRunning) return { state: "done", freedBytes: 0, results: [], message: "A disk check is running. Try again once it's finished.", finishedAt: Date.now() };
+      return disk.cleaner.start(tokenList);
+    },
+    status(): DiskJob { return disk ? disk.cleaner.status() : { state: "idle", freedBytes: 0, results: [], message: null, finishedAt: null }; },
     /** Unloading: stop the scan and the clear job, kill their process groups (walk, find, rm, pnpm), and wait for both. */
-    async close(): Promise<void> { if (disk) await disk.scanner.close(); },
+    async close(): Promise<void> { if (disk) await Promise.all([disk.scanner.close(), disk.cleaner.close()]); },
     /** "Ask an agent" about a folder Hosts never removes itself: an unlinked worktree or a /tmp folder. Only ids the last check knows. */
     async folderAsk(id: string): Promise<AskContext | null> {
       if (!disk) return null;
       const home = disk.places.home;
       const ask = (title: string, text: string): AskContext => ({ title, text, workspaceId: null, workspaceName: null, outputFrom: null });
+      if (id.startsWith("leftover:")) {
+        const entry = (await disk.inventory.inspect().catch(() => ({ entries: [] as Array<{ quarantine: string; name: string; original: string; bytes: number; at: number }> }))).entries.find((item) => `leftover:${item.quarantine}` === id);
+        if (!entry) return null;
+        return ask(`A folder an interrupted clear set aside (${formatSize(entry.bytes)})`, folderAskText({ path: join(entry.quarantine, entry.name), bytes: entry.bytes, branch: null, changedAt: entry.at, kind: "leftover", original: entry.original }, home));
+      }
       if (id.startsWith("tmp:")) {
         const cache = disk.scanner.last()?.caches.find((item) => item.key === id && item.kind === "tmp");
         if (!cache) return null;

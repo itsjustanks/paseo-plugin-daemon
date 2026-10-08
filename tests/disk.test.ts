@@ -90,37 +90,39 @@ const appRow = (report: Report) => report.workspaces.find((w) => w.names.include
 beforeEach(async () => { root = await realpath(await mkdtemp(join(tmpdir(), "hosts-disk-"))); world(); });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
-describe("0.14.0 ships no delete path", () => {
+describe("0.16.0: exactly one delete path, for build folders inside a workspace", () => {
   const source = (file: string) => readFileSync(join(__dirname, "..", file), "utf8");
+  const code = (file: string) => source(file).split("\n").filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line)).join("\n");
   const diskFiles = readdirSync(join(__dirname, "..", "server")).filter((name) => name.startsWith("disk-")).map((name) => `server/${name}`);
 
-  it("the disk code has no filesystem delete, rename or truncate call, and spawns no cleanup command", () => {
-    expect(diskFiles.sort()).toEqual(["server/disk-children.ts", "server/disk-git.ts", "server/disk-scan.ts", "server/disk-worker.ts"]);
-    for (const file of diskFiles) {
-      const text = source(file);
-      expect(text, file).not.toMatch(/\b(unlink|rmdir|rm|rename|truncate|mkdtemp)(Sync)?\s*\(/);
-      expect(text, file).not.toMatch(/"rm"|"rmdir"|"unlink"|"(clean|prune|uninstall|delete|remove)"/);
+  it("only disk-remove deletes (quarantine + rm with stay-on-one-disk); the scan, git, worker and children never do", () => {
+    expect(diskFiles.sort()).toEqual(["server/disk-children.ts", "server/disk-clear.ts", "server/disk-git.ts", "server/disk-inuse.ts", "server/disk-quarantine.ts", "server/disk-remove.ts", "server/disk-scan.ts", "server/disk-worker.ts"]);
+    for (const file of ["server/disk-children.ts", "server/disk-git.ts", "server/disk-scan.ts", "server/disk-worker.ts", "server/disk-inuse.ts", "server/disk-clear.ts"]) {
+      expect(code(file), file).not.toMatch(/\b(unlink|rmdir|rm|rename|truncate|mkdtemp)(Sync)?\s*\(/);
+      expect(code(file), file).not.toMatch(/["'](rm|rmdir|unlink)["']/);
     }
-    // git is only asked read-only questions.
+    const remove = code("server/disk-remove.ts");
+    expect([...remove.matchAll(/group\.run\("(\w+)"/g)].map((match) => match[1])).toEqual(["rm"]);
+    expect(remove).toMatch(/\["-rf", "--one-file-system", "--", path\] : \["-rf", "-x", "--", path\]/);
+    expect(remove).not.toMatch(/\bunlink\(|\brm\(|fs\.rm/);
+    // The journal only moves an item back (never replacing anything) and removes its own empty folders.
+    expect(code("server/disk-quarantine.ts")).not.toMatch(/\bunlink\(|\brm\(|group\.run|execFile|spawn\(/);
     const verbs = [...source("server/disk-git.ts").matchAll(/run\(\w+, \["([\w-]+)"/g)].map((match) => match[1]);
     expect([...new Set(verbs)].sort()).toEqual(["check-ignore", "ls-files", "rev-parse"]);
   });
 
-  it("no clear, preview or cache-command call exists on the wire or in the handlers", () => {
-    expect(source("shared/disk.ts").match(/name: "daemon-link\.disk\.[\w-]+"/g)).toEqual(['name: "daemon-link.disk.report"']);
-    expect(source("index.server.ts")).not.toMatch(/disk\.(clear|preview|status)|diskClear|diskPreview/);
-    const runtime = source("server/runtime.ts");
-    expect(runtime).not.toMatch(/DiskCleaner|DiskTokens|quarantine|cache clean|store prune|playwright uninstall/i);
-    // Review fix: nothing runs pnpm (its `store path` writes under home); the store is found from config and default places.
-    expect(runtime).not.toMatch(/group\.run\(/);
-    for (const file of ["server/runtime.ts", "server/disk-scan.ts", "server/disk-children.ts", "server/disk-worker.ts", "server/disk-git.ts"]) expect(source(file), file).not.toMatch(/(run|spawn|execFile|exec)\(\s*["'](pnpm|npm|npx|rm)["']/);
-    for (const removed of ["server/disk-clear.ts", "server/disk-remove.ts", "server/disk-quarantine.ts", "server/disk-inuse.ts"]) expect(fs.existsSync(join(__dirname, "..", removed)), removed).toBe(false);
-  });
-
-  it("the screens have no clear button or sheet", () => {
-    const client = source("client/workspaces.tsx");
-    expect(client).not.toMatch(/diskClear|diskPreview|ClearSheet|useClear|label=\{?`?"?Clear\b/);
-    expect(client).toContain("Ask an agent to clean this up");
+  it("no cache, /tmp or browser-download deleting, and no tool cleanup command anywhere", () => {
+    for (const file of ["server/runtime.ts", ...diskFiles, "index.server.ts"]) {
+      // (The agent's message may tell it to use "npm cache clean"; Hosts itself never runs a tool's cleanup.)
+      expect(code(file), file).not.toMatch(/CACHE_COMMANDS|runCacheCommand|cacheToolReady|\["cache", "clean"|\["store", "prune"|"uninstall"\]/);
+      expect(code(file), file).not.toMatch(/(run|spawn|execFile|exec)\(\s*["'](pnpm|npm|npx|yarn|bun)["']/);
+    }
+    // Tokens are minted only for workspace items (the report's mint callback), never for caches or /tmp.
+    const scan = code("server/disk-scan.ts");
+    expect(scan.match(/mint\(/g)?.length).toBe(1);
+    expect(scan).toMatch(/const token = !why && mint \? mint\(\{ path, root: folder\.path/);
+    expect(scan).toMatch(/blocked: null, askId: cache\.kind === "tmp" \? cache\.key : null,/);
+    expect(source("shared/disk.ts").match(/name: "daemon-link\.disk\.[\w-]+"/g)).toEqual(['name: "daemon-link.disk.report"', 'name: "daemon-link.disk.preview"', 'name: "daemon-link.disk.clear"', 'name: "daemon-link.disk.clear-status"']);
   });
 });
 

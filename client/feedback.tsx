@@ -1,9 +1,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
-import { Clipboard, Text, View } from "react-native";
+import { ActivityIndicator, Clipboard, Pressable, Text, View, type GestureResponderEvent } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 import * as HostRN from "@getpaseo/plugin/client/react-native";
 import { redactSecrets } from "../shared/redaction";
-import { Button, Note, Row, SPACE, TYPE, type Tone } from "./kit";
+import { Button, HostIcon, Note, RADIUS, Row, SPACE, TYPE, type Tone } from "./kit";
 
 /**
  * Paseo's own toasts, clipboard and dialogs (0.15.0), looked up at runtime so
@@ -234,5 +234,71 @@ export function Confirm({ theme, open, title, text, confirmLabel, danger, busy, 
     <HostModal title={redactSecrets(title)} open={open} onOpenChange={(next) => { if (!next && !busy) onCancel(); }}>
       {Content ? <Content>{body}</Content> : body}
     </HostModal>
+  );
+}
+
+// ------------------------------------------------- warning dialogs (0.16.0)
+
+/** The destructive warning: an icon and one line in the danger colour. */
+export function DangerLine({ theme, children }: { theme: PluginTheme; children: string }) {
+  const color = theme.colors.statusDanger;
+  return (
+    <View accessibilityRole="alert" style={{ flexDirection: "row", alignItems: "flex-start", gap: SPACE.sm }}>
+      {HostIcon ? <View style={{ paddingTop: SPACE.hair }}><HostIcon name="TriangleAlert" size={18} color={color} /></View> : null}
+      <Text style={{ ...TYPE.body, color, fontWeight: "600", flexShrink: 1 }}>{redactSecrets(children)}</Text>
+    </View>
+  );
+}
+
+/** Enter (or Return) on a focused button: never a confirmation for a destructive action. */
+export function isEnterKey(event: unknown): boolean {
+  const native = (event as { nativeEvent?: { key?: string; type?: string } } | undefined)?.nativeEvent;
+  return !!native && (native.key === "Enter" || native.key === "Return");
+}
+
+/**
+ * The red button of a warning dialog: labelled with what it does ("Delete
+ * 4.2 GB"), never the default, never pressed by Enter. Pair it with a
+ * `CancelButton` that takes the focus.
+ */
+export function DestructiveButton({ theme, label, onPress, disabled, busy, accessibilityLabel }: { theme: PluginTheme; label: string; onPress(): void; disabled?: boolean; busy?: boolean; accessibilityLabel?: string }) {
+  const inactive = !!disabled || !!busy;
+  const color = theme.colors.statusDanger;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityState={{ disabled: inactive, busy: !!busy }}
+      disabled={inactive}
+      onPress={inactive ? undefined : (event: GestureResponderEvent) => { if (!isEnterKey(event)) onPress(); }}
+      style={{ backgroundColor: color, borderRadius: RADIUS.control, paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm + SPACE.hair, minHeight: 44, opacity: inactive ? 0.45 : 1, flexDirection: "row", alignItems: "center", gap: SPACE.sm }}
+    >
+      {busy ? <ActivityIndicator size="small" color="#ffffff" /> : HostIcon ? <HostIcon name="Trash2" size={16} color="#ffffff" /> : null}
+      <Text style={{ ...TYPE.body, color: "#ffffff", fontWeight: "700" }}>{label}</Text>
+    </Pressable>
+  );
+}
+
+/** Cancel: the default button of a warning dialog, focused as it opens (on the web, Enter then cancels). */
+export function CancelButton({ theme, label = "Cancel", onPress, disabled, accessibilityLabel }: { theme: PluginTheme; label?: string; onPress(): void; disabled?: boolean; accessibilityLabel?: string }) {
+  const ref = useRef<{ focus?: () => void } | null>(null);
+  useEffect(() => { ref.current?.focus?.(); }, []);
+  return (
+    <Pressable ref={ref as never} accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? label} accessibilityState={{ disabled: !!disabled }} disabled={disabled} onPress={onPress}
+      style={{ backgroundColor: theme.colors.surface2, borderColor: theme.colors.accent, borderWidth: 2, borderRadius: RADIUS.control, paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, minHeight: 44, alignItems: "center", justifyContent: "center" }}>
+      <Text style={{ ...TYPE.body, color: theme.colors.foreground, fontWeight: "600" }}>{label}</Text>
+    </Pressable>
+  );
+}
+
+/** "I understand these will be deleted": the second step of a big delete. */
+export function UnderstandBox({ theme, checked, onChange, label }: { theme: PluginTheme; checked: boolean; onChange(next: boolean): void; label: string }) {
+  return (
+    <Pressable accessibilityRole="checkbox" accessibilityState={{ checked }} accessibilityLabel={label} onPress={() => onChange(!checked)} style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm, paddingVertical: SPACE.xs }}>
+      <View style={{ width: 22, height: 22, borderRadius: 6, borderWidth: 2, borderColor: checked ? theme.colors.statusDanger : theme.colors.border, backgroundColor: checked ? theme.colors.statusDanger : "transparent", alignItems: "center", justifyContent: "center" }}>
+        {checked && HostIcon ? <HostIcon name="Check" size={14} color="#ffffff" /> : null}
+      </View>
+      <Text style={{ ...TYPE.body, color: theme.colors.foreground, flexShrink: 1 }}>{label}</Text>
+    </Pressable>
   );
 }

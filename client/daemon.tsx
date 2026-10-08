@@ -16,7 +16,8 @@ import { syncScreenParams } from "./native";
 import { HelpTab, type SetupCheck } from "./guide";
 import { OverviewTab } from "./home";
 import { Accordion, AccordionItem, IconBadge, MessageBar, QuietLine, SectionTitle, SPACE, TYPE, type Tone } from "./kit";
-import { CacheList, DiskCard, WorkspaceList, idleClearable, useDiskReport } from "./workspaces";
+import { CacheList, DiskCard, WorkspaceList, idleClearable, useClearJob, useDiskReport } from "./workspaces";
+import { DeleteDialog } from "./clear";
 import { formatSize } from "../shared/disk";
 import { TAB_IDS, TabBar, TabLine, type TabId } from "./navigation";
 import { OpenRow } from "./open-row";
@@ -118,6 +119,11 @@ function DaemonBody(props: DaemonProps) {
   // 0.14.0: the disk report is read (and polled) only while Workspaces shows. A check never starts by itself:
   // "Check disk space" there, Refresh on Workspaces, or the Command Center's "Check disk space" starts one.
   const disk = useDiskReport(props.host.id, tab === "workspaces");
+  // 0.16.0: Workspaces is the hub: each row shows what runs there (same list as Processes) and can delete its build folders.
+  const hubProcesses = useQuery({ queryKey: [...processesKey(props.host.id), "hub"], queryFn: () => reportRpc({ filter: "all", sort: "memory", limit: 200 }), refetchInterval: 20_000, retry: 1, enabled: tab === "workspaces" });
+  const clearJob = useClearJob(props.host.id);
+  const [deleting, setDeleting] = useState<{ tokens: string[]; asked: number } | null>(null);
+  const askDelete = (tokens: string[]) => setDeleting((previous) => ({ tokens, asked: (previous?.asked ?? 0) + 1 }));
   const refreshAll = () => { check.mutate(); void queryClient.invalidateQueries({ queryKey: ["daemon-link", props.host.id] }); if (tab === "workspaces") disk.scan.mutate(); };
   // 0.15.0: a check takes a minute or two, so say when it's done (a toast, or the message bar on older apps).
   const scanState = disk.report?.scan.state;
@@ -173,7 +179,7 @@ function DaemonBody(props: DaemonProps) {
       {tab === "processes" ? <ProcessesTab theme={theme} compact={layout.compact} hostId={props.host.id} say={setMessage} issues={verdict?.issues ?? []} onChanged={() => void health.refetch()} /> : null}
       {tab === "help" ? <HelpTab theme={theme} compact={layout.compact} go={toHelp} minutes={formatMinutes(minutes)} shortcuts={!!props.shortcuts} /> : null}
       {tab === "workspaces" && <View style={{ gap: t.space.xl }}>
-        <DiskCard theme={theme} report={disk.report} loading={disk.query.isPending} scanning={disk.scan.isPending} onScan={() => disk.scan.mutate()} onCaches={() => go("workspaces", "caches")} askNow={fold.id === "cleanup"} onAsked={() => go("workspaces")} />
+        <DiskCard theme={theme} report={disk.report} loading={disk.query.isPending} scanning={disk.scan.isPending} onScan={() => disk.scan.mutate()} onCaches={() => go("workspaces", "caches")} onDelete={clearJob.running ? undefined : askDelete} askNow={fold.id === "cleanup"} onAsked={() => go("workspaces")} />
         {apps.length || !ready ? (
           <View style={{ gap: t.space.md }}>
             <SectionTitle theme={theme} icon="Server">{apps.length ? `Dev servers running now · ${apps.length}` : "Dev servers"}</SectionTitle>
@@ -201,7 +207,8 @@ function DaemonBody(props: DaemonProps) {
             )}
           </View>
         ) : null}
-        <WorkspaceList theme={theme} compact={layout.compact} report={disk.report} />
+        <WorkspaceList theme={theme} compact={layout.compact} report={disk.report} processes={hubProcesses.data?.processes ?? []} say={setMessage} onDelete={clearJob.running ? undefined : askDelete} job={clearJob.job} />
+        {deleting ? <DeleteDialog key={deleting.asked} theme={theme} tokens={deleting.tokens} open onClose={() => setDeleting(null)} onStarted={(job) => clearJob.follow(job)} /> : null}
         <Accordion theme={theme}>
           {disk.report && disk.report.scan.state !== "never" ? (
             <AccordionItem key={foldKey("caches")} theme={theme} compact={layout.compact} icon="Archive" title="Shared caches and temporary files" summary={disk.report.caches.length ? `${formatSize(disk.report.caches.reduce((sum, group) => sum + group.totalBytes, 0))} · package downloads, tool caches, old browser downloads, /tmp leftovers` : disk.report.scan.state === "running" ? "Checking…" : "Nothing found"} open={foldOpen("caches")}>

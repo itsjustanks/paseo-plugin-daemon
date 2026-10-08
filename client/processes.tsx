@@ -1,10 +1,10 @@
-import { errorText, useCopy, useOnce, Sheet } from "./feedback";
+import { CancelButton, DangerLine, DestructiveButton, errorText, useCopy, useOnce, Sheet } from "./feedback";
 import React, { useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc } from "@getpaseo/plugin/client";
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
-import { processDetails, processPreview, processReport, processStop, sameness, twinKeys, type ActionLogEntry, type ProcessReport, type ProcessRow, type ReportSort, type StopPlan } from "../shared/processes";
+import { ownerGroup, processDetails, processGroups, processPreview, processReport, processStop, sameness, twinKeys, type ActionLogEntry, type ProcessReport, type ProcessRow, type ReportSort, type StopPlan } from "../shared/processes";
 import { Accordion, AccordionItem, Banner, Button, Card, Chip, Divider, HostIcon, ItemTitle, Meta, Note, QuietLine, RADIUS, Row, SPACE, TYPE, tint, toneColor, type Tone } from "./kit";
 import { formatBytes, formatDuration, formatPercent } from "./ui";
 import { AskAgentButton } from "./ask";
@@ -169,6 +169,7 @@ function ProcessItem({ theme, row, compact, byTree, selected, onSelect, onStop, 
           <View style={{ flex: 1, gap: SPACE.hair, minWidth: 0 }}>
             <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: SPACE.sm }}>
               <ItemTitle theme={theme}>{row.name}</ItemTitle>
+              {row.owner.project ? <Chip theme={theme} label={ownerGroup(row.owner)} tone="neutral" /> : null}
               {tag ? <Chip theme={theme} label={byTree && row.tree.count > 1 ? `${tag} · ${row.tree.count} processes` : tag} tone={flagged ? "warning" : "neutral"} /> : flagged ? <Chip theme={theme} label="Needs attention" tone="warning" /> : null}
             </View>
             <Meta theme={theme}>{row.owner.label}{row.ports.length ? ` · ${row.ports.map((port) => `:${port}`).join(" ")}` : ""}{twin ? ` · PID ${row.pid}` : ""}</Meta>
@@ -203,7 +204,7 @@ function ProcessItem({ theme, row, compact, byTree, selected, onSelect, onStop, 
 
 const ACTION_WORD: Record<ActionLogEntry["action"], string> = {
   stop: "Asked to stop", "force-stop": "Force stopped", "auto-force-stop": "Stopped forcefully",
-  "plugin-reload": "Reloaded plugin", "plugin-stop": "Stopped stuck plugin", "plugin-force-stop": "Force stopped stuck plugin", "auto-stop": "Stopped automatically (memory nearly full)",
+  "plugin-reload": "Reloaded plugin", "plugin-stop": "Stopped stuck plugin", "plugin-force-stop": "Force stopped stuck plugin", "auto-stop": "Stopped automatically (memory nearly full)", "disk-clear": "Cleared build folder",
 };
 
 /** Every stop, newest first, from this host's action log: the content of the "Recent stops" fold-out. */
@@ -233,6 +234,7 @@ export function StopSheet({ theme, plan, busy, onCancel, onConfirm }: { theme: T
   return (
     <Sheet title={plan ? (ready.length ? title : "Nothing can be stopped") : "Stop processes"} icon={HostIcon ? <HostIcon name="OctagonX" size={18} color={theme.colors.statusDanger} /> : undefined} open={plan !== null} busy={busy} onClose={() => onCancel()} colors={{ surface: theme.colors.surface1, border: theme.colors.border, foreground: theme.colors.foreground }}>
         <View style={{ gap: SPACE.row, padding: SPACE.card }}>
+          {ready.length ? <DangerLine theme={theme}>{`This stops ${ready.length + children === 1 ? "this process" : `these ${ready.length + children} processes`}. Anything not saved in ${ready.length + children === 1 ? "it" : "them"} may be lost.`}</DangerLine> : null}
           {ready.map((target) => (
             <View key={target.pid ?? target.name} style={{ gap: SPACE.hair }}>
               <ItemTitle theme={theme}>{`${target.name} (PID ${target.pid})`}</ItemTitle>
@@ -250,12 +252,17 @@ export function StopSheet({ theme, plan, busy, onCancel, onConfirm }: { theme: T
             <Note theme={theme}>{`${ready.length + children === 1 ? "It is" : `These ${ready.length + children} processes are`} asked to stop first. Anything still running after ${plan!.graceSeconds} seconds is stopped forcefully, which can lose unsaved work. Every step is logged.`}</Note>
           ) : null}
           <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: SPACE.sm }}>
-            <Button theme={theme} label={ready.length ? "Cancel" : "Close"} onPress={onCancel} disabled={busy} />
-            {ready.length ? <Button theme={theme} label={ready.length + children === 1 ? "Stop it" : `Stop ${ready.length + children} processes`} icon="OctagonX" danger busy={busy} onPress={confirmOnce} /> : null}
+            {/* 0.16.0: like every warning dialog: Cancel is the default, Enter never stops anything. */}
+            {plan ? <CancelButton theme={theme} label={ready.length ? "Cancel" : "Close"} onPress={onCancel} disabled={busy} /> : null}
+            {ready.length ? <DestructiveButton theme={theme} label={ready.length + children === 1 ? "Stop it" : `Stop ${ready.length + children} processes`} busy={busy} onPress={confirmOnce} /> : null}
           </View>
         </View>
     </Sheet>
   );
+}
+
+function HostIconOrDot({ theme, name }: { theme: Theme; name: string }) {
+  return HostIcon ? <HostIcon name={name} size={16} color={theme.colors.foregroundMuted} /> : null;
 }
 
 /** "node ×3, esbuild" */
@@ -340,7 +347,19 @@ export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChang
         {rows.length === 0 ? (
           <Note theme={theme}>{search ? `Nothing matches "${search}".` : filter === "jobs" ? "No builds, tests, type checks, installs or dev servers are running." : filter === "stoppable" ? "Nothing here can be stopped right now." : "No processes."}</Note>
         ) : (
-          <View>{rows.map((row, index) => <ProcessItem key={`${row.pid}-${row.name}`} theme={theme} row={row} compact={compact} byTree={byTree} first={index === 0} twin={twins.has(sameness(row))} selected={selected.has(row.pid)} onSelect={() => toggle(row.pid)} onStop={() => ask.mutate([row.pid])} />)}</View>
+          // 0.16.0: under their project or workspace, so where each one runs is clear at a glance.
+          <View style={{ gap: SPACE.row }}>
+            {processGroups(rows).map((group) => (
+              <View key={group.title} style={{ gap: SPACE.xs }}>
+                <View accessibilityRole="header" style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap", paddingTop: SPACE.sm }}>
+                  <HostIconOrDot theme={theme} name={group.title === "Paseo itself" ? "Network" : group.title === "Not in a workspace" ? "Monitor" : "FolderTree"} />
+                  <Text style={{ ...TYPE.item, color: theme.colors.foreground }}>{group.title}</Text>
+                  <Meta theme={theme}>{`${group.rows.length} · ${formatBytes(group.rssBytes)}`}</Meta>
+                </View>
+                <View>{group.rows.map((row, index) => <ProcessItem key={`${row.pid}-${row.name}`} theme={theme} row={row} compact={compact} byTree={byTree} first={index === 0} twin={twins.has(sameness(row))} selected={selected.has(row.pid)} onSelect={() => toggle(row.pid)} onStop={() => ask.mutate([row.pid])} />)}</View>
+              </View>
+            ))}
+          </View>
         )}
         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: SPACE.sm }}>
           <Meta theme={theme}>{`${rows.length} of ${data.matched}${data.matched !== data.total ? ` matching (${data.total} in all)` : ""} · updated ${new Date(data.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`}</Meta>

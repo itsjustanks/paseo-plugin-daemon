@@ -81,7 +81,10 @@ function AttentionList({ theme, verdict, say, onDone }: { theme: Theme; verdict:
           <View key={`${issue.code}-${index}`} style={{ gap: SPACE.sm }}>
             <View style={{ flexDirection: "row", alignItems: "flex-start", gap: SPACE.sm }}>
               <View style={{ paddingTop: SPACE.sm }}><Dot color={toneColor(theme, issue.severity === "critical" ? "danger" : "warning")} /></View>
-              <Text style={{ ...TYPE.body, color: theme.colors.foreground, flex: 1 }}>{redactSecrets(issue.message)}</Text>
+              <View style={{ flex: 1, gap: SPACE.hair }}>
+                <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{redactSecrets(issue.message)}</Text>
+                {issue.owner ? <Meta theme={theme}>{`In ${issue.owner}`}</Meta> : null}
+              </View>
             </View>
             {subject || ((issue.code === "runaway" || issue.code === "archived-leftover") && issue.stoppable && issue.pid) ? (
               <View style={{ paddingLeft: SPACE.md }}>

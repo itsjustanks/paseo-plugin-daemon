@@ -131,7 +131,7 @@ export function workspaceState(status: string | null): WorkspaceState {
 
 /** Why nothing in a folder may be cleared right now, in plain words; null when it may. */
 export function busyReason(state: WorkspaceState, devServers: readonly string[]): string | null {
-  if (state === "working") return "An agent is working here. Clear it once the agent is done.";
+  if (state === "working") return "An agent is working here. Delete once the agent is done.";
   if (state === "waiting") return "An agent here is waiting for you, so its files stay as they are.";
   if (devServers.length) return `A dev server is running here (${devServers[0]}). Stop it first.`;
   return null;
@@ -451,7 +451,12 @@ export class DiskScanner {
   }
 
   /** The report: sizes from the last scan, status read fresh. */
-  async report(workspacesNow: readonly WorkspaceInfo[], disks: DiskSpace[]): Promise<DiskReport> {
+  /**
+   * The report: sizes from the last scan, status read fresh. `mint` (0.16.0)
+   * signs a Clear token for each item that looks safe, in a workspace whose
+   * root it accepts; it returns null where Clear isn't offered.
+   */
+  async report(workspacesNow: readonly WorkspaceInfo[], disks: DiskSpace[], mint?: (item: { path: string; root: string; dev: number; ino: number; mtimeMs: number; workspace: string; bytes: number; what: string; cost: string }) => string | null): Promise<DiskReport> {
     await this.load();
     const data = this.data;
     const { home } = this.deps.places;
@@ -474,7 +479,9 @@ export class DiskScanner {
         if (blocked === "hide") return [];
         const words = describeName(item.name)!;
         const why = blocked ?? busy;
-        return [{ safe: !why, name: item.name, what: words.what, cost: words.cost, where: item.rel, path, bytes: item.bytes, sharedBytes: item.sharedBytes, partial: item.partial, blocked: why }];
+        const workspace = owners[0]?.name ?? friendlyPath(folder.path, { home, paseoHome: this.deps.places.paseoHome }).label;
+        const token = !why && mint ? mint({ path, root: folder.path, dev: item.dev, ino: item.ino, mtimeMs: item.mtimeMs, workspace, bytes: item.bytes - item.sharedBytes, what: words.what, cost: words.cost }) : null;
+        return [{ safe: !why, name: item.name, what: words.what, cost: words.cost, where: item.rel, path, bytes: item.bytes, sharedBytes: item.sharedBytes, partial: item.partial, blocked: why, token }];
       }).sort(bySafeThenSize).slice(0, 60);
       const activeAt = owners.map((owner) => owner.activityAt ?? 0).reduce((a, b) => Math.max(a, b), 0) || null;
       workspaces.push({
@@ -513,13 +520,16 @@ export class DiskScanner {
 }
 
 /** "Ask an agent" about a folder Hosts won't remove itself: an unlinked worktree, a /tmp leftover, or what an interrupted clear left. */
-export function folderAskText(folder: { path: string; bytes: number; branch: string | null; changedAt: number | null; kind?: "worktree" | "tmp" }, home: string, now = Date.now()): string {
+export function folderAskText(folder: { path: string; bytes: number; branch: string | null; changedAt: number | null; kind?: "worktree" | "tmp" | "leftover"; original?: string }, home: string, now = Date.now()): string {
   const kind = folder.kind ?? "worktree";
   const lead = kind === "worktree" ? `Hosts found a Paseo worktree that no workspace uses any more. It takes up ${formatSize(folder.bytes)}.`
+    : kind === "leftover" ? `A clear in Hosts was interrupted and left a build folder set aside (${formatSize(folder.bytes)}). Hosts couldn't put it back${folder.original ? ` at ${homeRelative(folder.original, home)}` : ""} without replacing something, so it left it alone.`
     : `Hosts found a folder in the temporary folder that takes up ${formatSize(folder.bytes)}. Hosts doesn't delete anything itself.`;
   const check = kind === "worktree"
     ? ["Please check whether anything in it still matters: uncommitted changes (git status) and commits that aren't pushed anywhere (git log --branches --not --remotes).", "Tell me what you find. If nothing is needed, suggest removing it properly with \"git worktree remove\" from its main repository, then \"git worktree prune\"."]
-    : ["Please check what it is and whether anything is still using it or needs it.", "Tell me what you find, and whether it's safe to delete."];
+    : kind === "leftover"
+      ? ["Please check what's in it and whether the original place now has something new in it.", "If it's only build output (installed packages, build files), it can be deleted; otherwise it may need moving back. Tell me what you find."]
+      : ["Please check what it is and whether anything is still using it or needs it.", "Tell me what you find, and whether it's safe to delete."];
   return [
     lead, "",
     `Folder: ${homeRelative(folder.path, home)}`,

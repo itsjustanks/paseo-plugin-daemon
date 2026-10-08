@@ -214,8 +214,7 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
       answer: [
         "Open Workspaces. It shows how much space is free, what each Paseo workspace uses (biggest first, with whether an agent is working in it), and how much of it looks safe to clear. The sidebar dot warns when the disk is 85% full and turns red at 95%.",
         "Looks safe to clear means build output that comes back by itself: installed packages (node_modules), build files (.next, .nuxt, .turbo, dist), test reports and Python caches, and only when git confirms the folder is ignored and holds nothing else. Shared caches (npm, pnpm, browser downloads, tool caches) and the temporary folder are shown by size.",
-        "Hosts doesn't delete anything itself. Press Ask an agent to clean this up, on one workspace, on every idle workspace, or on the caches: the agent gets the exact list with paths and sizes, checks that nothing is in use or unsaved, clears it, and tells you what it freed. You see the message before it's sent.",
-        "One-press clearing is being reviewed for a later version.",
+        "In a workspace's row, Delete removes the build folders that look safe there (installed packages, build files), after a warning that lists exactly what goes and checks each one again. For the shared caches and the temporary folder, Hosts doesn't delete anything itself: press Ask an agent to clean this up, and the agent gets the exact list with paths and sizes, checks nothing is in use or unsaved, clears it, and tells you what it freed. You see the message before it's sent.",
         "Checking sizes reads a lot of files, so it only runs when you ask: Check disk space on Workspaces (or in the Command Center), or Refresh at the top of Workspaces. It runs in the background at low priority, one check at a time, and stops after a few minutes with what it found.",
       ],
       action: { label: "Open Workspaces", tab: "workspaces" },
@@ -227,6 +226,16 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
         "The sidebar dot turns yellow at 85% full and red at 95%; press it, then Free up space. At 95% a chip also appears under every chat's message box, since agents start failing to write files.",
         `In the Command Center: Check disk space and Clean up disk space.${shortcuts ? " In a chat's message box: /disk checks now, /disk clean asks an agent." : ""} In the attach menu, Hosts → Disk report gives an agent the whole picture. Asking an agent about a heavy process mentions the disk when it's low.`,
         "These read the last check. Only Refresh on Workspaces, Check disk space and /disk start a new one.",
+      ],
+      action: { label: "Open Workspaces", tab: "workspaces" },
+    },
+    {
+      icon: "Trash2", question: "What can Delete remove, and what can't it?",
+      answer: [
+        "Delete removes only build folders inside a Paseo workspace or worktree: installed packages (node_modules), build files (.next, .nuxt, .turbo, .vite, dist, build, out), test reports and Python caches. Only when git says right now that the folder is ignored and holds nothing tracked and nothing new that isn't ignored.",
+        "It never deletes your code, a .git folder or any repository, .env files, a whole workspace or worktree, agents' history, Paseo's data, shared caches (npm, pnpm, browser downloads, tool caches) or anything in the temporary folder. Those are Ask an agent only.",
+        "It won't delete while an agent is working or waiting in that workspace, while anything runs there other than an idle terminal (a dev server, build, test, install or editor), while something has a file inside open, or if anything changed since the check. It refuses if it can't see everything that's running.",
+        "The warning lists every folder with its size and checks them all again first. The red button says how much it deletes; Cancel is the default, and Enter never confirms. Over 10 GB or 20 folders, you tick \"I understand\" first. They come back the next time you install or build. Every delete is logged under Processes → Recent stops.",
       ],
       action: { label: "Open Workspaces", tab: "workspaces" },
     },
