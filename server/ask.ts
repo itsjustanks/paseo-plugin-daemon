@@ -150,7 +150,21 @@ export function createAsk(deps: AskDeps) {
     return { name: service.name, target: service.target, state: service.state, latencyMs: service.latencyMs, usualMs: service.usualMs, status: service.status, history: service.history };
   }
 
+  /**
+   * Every ask goes through the same redactor as the Disk report before the
+   * preview or an agent sees it (review fix): folder and cleanup asks carry
+   * workspace, branch and folder names, which can look like `API_KEY=…`.
+   */
   async function context(subject: AskSubject, paseo: PaseoApi): Promise<AskContext> {
+    return redactContext(await rawContext(subject, paseo));
+  }
+
+  function redactContext(found: AskContext): AskContext {
+    const one = (value: string) => redactText([value], home)[0] ?? "";
+    return { ...found, title: one(found.title), text: redactText(found.text.split("\n"), home).join("\n"), workspaceName: found.workspaceName === null ? null : one(found.workspaceName), outputFrom: found.outputFrom === null ? null : one(found.outputFrom) };
+  }
+
+  async function rawContext(subject: AskSubject, paseo: PaseoApi): Promise<AskContext> {
     if (subject.kind === "cleanup") {
       const found = await deps.cleanup?.(subject.id);
       if (!found) throw new Error("Nothing there looks safe to clear in the last disk check. Check again first.");

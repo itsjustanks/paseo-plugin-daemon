@@ -216,7 +216,7 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
         "Looks safe to clear means build output that comes back by itself: installed packages (node_modules), build files (.next, .nuxt, .turbo, dist), test reports and Python caches, and only when git confirms the folder is ignored and holds nothing else. Shared caches (npm, pnpm, browser downloads, tool caches) and the temporary folder are shown by size.",
         "Hosts doesn't delete anything itself. Press Ask an agent to clean this up, on one workspace, on every idle workspace, or on the caches: the agent gets the exact list with paths and sizes, checks that nothing is in use or unsaved, clears it, and tells you what it freed. You see the message before it's sent.",
         "One-press clearing is being reviewed for a later version.",
-        "Checking sizes reads a lot of files, so it runs in the background at low priority, one check at a time, and stops after a few minutes with what it found. Press Refresh at the top to check again.",
+        "Checking sizes reads a lot of files, so it only runs when you ask: Check disk space on Workspaces (or in the Command Center), or Refresh at the top of Workspaces. It runs in the background at low priority, one check at a time, and stops after a few minutes with what it found.",
       ],
       action: { label: "Open Workspaces", tab: "workspaces" },
     },

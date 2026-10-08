@@ -111,7 +111,9 @@ describe("0.14.0 ships no delete path", () => {
     expect(source("index.server.ts")).not.toMatch(/disk\.(clear|preview|status)|diskClear|diskPreview/);
     const runtime = source("server/runtime.ts");
     expect(runtime).not.toMatch(/DiskCleaner|DiskTokens|quarantine|cache clean|store prune|playwright uninstall/i);
-    expect([...runtime.matchAll(/group\.run\("(\w+)", \[([^\]]*)\]/g)].map((match) => `${match[1]} ${match[2]}`)).toEqual(['pnpm "store", "path"']);
+    // Review fix: nothing runs pnpm (its `store path` writes under home); the store is found from config and default places.
+    expect(runtime).not.toMatch(/group\.run\(/);
+    for (const file of ["server/runtime.ts", "server/disk-scan.ts", "server/disk-children.ts", "server/disk-worker.ts", "server/disk-git.ts"]) expect(source(file), file).not.toMatch(/(run|spawn|execFile|exec)\(\s*["'](pnpm|npm|npx|rm)["']/);
     for (const removed of ["server/disk-clear.ts", "server/disk-remove.ts", "server/disk-quarantine.ts", "server/disk-inuse.ts"]) expect(fs.existsSync(join(__dirname, "..", removed)), removed).toBe(false);
   });
 

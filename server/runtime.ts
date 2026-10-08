@@ -19,11 +19,24 @@ import { PaseoCli } from "./paseo-cli";
 import { listPluginHosts, startClock } from "./plugin-procs";
 import { PluginRestarter } from "./plugin-restart";
 import { RESTART_WAIT_MS, type RestartOutcome } from "../shared/guard";
+import { safeGitArgs, safeGitEnv } from "./disk-git";
 import { DiskScanner, cleanupAskText, defaultPlaces, disksFor, folderAskText, readWorkspace, type WorkspaceInfo } from "./disk-scan";
 import { formatSize } from "../shared/disk";
 import type { AskContext } from "../shared/ask";
 import { join } from "node:path";
 import type { DiskReport } from "../shared/disk";
+
+/** A disk report or ask waits this long for the registry or a process snapshot, then uses what it has. */
+export const REPORT_READ_MS = 5000;
+
+/** The value, or null after `ms`. The slow read isn't awaited further (the registry bounds its own reads). */
+export function bounded<T>(work: Promise<T>, ms: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), ms);
+    (timer as { unref?: () => void }).unref?.();
+    work.then((value) => { clearTimeout(timer); resolve(value); }, () => { clearTimeout(timer); resolve(null); });
+  });
+}
 
 export interface RuntimeOptions {
   readSettings?: () => Promise<HostsSettings>;
@@ -77,7 +90,6 @@ export function createRuntime(options: RuntimeOptions = {}) {
     // Read-only (0.14.0): the scan measures and classifies; nothing in Hosts deletes.
     const scanner = new DiskScanner({
       places, uid, listWorkspaces: () => listWorkspaces(true), devServersIn,
-      pnpmStore: async (group) => { const result = await group.run("pnpm", ["store", "path"], { timeoutMs: 10_000, cwd: places.home }); return result.code === 0 ? result.stdout.trim() || null : null; },
     });
     disk = { scanner, places };
   }
@@ -109,19 +121,28 @@ export function createRuntime(options: RuntimeOptions = {}) {
     });
   }
   const unavailable = (pluginId: string): RestartOutcome => ({ ok: false, outcome: "refused", message: "Plugin restarts aren't available on this host.", steps: [], pluginId });
+  /** The registry for a disk report or ask: at most REPORT_READ_MS, else the last list it gave. */
+  let lastWorkspaces: WorkspaceInfo[] = [];
+  const currentWorkspaces = async (): Promise<WorkspaceInfo[]> => {
+    const read = await bounded(listWorkspaces().catch(() => null), REPORT_READ_MS);
+    if (read) lastWorkspaces = read;
+    return read ?? lastWorkspaces;
+  };
   const diskApi = {
     async report(scan: boolean): Promise<DiskReport> {
       if (!disk) throw new Error("Disk usage isn't available on this host.");
-      const workspaces = await listWorkspaces().catch(() => [] as WorkspaceInfo[]);
+      // First, so nothing below can hold it up: the scan reads the registry itself, inside its own deadline.
+      if (scan) disk.scanner.start();
+      const workspaces = await currentWorkspaces();
       if (workspaces.length) knownFolders = workspaces.map((workspace) => workspace.directory).slice(0, 30);
       // The app polls this while a check runs; the process snapshot behind "dev server running here" is reused for 30 s.
       if (Date.now() - servicesAt > 30_000) try {
         servicesAt = Date.now();
-        const snap = await monitor.snapshot({ query: "", sort: "pid", limit: 200 });
+        const snap = await bounded(monitor.snapshot({ query: "", sort: "pid", limit: 200 }), REPORT_READ_MS);
+        if (!snap) throw new Error("slow");
         const absolute = (cwd: string | null) => (cwd && cwd.startsWith("~/") ? `${disk!.places.home}/${cwd.slice(2)}` : cwd);
         lastServices = snap.services.map((service) => ({ cwd: absolute(service.cwd), label: service.service?.label ?? service.name, ports: service.ports }));
       } catch { /* Dev servers are a courtesy here. */ }
-      if (scan) disk.scanner.start();
       const disks = await disksFor([disk.places.paseoHome, disk.places.home, ...disk.places.tmpDirs, ...knownFolders]);
       return disk.scanner.report(workspaces, disks);
     },
@@ -139,7 +160,7 @@ export function createRuntime(options: RuntimeOptions = {}) {
       }
       const folder = disk.scanner.last()?.folders.find((item) => item.key === id && item.kind === "worktree");
       if (!folder) return null;
-      const branch = await new Promise<string | null>((resolve) => execFile("git", ["-C", folder.path, "rev-parse", "--abbrev-ref", "HEAD"], { timeout: 5000 }, (error, stdout) => resolve(error ? null : String(stdout).trim() || null)));
+      const branch = await new Promise<string | null>((resolve) => execFile("git", safeGitArgs(folder.path, ["rev-parse", "--abbrev-ref", "HEAD"]), { timeout: 5000, env: safeGitEnv() }, (error, stdout) => resolve(error ? null : String(stdout).trim() || null)).stdin?.on("error", () => undefined));
       const changedAt = folder.result?.newestMtimeMs ? Math.round(folder.result.newestMtimeMs) : null;
       return ask(`A worktree no workspace uses (${formatSize(folder.result?.totalBytes ?? 0)})`, folderAskText({ path: folder.path, bytes: folder.result?.totalBytes ?? 0, branch, changedAt }, home));
     },
@@ -151,7 +172,7 @@ export function createRuntime(options: RuntimeOptions = {}) {
      */
     async cleanupAsk(id: string): Promise<AskContext | null> {
       if (!disk) return null;
-      const workspaces = await listWorkspaces().catch(() => [] as WorkspaceInfo[]);
+      const workspaces = await currentWorkspaces();
       const report = await disk.scanner.report(workspaces, []);
       const checkedAt = report.scan.finishedAt;
       const ask = (title: string, text: string, workspaceId: string | null = null, workspaceName: string | null = null): AskContext => ({ title, text, workspaceId, workspaceName, outputFrom: null });

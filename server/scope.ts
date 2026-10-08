@@ -34,6 +34,16 @@ export function isInfrastructure(process: RawProcess): boolean {
 export const PASSIVE_TTL_MS = 60_000;
 /** After a failed read, passive reads wait this long before trying again (forced reads don't). */
 export const FAILURE_BACKOFF_MS = 10_000;
+/** The longest one registry read (projects plus workspace pages) may take before it counts as failed. */
+export const REGISTRY_READ_MS = 20_000;
+
+function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("The registry read timed out.")), ms);
+    (timer as { unref?: () => void }).unref?.();
+    work.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
+  });
+}
 
 /** Registry access uses the plugin's own borrowed SDK session, never browser-supplied paths. */
 export class ProjectScope {
@@ -64,7 +74,10 @@ export class ProjectScope {
     if (!force && this.updated && this.now() - this.updated < PASSIVE_TTL_MS) return;
     if (!this.api) throw new Error(this.failure);
     if (!force && !this.updated && this.failedAt && this.now() - this.failedAt < FAILURE_BACKOFF_MS) throw new Error(this.failure);
-    this.pending = this.load(this.api).catch(() => {
+    // Bounded (review fix): a stalled daemon can't hold every caller, the disk check included, on one read forever.
+    const generation = ++this.generation;
+    this.pending = withDeadline(this.load(this.api, generation), REGISTRY_READ_MS).catch(() => {
+      this.generation++; // A read that answers after its deadline is dropped, never written over a newer one.
       this.roots = []; this.descriptors = []; this.updated = 0; this.failedAt = this.now();
       this.failure = "Paseo projects could not be verified. Refresh this host; sharing and process controls are paused.";
       throw new Error(this.failure);
@@ -72,7 +85,10 @@ export class ProjectScope {
     return this.pending;
   }
 
-  private async load(api: PaseoApi) {
+  /** Bumped per read; a read whose number is old by the time it answers writes nothing. */
+  private generation = 0;
+
+  private async load(api: PaseoApi, generation = this.generation) {
     const projects = (await api.projects.list()).projects;
     const roots: Root[] = projects.map((p) => ({ id: p.projectId, name: p.projectDisplayName, path: p.projectRootPath, workspace: null, servicePorts: [] }));
     let cursor: string | undefined;
@@ -91,6 +107,7 @@ export class ProjectScope {
       if (!next || seen.has(next) || page === 19) throw new Error("Incomplete workspace registry");
       seen.add(next); cursor = next;
     }
+    if (generation !== this.generation) throw new Error("A newer registry read replaced this one.");
     this.descriptors = descriptors;
     this.broadRoots = 0;
     const canonicalRoots = await Promise.all(roots.map(async (root) => {
@@ -101,6 +118,7 @@ export class ProjectScope {
       if (containsDirectory(path, resolve(this.home))) { this.broadRoots++; return null; }
       return { ...root, path };
     }));
+    if (generation !== this.generation) throw new Error("A newer registry read replaced this one.");
     this.roots = canonicalRoots.filter((root): root is Root => root !== null).sort((a, b) => b.path.length - a.path.length || Number(!!b.workspace) - Number(!!a.workspace));
     this.updated = this.now(); this.failure = "";
   }

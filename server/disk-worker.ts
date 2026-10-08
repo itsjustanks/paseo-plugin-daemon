@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { lowPriority, type ChildGroup } from "./disk-children";
+import { ChildGroup, lowPriority, watchChild } from "./disk-children";
 
 /**
  * The heavy part of 0.14.0's disk scan (walking folders to measure them),
@@ -145,11 +145,12 @@ export function runWorker<T>(request: ScanRequest, hardLimitMs: number, onResult
     const results: T[] = [];
     let buffer = "", timedOut = false, settled = false;
     if (group?.closed) { resolve({ results, timedOut: false, error: "Hosts is unloading." }); return; }
-    // Its own process group, so unloading Hosts can end it (group.killAll).
+    // Its own process group, so unloading Hosts can end it (group.killAll); tracked only until it exits.
     const child = spawn(process.execPath, ["-e", WORKER_SCRIPT], { detached: true, stdio: ["pipe", "pipe", "ignore"], env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }, windowsHide: true });
-    const untrack = group && child.pid ? group.track(child.pid) : () => undefined;
+    const own = group ?? new ChildGroup();
+    const untrack = child.pid ? own.track(child.pid) : () => undefined;
     const done = (error: string | null) => { if (settled) return; settled = true; clearTimeout(timer); untrack(); resolve({ results, timedOut, error }); };
-    const timer = setTimeout(() => { timedOut = true; try { if (child.pid) process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); } }, hardLimitMs);
+    const timer = setTimeout(() => { timedOut = true; own.signal(child.pid); }, hardLimitMs);
     (timer as { unref?: () => void }).unref?.();
     if (child.pid) lowPriority(child.pid);
     child.stdout.setEncoding("utf8");
@@ -161,8 +162,8 @@ export function runWorker<T>(request: ScanRequest, hardLimitMs: number, onResult
         try { const parsed = JSON.parse(line) as T; results.push(parsed); onResult?.(parsed); } catch { /* A torn line is skipped. */ }
       }
     });
-    child.on("error", (error) => done(error.message));
-    child.on("close", () => done(null));
+    // EPIPE on stdin (it died mid-write) is a result: the run ends with what arrived, never a crash.
+    watchChild(child, untrack, (_code, _killed, error) => done(timedOut ? null : error && !/EPIPE|ECONNRESET/.test(error) ? error : null));
     child.stdin.end(JSON.stringify(request));
   });
 }

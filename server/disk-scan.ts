@@ -165,8 +165,8 @@ export interface ScannerDeps {
   scanSeconds?: number;
   /** Where the last result is kept between reloads; null to keep it in memory only. */
   cacheFile?: string | null;
-  /** pnpm's store folder, when pnpm is here (`pnpm store path`, read-only). */
-  pnpmStore?(group: ChildGroup): Promise<string | null>;
+  /** pnpm's store folder, from pnpm's config files and default places; pnpm itself never runs. */
+  pnpmStore?(): Promise<string | null>;
   walk?: typeof runWorker;
 }
 
@@ -183,6 +183,42 @@ const CACHE_HOW: Record<ScanCache["kind"], string> = {
   tmp: "left in the temporary folder; check nothing is using it",
 };
 
+/**
+ * pnpm's store, found without running pnpm (review fix: `pnpm store path`
+ * creates, links and removes files under home). `store-dir` from the
+ * environment or pnpm's config files (~/.npmrc, pnpm's global rc), else the
+ * default place for this system. Null when none of them exists.
+ */
+export async function findPnpmStore(places: Pick<DiskPlaces, "platform" | "home">, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+  const home = places.home;
+  const expand = (value: string) => value.trim().replace(/^["']|["']$/g, "").replace(/^~(?=\/|$)/, home).replace(/\$\{?HOME\}?/g, home);
+  const configured: string[] = [];
+  for (const key of ["npm_config_store_dir", "pnpm_config_store_dir", "NPM_CONFIG_STORE_DIR"]) if (env[key]) configured.push(env[key]!);
+  const xdgConfig = env.XDG_CONFIG_HOME || join(home, ".config");
+  const rcFiles = [join(home, ".npmrc"), ...(places.platform === "darwin" ? [join(home, "Library", "Preferences", "pnpm", "rc")] : []), join(xdgConfig, "pnpm", "rc")];
+  for (const file of rcFiles) {
+    const text = await safe(() => readFile(file, "utf8"), "");
+    const match = /^\s*store-dir\s*=\s*(.+?)\s*$/m.exec(text);
+    if (match) configured.push(match[1]!);
+  }
+  const defaults = [
+    ...(env.PNPM_HOME ? [join(env.PNPM_HOME, "store")] : []),
+    ...(places.platform === "darwin" ? [join(home, "Library", "pnpm", "store")] : [join(env.XDG_DATA_HOME || join(home, ".local", "share"), "pnpm", "store")]),
+  ];
+  for (const candidate of [...configured.map(expand), ...defaults]) {
+    if (!candidate.startsWith("/")) continue;
+    const st = await safe(() => lstat(candidate), null);
+    if (st?.isDirectory() && !st.isSymbolicLink()) return candidate;
+  }
+  return null;
+}
+
+/** A sign this computer uses pnpm: a pnpm-lock.yaml at the top of a workspace (a stat, no walk). */
+async function usesPnpm(workspaces: readonly WorkspaceInfo[]): Promise<boolean> {
+  for (const workspace of workspaces.slice(0, 30)) if (await safe(() => stat(join(workspace.directory, "pnpm-lock.yaml")), null)) return true;
+  return false;
+}
+
 export class DiskScanner {
   private data: ScanData | null = null;
   private running: Promise<void> | null = null;
@@ -190,6 +226,8 @@ export class DiskScanner {
   private loaded = false;
   private readonly now: () => number;
   private readonly group = new ChildGroup();
+  /** Stops the running scan's discovery steps (deadline or unload). */
+  private abort: AbortController | null = null;
 
   constructor(private readonly deps: ScannerDeps) { this.now = deps.now ?? Date.now; }
 
@@ -197,7 +235,7 @@ export class DiskScanner {
   last(): ScanData | null { return this.data; }
 
   /** Unloading: kill every child's process group (walk, git, version checks) and wait for the scan to stop. */
-  async close(): Promise<void> { this.group.killAll(); await this.wait(); }
+  async close(): Promise<void> { this.abort?.abort(); this.group.killAll(); await this.wait(); }
 
   /** A cleared folder leaves the cached scan at once, so the list doesn't offer it again. */
   forget(path: string, bytes: number): void {
@@ -235,16 +273,23 @@ export class DiskScanner {
     const deadline = startedAt + (this.deps.scanSeconds ?? SCAN_SECONDS) * 1000;
     const left = () => Math.max(0, deadline - this.now());
     // Every step before the walk shares the same deadline: a slow registry or a hung tool can't stretch it.
+    // Past the deadline (or on unload) the discovery steps stop where they are, rather than running on unseen.
+    const abort = new AbortController();
+    this.abort = abort;
+    if (this.group.closed) abort.abort(); // Unloading began before the scan got here.
+    const signal = abort.signal;
     const within = <T>(work: Promise<T>, fallback: T): Promise<T> => new Promise((resolve) => {
-      const timer = setTimeout(() => resolve(fallback), left());
+      if (signal.aborted) { resolve(fallback); return; }
+      const timer = setTimeout(() => { abort.abort(); resolve(fallback); }, left());
+      signal.addEventListener("abort", () => { clearTimeout(timer); resolve(fallback); }, { once: true });
       (timer as { unref?: () => void }).unref?.();
       work.then((value) => { clearTimeout(timer); resolve(value); }, () => { clearTimeout(timer); resolve(fallback); });
     });
     const warnings: string[] = [];
     const workspaces = await within(this.deps.listWorkspaces(), [] as WorkspaceInfo[]);
     if (!workspaces.length) warnings.push("Paseo's workspaces couldn't be read in time, so only shared caches were checked. Open Hosts once after the daemon starts, then check again.");
-    const folders = await within(this.folders(workspaces), [] as ScanFolder[]);
-    const caches = await within(this.cacheCandidates(warnings, workspaces), [] as ScanCache[]);
+    const folders = await within(this.folders(workspaces, signal), [] as ScanFolder[]);
+    const caches = await within(this.cacheCandidates(warnings, workspaces, signal), [] as ScanCache[]);
     const roots: WalkRoot[] = [
       ...folders.map((folder) => ({ id: folder.key, path: folder.path, mode: "workspace" as const })),
       ...caches.map((cache) => ({ id: cache.key, path: cache.path, mode: "whole" as const })),
@@ -281,24 +326,26 @@ export class DiskScanner {
   }
 
   /** Each folder once (several workspaces can share one), plus worktrees under $PASEO_HOME/worktrees that none claims. */
-  private async folders(workspaces: readonly WorkspaceInfo[]): Promise<ScanFolder[]> {
+  private async folders(workspaces: readonly WorkspaceInfo[], signal?: AbortSignal): Promise<ScanFolder[]> {
     const out: ScanFolder[] = [];
     const seen = new Set<string>();
     for (const workspace of workspaces) {
+      if (signal?.aborted) return out;
       const path = await safe(() => realpath(workspace.directory), null);
       if (!path || seen.has(path) || path === this.deps.places.home || path === "/") continue;
       seen.add(path);
       out.push({ key: `ws:${path}`, path, kind: "workspace", result: null });
     }
-    for (const path of await this.unlinkedWorktrees([...seen])) out.push({ key: `wt:${path}`, path, kind: "worktree", result: null });
+    for (const path of await this.unlinkedWorktrees([...seen], signal)) out.push({ key: `wt:${path}`, path, kind: "worktree", result: null });
     return out;
   }
 
-  async unlinkedWorktrees(claimed: readonly string[]): Promise<string[]> {
+  async unlinkedWorktrees(claimed: readonly string[], signal?: AbortSignal): Promise<string[]> {
     const base = join(this.deps.places.paseoHome, "worktrees");
     const out: string[] = [];
     const isClaimed = (path: string) => claimed.some((folder) => folder === path || folder.startsWith(`${path}/`) || path.startsWith(`${folder}/`));
     for (const project of await safe(() => readdir(base), [] as string[])) {
+      if (signal?.aborted) return out;
       const projectPath = join(base, project);
       const info = await safe(() => lstat(projectPath), null);
       if (!info?.isDirectory() || info.isSymbolicLink()) continue;
@@ -320,11 +367,12 @@ export class DiskScanner {
    * set. They're shown for size; npm's cache, pnpm's store and Playwright's
    * browsers also offer that tool's own command when the tool is here.
    */
-  private async cacheCandidates(warnings: string[], workspaces: readonly WorkspaceInfo[]): Promise<ScanCache[]> {
+  private async cacheCandidates(warnings: string[], workspaces: readonly WorkspaceInfo[], signal?: AbortSignal): Promise<ScanCache[]> {
     const { places, uid } = this.deps;
     const out: ScanCache[] = [];
-    const guard = await protectionFor(places, workspaces, (claimed) => this.unlinkedWorktrees(claimed));
+    const guard = await protectionFor(places, workspaces, (claimed) => this.unlinkedWorktrees(claimed, signal));
     const add = async (kind: ScanCache["kind"], path: string, label: string, what: string, group: string) => {
+      if (signal?.aborted) return;
       const st = await safe(() => lstat(path), null);
       if (!st || st.isSymbolicLink() || !st.isDirectory() || st.uid !== uid) return;
       if (PROTECTED_NAME.test(basename(path)) || protectedReason(path, guard) || !await canonicalChain(path)) return;
@@ -333,8 +381,9 @@ export class DiskScanner {
     const npm = join(places.home, ".npm");
     await add("npm", join(npm, "_cacache"), "npm cache", "Packages npm downloaded", "Package managers");
     await add("npx", join(npm, "_npx"), "npx downloads", "Tools fetched with npx", "Package managers");
-    const store = await (this.deps.pnpmStore ?? (async () => null))(this.group).catch(() => null);
+    const store = await (this.deps.pnpmStore ?? (() => findPnpmStore(places)))().catch(() => null);
     if (store && store.startsWith("/")) await add("pnpm", store, "pnpm store", "Packages shared by your pnpm projects", "Package managers");
+    else if (await usesPnpm(workspaces)) warnings.push("pnpm store: not found.");
     for (const root of places.browserRoots) {
       const label = basename(root) === "ms-playwright" ? "Playwright browsers" : basename(dirname(root)) === ".agent-browser" ? "agent-browser browsers" : basename(root);
       await add("browsers", root, label, "Browser downloads", "Browser downloads");

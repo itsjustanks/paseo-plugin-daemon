@@ -76,6 +76,14 @@ describe("workspace panel: disk from the last check", () => {
     }
     expect(source("client/workspace-panel.tsx")).not.toMatch(/useDiskReport/); // its 4-second poll while a check runs is the Workspaces tab's
   });
+
+  it("review fix: no check starts by itself, and the report is polled only while Workspaces shows", () => {
+    const daemon = source("client/daemon.tsx");
+    expect(daemon).toMatch(/useDiskReport\(props\.host\.id, tab === "workspaces"\)/);
+    expect(daemon).not.toMatch(/neverChecked|useEffect\([^)]*scan\.mutate/);
+    expect([...daemon.matchAll(/disk\.scan\.mutate\(\)/g)].length).toBe(2); // Refresh on Workspaces, and "Check disk space"
+    expect(source("client/workspaces.tsx")).toMatch(/label="Check disk space" icon="ScanSearch" primary/);
+  });
 });
 
 describe("chip: the disk only at 95%", () => {

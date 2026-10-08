@@ -35,12 +35,12 @@ const size = (bytes: number, partial = false) => `${partial ? "at least " : ""}$
 /** What clearing an item would free: bytes not shared with pnpm's store. */
 const frees = (item: ClearItem) => Math.max(0, item.bytes - item.sharedBytes);
 
-/** The report, polled quickly while a check runs and slowly otherwise. `scan()` starts a check. */
-export function useDiskReport(hostId: string) {
+/** The report, polled quickly while a check runs and slowly otherwise, only while `enabled` (Workspaces showing). `scan()` starts a check. */
+export function useDiskReport(hostId: string, enabled = true) {
   const read = useRpc(diskReport);
   const client = useQueryClient();
   const query = useQuery({
-    queryKey: diskKey(hostId), queryFn: () => read({}), retry: 1,
+    queryKey: diskKey(hostId), queryFn: () => read({}), retry: 1, enabled,
     refetchInterval: (state) => (state.state.data?.scan.state === "running" ? 4000 : 60_000),
   });
   const scan = useMutation({ mutationFn: () => read({ scan: true }), onSuccess: (report) => client.setQueryData(diskKey(hostId), report) });
@@ -89,8 +89,8 @@ export function DiskCard({ theme, report, loading, scanning, onScan, onCaches, a
         </View>
       ) : !scan || scan.state === "never" ? (
         <View style={{ gap: SPACE.sm }}>
-          <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>Hosts hasn't looked inside your workspaces yet. It finds build files, installed packages and caches that are usually safe to clear.</Text>
-          <Row><Button theme={theme} label="Check what's using space" icon="ScanSearch" primary busy={loading} onPress={onScan} /></Row>
+          <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>Hosts hasn't looked inside your workspaces yet. Checking finds build files, installed packages and caches that are usually safe to clear. It reads a lot of files, so it only runs when you ask.</Text>
+          <Row><Button theme={theme} label="Check disk space" icon="ScanSearch" primary busy={scanning} onPress={onScan} /></Row>
         </View>
       ) : (
         <View style={{ gap: SPACE.row }}>

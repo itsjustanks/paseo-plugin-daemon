@@ -35,7 +35,7 @@ later version (kept on a branch, not shipped).
   processes and open files before deleting; never to delete .git, any repository, .env files,
   ~/.claude, ~/.codex or Paseo's data, nor a whole project or worktree; to use npm's and pnpm's own
   clean commands; to skip anything unsure; and to report what it freed.
-- **Scans are gentle.** On demand (the first visit to Workspaces, then Refresh at the top), cached
+- **Scans are gentle.** Only when asked ("Check disk space", or Refresh on Workspaces), cached
   in memory and `$PASEO_HOME/daemon-link/disk-scan.json` with "Checked 4 min ago", one at a time, in
   child processes at the lowest priority (nice 19, idle disk class on Linux), each in its own process
   group that unloading kills. One deadline (4 minutes) covers reading Paseo's workspaces, finding
@@ -68,6 +68,25 @@ later version (kept on a branch, not shipped).
     what looks safe to clear, and the shared caches and temporary files, from the last check.
   - **"Ask an agent" about a heavy process** mentions the disk when it's 85% full or more ("disk 91%
     full (8 GB free)"), from the same host line.
+- **Review fixes (before release):**
+  - A child that dies while Hosts is still writing to it (EPIPE) no longer crashes the plugin: every
+    pipe of every disk child has an error handler.
+  - Hosts signals a child's process group only while that child hasn't exited; once it has, nothing
+    is signalled again, even if a descendant keeps its pipes open (stops reading after 2 seconds).
+  - Git can't run the repository's code: every query pins `core.fsmonitor=false`,
+    `core.untrackedCache=false`, `core.hooksPath=/dev/null` and `protocol.allow=never` on the command
+    line (which beats every config file), skips the system config and drops inherited `GIT_*`
+    variables. The user's global config stays readable for their own excludes file.
+  - pnpm never runs (`pnpm store path` writes under home). Its store is found from `store-dir` in the
+    environment, ~/.npmrc or pnpm's rc, else the default place; "pnpm store: not found." when a
+    workspace uses pnpm and none exists.
+  - Every "Ask an agent" message, folder and cleanup asks included, goes through the same redactor
+    as the Disk report, so a workspace or branch named like `API_KEY=…` is hidden.
+  - No automatic disk check: with none yet, Workspaces shows free and used space and a "Check disk
+    space" button. The disk report is read and polled only while Workspaces shows.
+  - A disk report or ask waits at most 5 seconds for Paseo's registry or the process list; a check
+    starts before either is read. One registry read gives up after 20 seconds (a late answer is
+    dropped), and the scan's discovery steps stop at its deadline or on unload.
 - **Help:** "My disk is filling up. What can I clear?", "What does the agent check before it
   deletes anything?" and "Where else does Hosts show disk space?". Old `tab=servers` links land on
   Workspaces. No settings change.

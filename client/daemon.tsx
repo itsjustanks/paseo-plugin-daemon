@@ -114,12 +114,10 @@ function DaemonBody(props: DaemonProps) {
     setTab(target.tab);
     if (target.fold) setFold((previous) => ({ id: target.fold, asked: previous.asked + 1 }));
   }, [paramTab, paramOpen]);
-  // 0.14.0: on Workspaces, Refresh also checks disk use again (the one way to re-check; it runs in the background).
-  const disk = useDiskReport(props.host.id);
+  // 0.14.0: the disk report is read (and polled) only while Workspaces shows. A check never starts by itself:
+  // "Check disk space" there, Refresh on Workspaces, or the Command Center's "Check disk space" starts one.
+  const disk = useDiskReport(props.host.id, tab === "workspaces");
   const refreshAll = () => { check.mutate(); void queryClient.invalidateQueries({ queryKey: ["daemon-link", props.host.id] }); if (tab === "workspaces") disk.scan.mutate(); };
-  // The first visit to Workspaces checks once by itself (it's what the person came to see); after that, only Refresh does.
-  const neverChecked = disk.report?.scan.state === "never";
-  useEffect(() => { if (tab === "workspaces" && neverChecked && !disk.scan.isPending) disk.scan.mutate(); }, [tab, neverChecked]);
   const toHelp = (next: TabId, nextFold?: Fold) => go(next, nextFold ?? null, nextFold === "private");
   const privateRoute = (port: number) => { setSshRemotePort(port); go("workspaces", "ssh"); };
   const ready = local.data?.scope?.status === "ready" && !local.isError;

@@ -16,17 +16,46 @@ import { dirname, relative } from "node:path";
 export interface GitResult { code: number | null; stdout: string; stderr: string }
 export type GitRun = (cwd: string, args: readonly string[], input: string | undefined, timeoutMs: number) => Promise<GitResult>;
 
+/**
+ * Git with nothing that runs code or writes (review fix). `GIT_OPTIONAL_LOCKS=0`
+ * alone doesn't stop a configured fsmonitor hook, which `ls-files` would run.
+ * Command-line `-c` beats every config file (system, global, the repository's
+ * own .git/config), so these pin the keys that could run a program or write:
+ * no fsmonitor, no untracked cache (it writes the index), no hooks, no
+ * network. The system config is skipped; the user's global config stays
+ * readable so `check-ignore` honours their own excludes file, and nothing in
+ * it can run code past these pins. Inherited GIT_* variables (GIT_DIR,
+ * GIT_CONFIG_PARAMETERS…) are dropped so the environment can't add config.
+ */
+export const SAFE_GIT_CONFIG: readonly string[] = [
+  "-c", "core.fsmonitor=false",
+  "-c", "core.untrackedCache=false",
+  "-c", "core.hooksPath=/dev/null",
+  "-c", "protocol.allow=never",
+];
+
+export function safeGitArgs(cwd: string, args: readonly string[]): string[] {
+  return [...SAFE_GIT_CONFIG, "-C", cwd, ...args];
+}
+
+export function safeGitEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(base)) if (!key.startsWith("GIT_")) env[key] = value;
+  return { ...env, GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_CONFIG_NOSYSTEM: "1", LC_ALL: "C" };
+}
+
 export const runGit: GitRun = (cwd, args, input, timeoutMs) => new Promise((resolve) => {
-  const child = execFile("git", ["-C", cwd, ...args], { timeout: Math.max(1, timeoutMs), killSignal: "SIGKILL", maxBuffer: 16 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" } }, (error, stdout, stderr) => {
+  const child = execFile("git", safeGitArgs(cwd, args), { timeout: Math.max(1, timeoutMs), killSignal: "SIGKILL", maxBuffer: 16 * 1024 * 1024, env: safeGitEnv() }, (error, stdout, stderr) => {
     const failure = error as (NodeJS.ErrnoException & { code?: number | string }) | null;
     resolve({ code: failure ? (typeof failure.code === "number" ? failure.code : null) : 0, stdout: String(stdout ?? ""), stderr: String(stderr ?? "") });
   });
+  child.stdin?.on("error", () => undefined);
   if (input !== undefined) child.stdin?.end(input); else child.stdin?.end();
 });
 
 /** git through a ChildGroup: its own process group, lowest priority, killed on unload. */
 export function groupGit(group: { run(file: string, args: readonly string[], options: { timeoutMs: number; input?: string; env?: NodeJS.ProcessEnv }): Promise<{ code: number | null; stdout: string; stderr: string }> }): GitRun {
-  return (cwd, args, input, timeoutMs) => group.run("git", ["-C", cwd, ...args], { timeoutMs: Math.max(1, timeoutMs), input, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" } });
+  return (cwd, args, input, timeoutMs) => group.run("git", safeGitArgs(cwd, args), { timeoutMs: Math.max(1, timeoutMs), input, env: safeGitEnv() });
 }
 
 /** Each answer is true/false, or null when git couldn't give one. */
