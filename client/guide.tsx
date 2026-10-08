@@ -221,6 +221,16 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
       action: { label: "Open Workspaces", tab: "workspaces" },
     },
     {
+      icon: "MapPin", question: "Where else does Hosts show disk space?",
+      answer: [
+        "A workspace's Hosts tab: when 500 MB or more of it looks safe to clear, or the disk is 85% full, it shows the workspace's size and Ask an agent to clean this up. Otherwise it's one quiet line at the bottom.",
+        "The sidebar dot turns yellow at 85% full and red at 95%; press it, then Free up space. At 95% a chip also appears under every chat's message box, since agents start failing to write files.",
+        `In the Command Center: Check disk space and Clean up disk space.${shortcuts ? " In a chat's message box: /disk checks now, /disk clean asks an agent." : ""} In the attach menu, Hosts → Disk report gives an agent the whole picture. Asking an agent about a heavy process mentions the disk when it's low.`,
+        "These read the last check. Only Refresh on Workspaces, Check disk space and /disk start a new one.",
+      ],
+      action: { label: "Open Workspaces", tab: "workspaces" },
+    },
+    {
       icon: "ShieldBan", question: "What does the agent check before it deletes anything?",
       answer: [
         "The message asks it to check each item itself first: that git tracks nothing inside and there's no uncommitted or unpushed work; that no program has it open or is running in it (no dev server, build, test or install); and that it holds nothing that must stay.",
@@ -279,7 +289,7 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
     {
       icon: "MessageSquareWarning", question: "What's the small chip under my message box?",
       answer: [
-        "It appears only when that chat's workspace needs you: its dev server stopped, a browser link or forward failed, or one of its jobs is slowing the host down. Press it to see the details. A calm chat shows nothing.",
+        "It appears only when that chat's workspace needs you: its dev server stopped, a browser link or forward failed, or one of its jobs is slowing the host down. Also when the disk is 95% full, in every chat. Press it to see the details. A calm chat shows nothing.",
         "Turn it off under Settings → Hosts.",
       ],
     },
@@ -287,7 +297,7 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
       icon: "Zap", question: "Is there a quicker way to check?",
       answer: [
         "The dot beside Hosts in the sidebar is green when all is calm. Press it for a quick check without opening this page.",
-        `In the Command Center: Open Hosts, Show heavy processes, and Check host now.${shortcuts ? " In a chat's message box: /hosts opens this workspace's Hosts tab, /heavy-processes shows the heaviest jobs, and /check-host checks now." : ""}`,
+        `In the Command Center: Open Hosts, Show heavy processes, Check host now, and Check disk space.${shortcuts ? " In a chat's message box: /hosts opens this workspace's Hosts tab, /heavy-processes shows the heaviest jobs, /check-host checks now, and /disk checks disk space." : ""}`,
       ],
     },
     {

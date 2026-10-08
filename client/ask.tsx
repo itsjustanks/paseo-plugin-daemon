@@ -3,7 +3,7 @@ import type { PluginTheme } from "@getpaseo/plugin";
 import { usePaseo, useRpc } from "@getpaseo/plugin/client";
 import { Modal, useToast } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import React, { createContext, useContext, useMemo, useState } from "react";
+import React, { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from "react-native";
 import { askContext, terminalOpen, type AskSubject } from "../shared/ask";
 import { Button, HostIcon, ItemTitle, Meta, Note, RADIUS, Row, SPACE, TYPE, tint } from "./kit";
@@ -149,9 +149,11 @@ function AskSheet({ theme, paseo, subject, open, onClose }: { theme: Theme; pase
 }
 
 /** "Ask an agent", where something has gone wrong. Nothing at all on an app that can't reach agents. */
-export function AskAgentButton({ theme, subject, label = "Ask an agent", primary }: { theme: Theme; subject: AskSubject; label?: string; primary?: boolean }) {
+export function AskAgentButton({ theme, subject, label = "Ask an agent", primary, openNow, onOpened }: { theme: Theme; subject: AskSubject; label?: string; primary?: boolean; openNow?: boolean; onOpened?(): void }) {
   const paseo = useOptionalPaseo();
   const [open, setOpen] = useState(false);
+  // A link asked for the sheet ("Clean up disk space"): open it once, and say so, so it doesn't open again.
+  useEffect(() => { if (openNow && canAsk(paseo)) { setOpen(true); onOpened?.(); } }, [openNow]);
   if (!canAsk(paseo)) return null;
   return (
     <>

@@ -6,6 +6,7 @@ import { AskContextSchema, OUTPUT_LINES, composeAskMessage, suggestedStep, tailL
 import { HostsAttachmentItemSchema, matchesQuery } from "../shared/attachments";
 import { askSubjectFor, type HealthIssue, type HealthVerdict } from "../shared/health";
 import type { ProcessReport, ProcessRow } from "../shared/processes";
+import type { DiskReport } from "../shared/disk";
 import { SYNTHETIC_ANTHROPIC_KEY, SYNTHETIC_GITHUB_TOKEN, SYNTHETIC_JWT, SYNTHETIC_PASSWORD } from "./synthetic-secrets";
 
 const HOME = "/home/alice";
@@ -210,5 +211,34 @@ describe("server ask: attachments and terminals", () => {
     expect(await ask.openTerminal(77, paseo)).toMatchObject({ ok: false, message: expect.stringMatching(/isn't inside a Paseo workspace/) });
     expect(await ask.openTerminal(5, paseo)).toMatchObject({ ok: false, message: expect.stringMatching(/already exited/) });
     expect(await ask.openTerminal(4402, fakePaseo([], { canCreate: false }).paseo)).toMatchObject({ ok: false, message: expect.stringMatching(/can't open terminals/) });
+  });
+});
+
+describe("server ask: disk (0.14.0)", () => {
+  const space = { label: "This computer's disk", totalBytes: 100 * GB, usedBytes: 91 * GB, freeBytes: 9 * GB, percent: 91, level: "warning" as const, sentence: "The disk is 91% full (9 GB left)." };
+  it("a heavy process's ask mentions the disk when it's 85% full or more, and not otherwise", async () => {
+    const { paseo } = fakePaseo([]);
+    const low = await createAsk(deps([row()], verdict({ disk: space }))).context({ kind: "process", pid: 4402 }, paseo);
+    expect(low.text).toContain("5 of 4 heavy jobs, disk 91% full (9 GB free)");
+    const fine = await createAsk(deps([row()], verdict({ disk: { ...space, percent: 60, freeBytes: 40 * GB, level: "ok", sentence: null } }))).context({ kind: "process", pid: 4402 }, paseo);
+    expect(fine.text).not.toContain("disk");
+  });
+  it("offers a Disk report attachment from the last check, redacted, and none without one", async () => {
+    const { paseo } = fakePaseo([]);
+    const report: DiskReport = {
+      disks: [space], scan: { state: "done", startedAt: 0, finishedAt: 0, done: 1, total: 1, partial: false, message: null },
+      workspaces: [{ id: "ws:/home/alice/app", names: ["main"], project: "Website", folder: "~/app", worktree: false, branch: null, state: "idle", activeAt: null, devServers: [], totalBytes: 3 * GB, clearableBytes: 1 * GB, partial: false, busy: null, skipped: false, measured: true, workspaceIds: ["ws-app"],
+        items: [{ safe: true, name: "node_modules", what: "Installed packages", cost: "Comes back.", where: "node_modules", bytes: 1 * GB, sharedBytes: 0, partial: false, blocked: null }] }],
+      caches: [{ id: "tmp", title: "Temporary files", totalBytes: 1 * GB, items: [{ safe: false, name: "build-x", what: "A leftover folder", cost: "None.", where: `/tmp/build-x --token ${SYNTHETIC_PASSWORD}`, bytes: 1 * GB, sharedBytes: 0, partial: false, blocked: null }] }],
+      clearableBytes: 1 * GB, warnings: [],
+    };
+    const ask = createAsk({ ...deps([row()]), diskReport: async () => report });
+    const item = (await ask.attachments("disk", paseo)).items.find((entry) => entry.id === "disk");
+    expect(item).toBeDefined();
+    HostsAttachmentItemSchema.parse(item);
+    expect(item!.subtitle).toBe("9 GB free (91% used) · 1 GB looks safe to clear");
+    expect(item!.text).toContain("- main (~/app): 3 GB, 1 GB looks safe to clear");
+    expect(item!.text).not.toContain(SYNTHETIC_PASSWORD);
+    expect((await createAsk(deps([row()])).attachments("", paseo)).items.map((entry) => entry.id)).not.toContain("disk");
   });
 });

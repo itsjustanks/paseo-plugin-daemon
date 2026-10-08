@@ -47,8 +47,30 @@ later version (kept on a branch, not shipped).
   110 slow `project.list` requests an hour from Hosts polling. User actions (Refresh, stop, share or
   receive a project, start a disk check) still read it fresh, and Workspaces adds no polling of its
   own: it reads the same cache.
-- **Help:** "My disk is filling up. What can I clear?" and "What does the agent check before it
-  deletes anything?". Old `tab=servers` links land on Workspaces. No settings change.
+- **Disk in the places Hosts already uses** (no new tab, no new polling, and nothing here starts a
+  check; only Refresh on Workspaces, "Check disk space" and `/disk` do):
+  - **A workspace's Hosts tab** speaks up when 500 MB or more of that workspace looks safe to clear,
+    or the disk is 85% full: its size, what looks safe to clear, how full the disk is, and "Ask an
+    agent to clean this up" for that workspace. Otherwise it's one quiet line at the bottom. It reads
+    the last check, never starts one.
+  - **The sidebar dot** already warned at 85% and turned red at 95%; its popover now adds "Free up
+    space", which opens Workspaces.
+  - **The chip under the message box** appears for the disk only when it's 95% full or more
+    ("Disk nearly full"), since agents start failing to write files then. Same button as the other
+    chips; it opens the workspace's Hosts tab.
+  - **Command Center:** "Check disk space" (starts a fresh check and opens Workspaces) and "Clean up
+    disk space" (opens Workspaces with the ask for every idle workspace's safe-to-clear items, or for
+    the shared caches when nothing in an idle workspace looks safe).
+  - **`/disk`** in a chat's message box does what "Check disk space" does; `/disk clean` opens the
+    ask. It's separate from `/check-host`, which stays a quick health check of this workspace and
+    never starts the heavier folder check.
+  - **"Disk report"** in the message box's Hosts attachments: free space, workspaces by size with
+    what looks safe to clear, and the shared caches and temporary files, from the last check.
+  - **"Ask an agent" about a heavy process** mentions the disk when it's 85% full or more ("disk 91%
+    full (8 GB free)"), from the same host line.
+- **Help:** "My disk is filling up. What can I clear?", "What does the agent check before it
+  deletes anything?" and "Where else does Hosts show disk space?". Old `tab=servers` links land on
+  Workspaces. No settings change.
 - **Tests:** a temp home with a git workspace, a real git worktree no workspace claims, caches,
   ~/.claude, ~/.codex, Paseo's data and /tmp folders, through the real scanner and walker: what looks
   safe (git's three answers, no repository, git timeouts, untracked work, bare repositories, symlinked

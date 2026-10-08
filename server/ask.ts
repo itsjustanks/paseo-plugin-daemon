@@ -4,6 +4,7 @@ import { isAbsolute, join } from "node:path";
 import { attachmentUrl, matchesQuery, type HostsAttachmentItem } from "../shared/attachments";
 import { OUTPUT_LINES, bytesWords, composeAskMessage, durationWords, tailLines, type AskContext, type AskFacts, type AskProcessFacts, type AskSubject } from "../shared/ask";
 import type { HealthVerdict } from "../shared/health";
+import { DISK_WARNING_PERCENT, diskReportText, formatSize, type DiskReport, type DiskSpace } from "../shared/disk";
 import type { ProcessReport, ProcessRow, ReportInput } from "../shared/processes";
 import type { WatchResult } from "../shared/watch";
 import { homeRelative, redactText } from "./redaction";
@@ -26,6 +27,8 @@ export interface AskDeps {
   folder?(id: string): Promise<AskContext | null>;
   /** 0.14.0: "Ask an agent to clean this up": a workspace's folder id, "idle" or "caches". */
   cleanup?(id: string): Promise<AskContext | null>;
+  /** 0.14.0: the last disk check (never starts one), for the "Disk report" attachment. */
+  diskReport?(): Promise<DiskReport | null>;
   home?: string;
   now?: () => number;
 }
@@ -121,12 +124,14 @@ export function createAsk(deps: AskDeps) {
     return row ? { row, report } : null;
   }
 
-  function hostLine(report: ProcessReport | null): string | null {
+  /** Memory, CPU and heavy jobs; and (0.14.0) free disk when it's low, since a stuck build may be what's filling it. */
+  function hostLine(report: ProcessReport | null, disk?: DiskSpace | null): string | null {
     if (!report?.supported) return null;
     const used = report.container?.memoryLimitBytes ? report.container.memoryUsedBytes : report.host.memoryUsedBytes;
     const parts = [`memory ${bytesWords(used)} of ${bytesWords(report.memoryBasisBytes)}${report.memoryBasis === "container" ? " (container limit)" : ""}`];
     if (report.host.cpuPercent !== null) parts.push(`CPU ${Math.round(report.host.cpuPercent)}%`);
     parts.push(`${report.heavyJobs.count} of ${report.heavyJobs.limit} heavy jobs`);
+    if (disk && disk.percent >= DISK_WARNING_PERCENT) parts.push(`disk ${Math.round(disk.percent)}% full (${formatSize(disk.freeBytes)} free)`);
     return parts.join(", ");
   }
 
@@ -175,7 +180,7 @@ export function createAsk(deps: AskDeps) {
       const output = await outputFor(paseo, workspace, { port: subject.port, directory, name }).catch(() => null);
       const report = await deps.report({ limit: 1, sort: "cpu", filter: "all", query: "", offset: 0 }).catch(() => null);
       const facts: AskFacts = {
-        code: "port-gone", problem: issue?.message ?? `${name} on port ${subject.port} stopped serving.`, hostLine: hostLine(report),
+        code: "port-gone", problem: issue?.message ?? `${name} on port ${subject.port} stopped serving.`, hostLine: hostLine(report, verdict.disk),
         devServer: { name, port: subject.port, cwd, stoppedMinutesAgo: lost ? Math.floor((now() - lost.lostAt) / 60_000) : null },
         output, where: where(workspace),
       };
@@ -193,24 +198,25 @@ export function createAsk(deps: AskDeps) {
     const serves = row.ports.length > 0 || row.job?.kind === "dev-server";
     const output = serves ? await outputFor(paseo, workspace, { port: row.ports[0] ?? null, directory, name: row.name }).catch(() => null) : null;
     const problem = flag?.text ? `${row.name} (PID ${row.pid}): ${flag.text.charAt(0).toLowerCase()}${flag.text.slice(1)}.`.replace(/\.\.$/, ".") : driver?.message ?? `${row.name} (PID ${row.pid}) is using ${row.cpuPercent === null ? "an unknown share of" : `${Math.round(row.cpuPercent)}% of a`} CPU core and ${bytesWords(row.rssBytes)} of memory.`;
-    const facts: AskFacts = { code, problem, hostLine: hostLine(report), process: processFacts(row, report), output, where: where(workspace) ?? (row.owner.project ? row.owner.label : null) };
+    const facts: AskFacts = { code, problem, hostLine: hostLine(report, verdict?.disk), process: processFacts(row, report), output, where: where(workspace) ?? (row.owner.project ? row.owner.label : null) };
     const title = code === "cpu-runaway" ? `${row.name} is stuck at full CPU` : code === "memory-heavy" ? `${row.name} holds a lot of memory` : code === "pressure-driver" ? `${row.name} is loading the host` : `${row.name} (PID ${row.pid})`;
     return { title, text: composeAskMessage(facts), workspaceId: workspace?.id ?? null, workspaceName: workspace?.name ?? null, outputFrom: output?.from ?? null };
   }
 
   /** The Hosts attach menu: heavy processes, what needs attention, dev servers' output and watched services. */
   async function attachments(query: string, paseo: PaseoApi): Promise<{ items: HostsAttachmentItem[] }> {
-    const [report, verdict] = await Promise.all([
+    const [report, verdict, disk] = await Promise.all([
       deps.report({ limit: 10, sort: "cpu", filter: "all", query: "", offset: 0 }).catch(() => null),
       deps.verdict().catch(() => null),
+      deps.diskReport ? deps.diskReport().catch(() => null) : Promise.resolve(null),
     ]);
     type Draft = Omit<HostsAttachmentItem, "text"> & { text: () => Promise<string> };
     const drafts: Draft[] = [];
     if (report?.supported) {
       drafts.push({
-        id: "processes", identifier: "processes", title: "Heavy processes now", subtitle: hostLine(report) ?? undefined, url: attachmentUrl("processes"), resourceType: "processes",
+        id: "processes", identifier: "processes", title: "Heavy processes now", subtitle: hostLine(report, verdict?.disk) ?? undefined, url: attachmentUrl("processes"), resourceType: "processes",
         text: async () => [
-          `Heavy processes on this host, most CPU first. Host: ${hostLine(report)}.`,
+          `Heavy processes on this host, most CPU first. Host: ${hostLine(report, verdict?.disk)}.`,
           ...report.processes.map((row) => `- ${row.name} (PID ${row.pid}) · ${row.owner.label} · CPU ${row.cpuPercent === null ? "?" : `${Math.round(row.cpuPercent)}%`} · ${bytesWords(row.rssBytes)} · running ${durationWords(row.ageSeconds)}${row.flags.length ? ` · ${row.flags.map((flag) => flag.text).join("; ")}` : ""}\n  ${redactText([row.command], home)[0]}`),
         ].join("\n"),
       });
@@ -220,6 +226,15 @@ export function createAsk(deps: AskDeps) {
       drafts.push({
         id: "attention", identifier: "attention", title: "What needs attention", subtitle: `${issues.length} issue${issues.length === 1 ? "" : "s"}`, url: attachmentUrl("attention"), resourceType: "issues",
         text: async () => ["What Hosts flags on this machine right now:", ...issues.map((issue) => `- ${issue.message}`)].join("\n"),
+      });
+    }
+    // 0.14.0: the disk report, from the last check: workspaces by size, what looks safe to clear, caches and /tmp.
+    if (disk) {
+      const space = disk.disks[0];
+      drafts.push({
+        id: "disk", identifier: "disk", title: "Disk report", url: attachmentUrl("disk"), resourceType: "disk-report",
+        subtitle: [space ? `${formatSize(space.freeBytes)} free (${Math.round(space.percent)}% used)` : null, disk.scan.state === "never" ? "workspaces not checked yet" : `${formatSize(disk.clearableBytes)} looks safe to clear`].filter(Boolean).join(" · "),
+        text: async () => redactText(diskReportText(disk, now()).split("\n"), home).join("\n"),
       });
     }
     const workspaces = new Map<string, Promise<Workspace | null>>();

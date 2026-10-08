@@ -59,7 +59,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(processStop, ({ tokens }, context) => runtime.withContext(context, () => runtime.processes.stop(tokens)));
   server.handle(processLog, async ({ limit }) => ({ entries: await runtime.log.recent(limit) }));
   // 0.12.0: "Ask an agent", the Hosts attach menu and "Open a terminal here". Each reads through the handler's own Paseo session.
-  const ask = createAsk({ report: (input) => runtime.processes.report(input), verdict: () => health.read(), lost: (port) => health.lost(port), folder: (id) => runtime.disk.folderAsk(id), cleanup: (id) => runtime.disk.cleanupAsk(id) });
+  const ask = createAsk({ report: (input) => runtime.processes.report(input), verdict: () => health.read(), lost: (port) => health.lost(port), folder: (id) => runtime.disk.folderAsk(id), cleanup: (id) => runtime.disk.cleanupAsk(id), diskReport: () => runtime.disk.report(false) });
   server.handle(askContext, ({ subject }, context) => runtime.withContext(context, async () => { await health.read(context); return ask.context(subject, context.paseo); }));
   server.handle(hostsAttachmentSearch, ({ query }, context) => runtime.withContext(context, async () => { await health.read(context); return ask.attachments(query, context.paseo); }));
   server.handle(terminalOpen, ({ pid }, context) => runtime.withContext(context, () => ask.openTerminal(pid, context.paseo)));

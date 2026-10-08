@@ -21,10 +21,10 @@ export const TAB_IDS = ["overview", "processes", "workspaces", "help"] as const;
 export type TabId = (typeof TAB_IDS)[number];
 
 /** The fold-outs that an old tab id or a button can open: on Dev servers, and (0.12.1) Project Sync on Overview. */
-export const FOLD_IDS = ["private", "ssh", "links", "sync", "caches"] as const;
+export const FOLD_IDS = ["private", "ssh", "links", "sync", "caches", "cleanup"] as const;
 export type Fold = (typeof FOLD_IDS)[number];
 /** The tab each fold-out lives on. */
-export const FOLD_TAB: Record<Fold, TabId> = { private: "workspaces", ssh: "workspaces", links: "workspaces", sync: "overview", caches: "workspaces" };
+export const FOLD_TAB: Record<Fold, TabId> = { private: "workspaces", ssh: "workspaces", links: "workspaces", sync: "overview", caches: "workspaces", cleanup: "workspaces" };
 
 export type TabTarget = { tab: TabId; fold: Fold | null };
 
@@ -46,6 +46,7 @@ const LEGACY: Record<string, TabTarget> = {
   servers: { tab: "workspaces", fold: null },
   disk: { tab: "workspaces", fold: null },
   storage: { tab: "workspaces", fold: null },
+  cleanup: { tab: "workspaces", fold: "cleanup" },
   guide: { tab: "help", fold: null },
 };
 

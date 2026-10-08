@@ -388,7 +388,7 @@ export class DiskScanner {
         state, activeAt, devServers, totalBytes: folder.result?.totalBytes ?? 0,
         clearableBytes: items.filter((item) => item.safe).reduce((sum, item) => sum + item.bytes - item.sharedBytes, 0),
         partial: !!folder.result?.partial, busy, items, skipped: !!data && !this.running && (!folder.result || !!folder.result.skipped),
-        measured: !!folder.result && !folder.result.skipped,
+        measured: !!folder.result && !folder.result.skipped, workspaceIds: owners.map((owner) => owner.id),
       });
     }
     workspaces.sort((a, b) => b.totalBytes - a.totalBytes || a.folder.localeCompare(b.folder));

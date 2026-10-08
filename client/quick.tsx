@@ -62,6 +62,8 @@ export function makeQuickHealth(screenId: string): ComponentType<PopoverProps> {
     const { verdict, refresh, checking } = useVerdict();
     const state = quickState(verdict);
     const load = verdict?.load;
+    // 0.14.0: a disk 85% full or more is one of the dot's states, and this links to where the space goes.
+    const diskIssue = (verdict?.issues ?? []).some((issue) => issue.code === "disk-full");
     // 0.13.0: a stuck plugin and an automatic stop come first; they are the ones that take a daemon down or explain why something vanished.
     const rank = (code: string) => (code === "plugin-stuck" ? 0 : code === "auto-stopped" ? 1 : code === "memory-pressure" || code === "runaway" || code === "disk-full" ? 2 : 3);
     const issues = (verdict?.issues ?? []).filter((issue) => issue.code !== "service-slow" && issue.code !== "service-down" && issue.code !== "projects-unavailable")
@@ -92,6 +94,7 @@ export function makeQuickHealth(screenId: string): ComponentType<PopoverProps> {
           </View>
         ))}
         <Button theme={theme} label="Open Hosts" icon="Network" primary onPress={() => { openScreen({ screenId }); close(); }} />
+        {diskIssue ? <Button theme={theme} label="Free up space" icon="HardDrive" onPress={() => { openScreen({ screenId, params: { tab: "workspaces" } }); close(); }} /> : null}
         <Button theme={theme} label="See heavy processes" icon="Cpu" onPress={() => { openScreen({ screenId, params: { tab: "processes" } }); close(); }} />
         <Button theme={theme} label="Check again" icon="RefreshCw" busy={checking} onPress={() => void refresh()} />
         {verdict ? <Meta theme={theme}>{`Checked ${new Date(verdict.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}</Meta> : null}

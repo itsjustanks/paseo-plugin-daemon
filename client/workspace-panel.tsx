@@ -4,6 +4,7 @@ import React, { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, ScrollView, Text, View } from "react-native";
 import { askSubjectFor, hostHealth, workspaceHealth, type HealthIssue } from "../shared/health";
 import type { WatchResult } from "../shared/watch";
+import { diskReport, workspaceDiskView, type WorkspaceDiskView } from "../shared/disk";
 import type { PluginTheme } from "@getpaseo/plugin";
 import * as link from "../shared/link";
 import { HOSTS_SETTINGS_DEFAULTS, hostsSettings } from "../shared/settings";
@@ -18,6 +19,7 @@ import { useOpenService } from "./open-service";
 import { PROCESS_LIMIT, processKey, useMonitorRpc, type Process, type Snapshot } from "./rpc";
 import { ForceStopModal, ProcessRow, ServiceCard, errorText, usePendingStops, useProcessActions } from "./surface";
 import { TunnelCard } from "./tunnel-row";
+import { AGENT_PROMISE, diskKey } from "./workspaces";
 import { Button, Card, Facts, Grid, Meter, Notice, TokensProvider, formatBytes, formatPercent, useTokens, useUi } from "./ui";
 
 const QUERY_KEY = ["monitor", "workspace-snapshot"] as const;
@@ -119,6 +121,25 @@ function IssueRow({ theme, issue, watched }: { theme: PluginTheme; issue: Health
   );
 }
 
+/** Disk, when it needs attention here: this workspace's size and what looks safe to clear, the disk's state, and the ask. */
+function DiskSection({ theme, view }: { theme: PluginTheme; view: WorkspaceDiskView }) {
+  const t = useTokens();
+  const critical = view.disk?.level === "critical";
+  return (
+    <View style={{ gap: SPACE.row }}>
+      <SectionTitle theme={theme} icon="HardDrive">Disk space</SectionTitle>
+      <Notice icon="HardDrive" tone={critical ? "danger" : view.disk?.level === "warning" ? "warning" : "neutral"}>{view.line}</Notice>
+      {view.usage?.busy ? <Text style={t.text.caption}>{view.usage.busy}</Text> : null}
+      {view.askId ? (
+        <View style={{ gap: SPACE.xs }}>
+          <View style={{ flexDirection: "row" }}><AskAgentButton theme={theme} subject={{ kind: "cleanup", id: view.askId }} label="Ask an agent to clean this up" primary={critical} /></View>
+          <Meta theme={theme}>{AGENT_PROMISE}</Meta>
+        </View>
+      ) : view.usage?.busy ? null : <Text style={t.text.caption}>{view.usage ? "Nothing here looks safe to clear right now. Hosts → Workspaces shows every workspace and the shared caches." : "Hosts → Workspaces shows what each workspace uses; press Refresh there to check."}</Text>}
+    </View>
+  );
+}
+
 function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, settingsLoading }: { theme: PluginTheme; hostId: string; workspaceId: string; intervalSeconds: number; minutes: TunnelMinutes; settingsLoading: boolean }) {
   const t = useTokens();
   const queryClient = useQueryClient();
@@ -146,6 +167,12 @@ function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, s
   const readHealth = useRpc(hostHealth);
   const healthQuery = useQuery({ queryKey: ["daemon-link", hostId, "health"], queryFn: () => readHealth({}), refetchInterval: intervalSeconds * 1000, retry: 1, enabled: workspace !== null });
   const health = useMemo(() => (healthQuery.data && workspace ? workspaceHealth(healthQuery.data, workspace) : null), [healthQuery.data, workspace]);
+  // 0.14.0: disk, from the last check only. The panel never starts one (Refresh on Workspaces, or "Check disk space", does).
+  const readDisk = useRpc(diskReport);
+  const diskQuery = useQuery({ queryKey: diskKey(hostId), queryFn: () => readDisk({}), staleTime: 60_000, retry: 1, enabled: workspace !== null });
+  const diskView = useMemo(() => (diskQuery.data || healthQuery.data?.disk ? workspaceDiskView(diskQuery.data, workspaceId, healthQuery.data?.disk) : null), [diskQuery.data, healthQuery.data, workspaceId]);
+  // When the disk section shows, it carries the "disk nearly full" warning too, so it isn't said twice.
+  const issues = useMemo(() => (health?.issues ?? []).filter((issue) => !(diskView?.mode === "attention" && issue.code === "disk-full")), [health, diskView]);
 
   const host = snapshotQuery.data;
   const snapshot = useMemo<Snapshot | undefined>(() => {
@@ -232,12 +259,13 @@ function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, s
             )}
           </View>
         ) : null}
-        {health && health.issues.length ? (
+        {issues.length ? (
           <View style={{ gap: SPACE.row }}>
             <SectionTitle theme={theme} icon="TriangleAlert">What needs attention</SectionTitle>
-            {health.issues.map((issue, index) => <IssueRow key={`${issue.code}-${issue.ports.join("-")}-${index}`} theme={theme} issue={issue} watched={healthQuery.data?.watched ?? []} />)}
+            {issues.map((issue, index) => <IssueRow key={`${issue.code}-${issue.ports.join("-")}-${index}`} theme={theme} issue={issue} watched={healthQuery.data?.watched ?? []} />)}
           </View>
         ) : null}
+        {diskView?.mode === "attention" ? <DiskSection theme={theme} view={diskView} /> : null}
         {snapshot && rollup ? (
           <Accordion theme={theme}>
             <AccordionItem theme={theme} compact={t.compact} icon="Gauge" title="What this workspace uses" summary={rollup.processCount ? `${cpuWords} · ${memoryWords} memory · ${rollup.processCount} process${rollup.processCount === 1 ? "" : "es"}` : "Nothing running"}>
@@ -274,6 +302,7 @@ function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, s
             </AccordionItem>
           </Accordion>
         ) : null}
+        {diskView?.mode === "quiet" ? <Meta theme={theme}>{diskView.line}</Meta> : null}
       </View>
       <ForceStopModal target={liveForceTarget} busy={forceMutation.isPending} onCancel={() => setForceTarget(null)} onConfirm={(process) => forceMutation.mutate(process)} />
     </ScrollView>

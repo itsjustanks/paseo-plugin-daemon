@@ -44,7 +44,9 @@ an isolated preview: no real accounts, host addresses, project names, credential
   full), every Paseo workspace by size with its status and what looks safe to clear, and shared
   caches and temporary files by size. Hosts deletes nothing: "Ask an agent to clean this up" hands an
   agent the exact list and the checks to do (nothing in use, nothing unsaved, never .git, .env files,
-  agents' history or Paseo's data) before it deletes anything.
+  agents' history or Paseo's data) before it deletes anything. A workspace's own Hosts tab speaks up
+  when 500 MB or more of it looks safe to clear (or the disk is 85% full), the chip under the message
+  box appears at 95% full, and the Hosts attachments include a Disk report.
 - **Stuck plugins, restarted in one press.** When a Paseo plugin stops answering ("Activity isn't
   answering (12 timeouts in 10 min)"), Paseo can't add, update or reload plugins. Restart reloads just
   that plugin; if Paseo is stuck on it, Hosts stops only that plugin's own process and reloads it. The
@@ -243,8 +245,9 @@ attach menu (heavy processes, what needs attention, a dev server's output, a wat
 each dev server's card can **Open a terminal here** in its folder.
 
 The common actions are also commands. In the Command Center: **Open Hosts**, **Show heavy
-processes**, **Check host now** and **Configure Hosts**. In a chat's message box (when the app
-supports slash commands): `/hosts`, `/heavy-processes` and `/check-host`. There is no sidebar
+processes**, **Check host now**, **Check disk space**, **Clean up disk space** and **Configure
+Hosts**. In a chat's message box (when the app supports slash commands): `/hosts`,
+`/heavy-processes`, `/check-host` and `/disk` (`/disk clean` asks an agent to clean up). There is no sidebar
 footer item: the sidebar row's dot already says the same thing on every app that has one.
 
 ### Settings: Hosts

@@ -308,13 +308,15 @@ export function pillText(health: WorkspaceHealth): string | null {
  * stopped, a link to it failed, or a job in it is driving the host's load.
  * Host-wide trouble (memory, CPU, a watched service, an unreachable host)
  * belongs to the sidebar row's dot, so it never puts a chip in every chat.
+ * One exception (0.14.0): a disk 95% full or more. Agents start failing to
+ * write files then, in every chat, so every chat gets the chip.
  */
 export const CHIP_CODES: ReadonlySet<HealthIssueCode> = new Set<HealthIssueCode>(["port-gone", "tunnel-failed", "link-retrying", "link-down", "pressure-driver", "runaway"]);
 
 /** The issues that earn this workspace a chip, most urgent first. */
 export function chipIssues(health: WorkspaceHealth): HealthIssue[] {
   return health.issues
-    .filter((issue) => issue.scope === "process" && CHIP_CODES.has(issue.code))
+    .filter((issue) => (issue.scope === "process" && CHIP_CODES.has(issue.code)) || (issue.code === "disk-full" && issue.severity === "critical"))
     .sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "critical" ? -1 : 1));
 }
 
@@ -340,5 +342,6 @@ export function chipText(health: WorkspaceHealth): string | null {
   if (first.code === "tunnel-failed") return `Browser link${port} failed${more}`;
   if (first.code === "link-retrying" || first.code === "link-down") return `Forward${port} down${more}`;
   if (first.code === "runaway") return `Runaway: ${first.subject ?? "process"}${more}`;
+  if (first.code === "disk-full") return `Disk nearly full${more}`;
   return `Driving host load${more}`;
 }

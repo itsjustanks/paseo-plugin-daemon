@@ -222,6 +222,8 @@ export const WorkspaceUsageSchema = z.object({
   skipped: z.boolean(),
   /** Its size has been measured (false until a check reaches it: say "Checking…", not "0 bytes"). */
   measured: z.boolean().optional(),
+  /** The Paseo workspace ids that use this folder, so a workspace's own panel can find its row. */
+  workspaceIds: z.array(z.string()).optional(),
 });
 export type WorkspaceUsage = z.infer<typeof WorkspaceUsageSchema>;
 
@@ -268,4 +270,77 @@ export function ago(at: number, now = Date.now()): string {
   const hours = Math.round(minutes / 60);
   if (hours < 48) return `${hours} h ago`;
   return `${Math.round(hours / 24)} days ago`;
+}
+
+// ------------------------------------------- one workspace's panel
+
+/** A workspace's panel speaks up about disk only past one of these; otherwise it's one quiet line. */
+export const PANEL_CLEARABLE_BYTES = 500 * 1024 * 1024;
+export const PANEL_DISK_PERCENT = DISK_WARNING_PERCENT;
+
+export interface WorkspaceDiskView {
+  /** "attention": a section with the ask; "quiet": one line. */
+  mode: "attention" | "quiet";
+  usage: WorkspaceUsage | null;
+  disk: DiskSpace | null;
+  /** The quiet line, or the section's first sentence. */
+  line: string;
+  /** Ask an agent to clean up this workspace's folder (its id in the last check), when something in it looks safe to clear. */
+  askId: string | null;
+}
+
+/**
+ * What one workspace's panel says about disk, from the last check and the
+ * health verdict's disk (both cached; this never starts a check). It speaks
+ * up when 500 MB or more looks safe to clear here, or the disk is 85% full.
+ */
+export function workspaceDiskView(report: DiskReport | undefined | null, workspaceId: string, verdictDisk: DiskSpace | null | undefined): WorkspaceDiskView {
+  const usage = report?.workspaces.find((workspace) => workspace.workspaceIds?.includes(workspaceId)) ?? null;
+  const disk = verdictDisk ?? report?.disks[0] ?? null;
+  const measured = !!usage && usage.measured !== false;
+  const clearable = measured ? usage!.clearableBytes : 0;
+  const full = !!disk && disk.percent >= PANEL_DISK_PERCENT;
+  const mode = clearable >= PANEL_CLEARABLE_BYTES || full ? "attention" : "quiet";
+  const uses = measured ? `This workspace uses ${formatSize(usage!.totalBytes)}${usage!.partial ? " or more" : ""}` : report?.scan.state === "running" ? "Hosts is checking this workspace's size" : "This workspace's size hasn't been checked yet";
+  const space = disk ? `the disk is ${Math.round(disk.percent)}% full (${formatSize(disk.freeBytes)} left)` : null;
+  const safe = clearable > 0 ? `${formatSize(clearable)} of it looks safe to clear` : null;
+  const line = mode === "quiet"
+    ? `Disk: ${[measured ? `this workspace uses ${formatSize(usage!.totalBytes)}${usage!.partial ? " or more" : ""}` : "not checked yet", space ? space.replace(/ \(.*\)$/, "") : null].filter(Boolean).join(" · ")}`
+    : `${[uses, safe].filter(Boolean).join("; ")}.${space ? ` ${space[0]!.toUpperCase()}${space.slice(1)}.` : ""}`;
+  const askId = measured && clearable > 0 && !usage!.busy ? usage!.id : null;
+  return { mode, usage, disk, line, askId };
+}
+
+/**
+ * The "Disk report" attachment (0.14.0): workspaces by size, what looks safe
+ * to clear, and the caches and temporary files, from the last check. Plain
+ * text an agent can act on; home-relative folders only.
+ */
+export function diskReportText(report: DiskReport, now = Date.now()): string {
+  const disk = report.disks[0];
+  const lines = ["Disk report from Hosts (read-only: Hosts deleted nothing)."];
+  if (disk) lines.push(`Disk: ${formatSize(disk.freeBytes)} free of ${formatSize(disk.totalBytes)} (${Math.round(disk.percent)}% used).`);
+  if (report.scan.state === "never") lines.push("Workspaces haven't been checked yet; run \"Check disk space\" in Hosts for sizes.");
+  else lines.push(`Checked ${report.scan.finishedAt ? ago(report.scan.finishedAt, now) : "just now"}${report.scan.state === "running" ? " (a new check is running)" : ""}${report.scan.partial ? "; some sizes are floors" : ""}.`);
+  lines.push(`Looks safe to clear in all: ${formatSize(report.clearableBytes)}.`);
+  const workspaces = report.workspaces.filter((workspace) => workspace.measured !== false).slice(0, 15);
+  if (workspaces.length) {
+    lines.push("", "Workspaces by size:");
+    for (const workspace of workspaces) {
+      const name = workspace.names[0] ?? "not linked to a workspace";
+      const safe = workspace.clearableBytes > 0 ? `, ${formatSize(workspace.clearableBytes)} looks safe to clear` : "";
+      lines.push(`- ${name} (${workspace.folder}): ${formatSize(workspace.totalBytes)}${workspace.partial ? " or more" : ""}${safe}${workspace.busy ? ` (${workspace.busy.replace(/\.$/, "")})` : ""}`);
+      for (const item of workspace.items.filter((entry) => entry.safe).slice(0, 5)) lines.push(`  - ${item.where}: ${formatSize(Math.max(0, item.bytes - item.sharedBytes))} (${item.what})`);
+    }
+  }
+  const groups = report.caches.filter((group) => group.totalBytes > 0);
+  if (groups.length) {
+    lines.push("", "Shared caches and temporary files:");
+    for (const group of groups) {
+      lines.push(`- ${group.title}: ${formatSize(group.totalBytes)}`);
+      for (const item of [...group.items].sort((a, b) => b.bytes - a.bytes).slice(0, 5)) lines.push(`  - ${item.where}: ${formatSize(item.bytes)} (${item.what})`);
+    }
+  }
+  lines.push("", "Before deleting anything, check it isn't in use or holding unsaved work. Clear build files and caches, never source, .git or .env files.");
+  return lines.join("\n");
 }

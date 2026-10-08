@@ -29,7 +29,7 @@ export const diskKey = (hostId: string) => ["daemon-link", hostId, "disk"] as co
 const DISK_TONE: Record<DiskSpace["level"], Tone> = { ok: "success", warning: "warning", critical: "danger" };
 const STATE_ICON: Record<WorkspaceUsage["state"], string> = { working: "Bot", waiting: "MessageCircle", failed: "CircleAlert", idle: "Folder", unlinked: "FolderX" };
 /** The one sentence beside every clean-up button. */
-const AGENT_PROMISE = "An agent will check nothing's in use or unsaved, then clear it. You see the message before it's sent.";
+export const AGENT_PROMISE = "An agent will check nothing's in use or unsaved, then clear it. You see the message before it's sent.";
 
 const size = (bytes: number, partial = false) => `${partial ? "at least " : ""}${formatSize(bytes)}`;
 /** What clearing an item would free: bytes not shared with pnpm's store. */
@@ -58,8 +58,10 @@ export function cacheBytes(report: DiskReport | undefined): number {
 }
 
 /** Status first: the disk, what looks safe to clear, and the check's age. */
-export function DiskCard({ theme, report, loading, scanning, onScan, onCaches }: {
+export function DiskCard({ theme, report, loading, scanning, onScan, onCaches, askNow, onAsked }: {
   theme: Theme; report: DiskReport | undefined; loading: boolean; scanning: boolean; onScan(): void; onCaches(): void;
+  /** "Clean up disk space" (Command Center, `/disk clean`): open the ask sheet as soon as there's something to ask about. */
+  askNow?: boolean; onAsked?(): void;
 }) {
   const disk = report?.disks[0] ?? null;
   const scan = report?.scan;
@@ -96,7 +98,7 @@ export function DiskCard({ theme, report, loading, scanning, onScan, onCaches }:
             <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{idle.bytes > 0 ? `About ${formatSize(idle.bytes)} looks safe to clear in ${idle.workspaces} idle workspace${idle.workspaces === 1 ? "" : "s"}.` : "Nothing looks safe to clear in your idle workspaces right now."}</Text>
             {idle.bytes > 0 ? (
               <>
-                <Row><AskAgentButton theme={theme} subject={{ kind: "cleanup", id: "idle" }} label="Ask an agent to clean this up" primary /></Row>
+                <Row><AskAgentButton theme={theme} subject={{ kind: "cleanup", id: "idle" }} label="Ask an agent to clean this up" primary openNow={askNow} onOpened={onAsked} /></Row>
                 <Meta theme={theme}>{AGENT_PROMISE}</Meta>
               </>
             ) : null}
@@ -104,7 +106,11 @@ export function DiskCard({ theme, report, loading, scanning, onScan, onCaches }:
           {caches > 0 ? (
             <View style={{ gap: SPACE.sm }}>
               <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${formatSize(caches)} more in shared caches and temporary files.`}</Text>
-              <Row><Button theme={theme} label="Review caches" icon="Archive" onPress={onCaches} /></Row>
+              <Row>
+                <Button theme={theme} label="Review caches" icon="Archive" onPress={onCaches} />
+                {/* "Clean up disk space" with nothing safe in idle workspaces: the caches are the biggest thing left to ask about. */}
+                {askNow && idle.bytes === 0 ? <AskAgentButton theme={theme} subject={{ kind: "cleanup", id: "caches" }} label="Ask an agent to clean these up" openNow onOpened={onAsked} /> : null}
+              </Row>
             </View>
           ) : null}
           <Meta theme={theme}>{`Checked ${scan.finishedAt ? ago(scan.finishedAt) : "just now"}. Press Refresh at the top to check again.`}</Meta>

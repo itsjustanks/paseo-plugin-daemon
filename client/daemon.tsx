@@ -164,7 +164,7 @@ function DaemonBody(props: DaemonProps) {
       {tab === "processes" ? <ProcessesTab theme={theme} compact={layout.compact} hostId={props.host.id} say={setMessage} issues={verdict?.issues ?? []} onChanged={() => void health.refetch()} /> : null}
       {tab === "help" ? <HelpTab theme={theme} compact={layout.compact} go={toHelp} minutes={formatMinutes(minutes)} shortcuts={!!props.shortcuts} /> : null}
       {tab === "workspaces" && <View style={{ gap: t.space.xl }}>
-        <DiskCard theme={theme} report={disk.report} loading={disk.query.isPending} scanning={disk.scan.isPending} onScan={() => disk.scan.mutate()} onCaches={() => go("workspaces", "caches")} />
+        <DiskCard theme={theme} report={disk.report} loading={disk.query.isPending} scanning={disk.scan.isPending} onScan={() => disk.scan.mutate()} onCaches={() => go("workspaces", "caches")} askNow={fold.id === "cleanup"} onAsked={() => go("workspaces")} />
         {apps.length || !ready ? (
           <View style={{ gap: t.space.md }}>
             <SectionTitle theme={theme} icon="Server">{apps.length ? `Dev servers running now · ${apps.length}` : "Dev servers"}</SectionTitle>
