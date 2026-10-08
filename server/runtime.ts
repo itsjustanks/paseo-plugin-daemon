@@ -162,8 +162,14 @@ export function createRuntime(options: RuntimeOptions = {}) {
       const disks = await disksFor([disk.places.paseoHome, disk.places.home, ...disk.places.tmpDirs, ...knownFolders]);
       const { tokens, tmpRoots } = disk;
       const report = await disk.scanner.report(workspaces, disks, (item) => (tmpRoots.some((tmp) => item.root === tmp || isWithin(item.root, tmp)) ? null : tokens.mint(item)));
-      const journal = await disk.inventory.inspect().catch(() => ({ entries: [], problem: JOURNAL_PROBLEM }));
-      const leftovers = disk.cleaner.isRunning ? [] : journal.entries.map((entry) => ({ id: `leftover:${entry.quarantine}`, name: entry.name, where: friendlyPath(entry.original, { home: disk!.places.home, paseoHome: disk!.places.paseoHome }).label, bytes: entry.bytes, at: entry.at }));
+      const journal = await disk.inventory.status().catch(() => ({ problem: JOURNAL_PROBLEM, entries: [] }));
+      const leftovers = disk.cleaner.isRunning ? [] : journal.entries.map((entry) => {
+        const where = friendlyPath(entry.original, { home: disk!.places.home, paseoHome: disk!.places.paseoHome }).label;
+        const message = entry.state === "partial" ? `An interrupted delete removed part of ${where}. Run the project's install to rebuild it. What's left of it is set aside in a hidden folder beside it; ask an agent to remove it.`
+          : entry.state === "unchecked" ? `Couldn't check a leftover from an interrupted delete (${where}). Nothing is deleted until Hosts can look at it.`
+          : `Left over from an interrupted delete: ${where} couldn't be put back without replacing something, so it's set aside, untouched.`;
+        return { id: `leftover:${entry.quarantine}`, name: entry.name, where, bytes: entry.bytes, at: entry.at, state: entry.state, message };
+      });
       return { ...report, leftovers, journalProblem: journal.problem };
     },
     /** The warning dialog's list: every check, fresh. Deletes nothing. */
@@ -178,6 +184,11 @@ export function createRuntime(options: RuntimeOptions = {}) {
       return disk.cleaner.start(tokenList);
     },
     status(): DiskJob { return disk ? disk.cleaner.status() : { state: "idle", freedBytes: 0, results: [], message: null, finishedAt: null }; },
+    /** Drops a "removed part of…" record the person dismissed; nothing on disk changes. */
+    async dismissLeftover(id: string): Promise<{ ok: boolean }> {
+      if (!disk || !id.startsWith("leftover:")) return { ok: false };
+      return { ok: await disk.inventory.dismiss(id.slice("leftover:".length)).catch(() => false) };
+    },
     /** Unloading: stop the scan and the clear job, kill their process groups (walk, find, rm, pnpm), and wait for both. */
     async close(): Promise<void> { if (disk) await Promise.all([disk.scanner.close(), disk.cleaner.close()]); },
     /** "Ask an agent" about a folder Hosts never removes itself: an unlinked worktree or a /tmp folder. Only ids the last check knows. */
@@ -188,7 +199,7 @@ export function createRuntime(options: RuntimeOptions = {}) {
       if (id.startsWith("leftover:")) {
         const entry = (await disk.inventory.inspect().catch(() => ({ entries: [] as Array<{ quarantine: string; name: string; original: string; bytes: number; at: number }> }))).entries.find((item) => `leftover:${item.quarantine}` === id);
         if (!entry) return null;
-        return ask(`A folder an interrupted clear set aside (${formatSize(entry.bytes)})`, folderAskText({ path: join(entry.quarantine, entry.name), bytes: entry.bytes, branch: null, changedAt: entry.at, kind: "leftover", original: entry.original }, home));
+        return ask(`A folder an interrupted clear set aside (${formatSize(entry.bytes)})`, folderAskText({ path: join(entry.quarantine, entry.name), bytes: entry.bytes, branch: null, changedAt: entry.at, kind: "leftover", original: entry.original, partial: (entry as { stage?: string }).stage !== "moved" }, home));
       }
       if (id.startsWith("tmp:")) {
         const cache = disk.scanner.last()?.caches.find((item) => item.key === id && item.kind === "tmp");

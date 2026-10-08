@@ -56,10 +56,13 @@ export function diskWorker(fs: FsLike, request: ScanRequest, emit: (result: unkn
   var bytesOf = function (st: { blocks?: number; size: number }) { return typeof st.blocks === "number" && st.blocks >= 0 ? st.blocks * 512 : st.size; };
   var join = function (a: string, b: string) { return a.endsWith("/") ? a + b : a + "/" + b; };
 
+  // 0.16.0 review fix: names compared folded (Unicode NFC, lower case), as a case-insensitive disk sees them.
+  var fold = function (name: string) { return String(name).normalize("NFC").toLowerCase(); };
   var clearable: Record<string, true> = {}, ignoredOnly: Record<string, true> = {};
-  request.clearable.forEach(function (name) { clearable[name] = true; });
-  request.ignoredOnly.forEach(function (name) { ignoredOnly[name] = true; });
-  var isEnv = function (name: string) { return name === ".env" || name.indexOf(".env.") === 0; };
+  request.clearable.forEach(function (name) { clearable[fold(name)] = true; });
+  request.ignoredOnly.forEach(function (name) { ignoredOnly[fold(name)] = true; });
+  var isEnv = function (name: string) { var folded = fold(name); return folded === ".env" || folded.indexOf(".env.") === 0; };
+  var isGit = function (name: string) { return fold(name) === ".git"; };
 
   for (var r = 0; r < request.roots.length; r += 1) {
     var spec = request.roots[r]!;
@@ -100,25 +103,26 @@ export function diskWorker(fs: FsLike, request: ScanRequest, emit: (result: unkn
         var owner = result.items[entry.item]!;
         owner.bytes += bytes;
         if (stat.nlink > 1 && !stat.isDirectory()) owner.sharedBytes += bytes;
-        if (entry.rel !== owner.rel) { if (isEnv(name)) owner.hasEnv = true; if (name === ".git") owner.hasGit = true; }
+        if (entry.rel !== owner.rel) { if (isEnv(name)) owner.hasEnv = true; if (isGit(name)) owner.hasGit = true; }
       } else if (entry.depth > 0) {
         if (isEnv(name)) result.hasEnv = true;
-        if (name === ".git") result.hasGit = true;
+        if (isGit(name)) result.hasGit = true;
       }
       if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
       var item = entry.item;
-      var inGit = entry.git || name === ".git";
+      var inGit = entry.git || isGit(name);
       if (spec.mode === "workspace" && item < 0 && !inGit && entry.depth > 0 && result.items.length < request.maxItemsPerRoot) {
-        var only = !!ignoredOnly[name] && entry.depth <= request.ignoredMaxDepth;
-        if (clearable[name] || only) {
-          result.items.push({ rel: entry.rel, name: name, dev: stat.dev, ino: stat.ino, mtimeMs: stat.mtimeMs, bytes: bytes, sharedBytes: 0, partial: false, hasEnv: false, hasGit: false, depth: entry.depth, ignoredOnly: !clearable[name] });
+        var only = !!ignoredOnly[fold(name)] && entry.depth <= request.ignoredMaxDepth;
+        if (clearable[fold(name)] || only) {
+          result.items.push({ rel: entry.rel, name: name, dev: stat.dev, ino: stat.ino, mtimeMs: stat.mtimeMs, bytes: bytes, sharedBytes: 0, partial: false, hasEnv: false, hasGit: false, depth: entry.depth, ignoredOnly: !clearable[fold(name)] });
           item = result.items.length - 1;
         }
       }
       var children: string[] = [];
       try { children = fs.readdirSync(entry.path); } catch { if (item >= 0) result.items[item]!.partial = true; else result.partial = true; continue; }
       // A bare git repository has no ".git" entry: HEAD, objects/ and refs/ side by side. It counts as .git.
-      if (children.indexOf("HEAD") >= 0 && children.indexOf("objects") >= 0 && children.indexOf("refs") >= 0) {
+      var folded = children.map(fold);
+      if (folded.indexOf("head") >= 0 && folded.indexOf("objects") >= 0 && folded.indexOf("refs") >= 0) {
         if (item >= 0) result.items[item]!.hasGit = true; else result.hasGit = true;
       }
       for (var c = 0; c < children.length; c += 1) {

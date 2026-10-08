@@ -38,6 +38,22 @@ belongs to. `requirements.paseo` stays `>=0.9.0`; no settings change, so no migr
   - One deadline for the whole delete; reading Paseo's workspaces is bounded and cancellable; the
     look inside and rm get only what's left of it.
   - A fresh process snapshot right before each folder, taken after git's checks.
+- **Data-safety review fixes (before release):**
+  - Names compare as a case-insensitive disk sees them (Unicode NFC, lower case): `.ENV.production`,
+    a `.GIT` pointer and an uppercase bare repository all stop a delete; the allow-list and the
+    protected places match the same way (folding only ever protects more).
+  - Only a bare interactive shell (`zsh`, `-zsh`) with no child process counts as idle. A shell
+    running a script, or with -c, -s, -l or anything else, is busy.
+  - macOS: a process lsof lists that ps doesn't (or the other way round), unless it has verifiably
+    gone, makes the picture incomplete, so nothing is deleted; any process whose folder is inside
+    the workspace uses it.
+  - A fresh, complete snapshot after the look inside and right before rm: anything that started
+    in the workspace or opened a file in the folder meanwhile puts it back.
+  - Only "no such file" counts as gone in the journal. Any other error keeps the entry ("Couldn't
+    check a leftover from an interrupted delete") and stops every delete until it can be checked.
+  - A delete interrupted after rm started is never shown as restored: "An interrupted delete
+    removed part of <folder>. Run the project's install to rebuild it." stays until dismissed, with
+    Ask an agent for what's left.
 - **Where processes belong.** Processes groups rows under their project and workspace ("project-hub ·
   feature-x", "Not in a workspace", "Paseo itself") and each row shows its project chip. What needs
   attention on Overview and in the sidebar popover says which project it's in.

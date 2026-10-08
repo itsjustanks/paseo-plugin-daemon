@@ -63,13 +63,18 @@ export interface RemoveDeps {
   group: ChildGroup;
   flavour?: () => Promise<RmFlavour>;
   /** Records the quarantine before the rename; `done` forgets it once it's resolved (gone, or put back). */
-  inventory?: { add(entry: QuarantineEntry): Promise<void>; done(quarantine: string): Promise<void> };
+  inventory?: { add(entry: QuarantineEntry): Promise<void>; done(quarantine: string): Promise<void>; removing?(quarantine: string): Promise<void> };
   /** The physical inside-check; tests can swap it. Defaults to the scan worker. */
   probe?: (path: string, group: ChildGroup, deadline: number) => Promise<{ ok: boolean; why: string | null }>;
   /** Tests only: runs after the item is quarantined and checked, just before rm. */
   beforeRemove?: (quarantined: string) => Promise<void> | void;
   /** The clear's one deadline (epoch ms): the inside-check and rm get only what's left. */
   deadline: number;
+  /**
+   * 0.16.0 review fix: the last check, after the inside-check and right before
+   * rm, from a fresh snapshot: a reason to put it back, or null to go ahead.
+   */
+  finalCheck?: (quarantined: string) => Promise<string | null>;
 }
 
 /** Quarantine, verify, look for .env/.git, then rm. `expected` is the inode the checks approved. */
@@ -102,6 +107,11 @@ export async function quarantineAndRemove(target: string, expected: { dev: numbe
   if (!st || st.isSymbolicLink() || !st.isDirectory() || st.ino !== expected.ino || st.dev !== expected.dev) return putBack("It changed just before it was cleared, so it was put back.");
   const inside = await (deps.probe ?? probeInside)(moved, deps.group, deps.deadline);
   if (!inside.ok) return putBack(inside.why ?? "Hosts couldn't be sure what's inside, so it was put back.");
+  // The inside-check can take a while: look again at what's running, now, before anything is removed.
+  const blocked = deps.finalCheck ? await deps.finalCheck(quarantine).catch(() => "Hosts couldn't check again what's running, so it was put back.") : null;
+  if (blocked) return putBack(blocked);
+  // Recorded before rm starts: if Hosts stops mid-delete, the next load says part of it was removed, never "restored".
+  try { await deps.inventory?.removing?.(quarantine); } catch { return putBack("Hosts couldn't record the delete, so it was put back."); }
   await deps.beforeRemove?.(moved);
   const left = deps.deadline - Date.now();
   if (left < 5000) return putBack("The time for this clear ran out before it could be removed.");

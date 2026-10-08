@@ -61,7 +61,7 @@ function world() {
 
 const idleWorkspace = (status = "done", directory = app): WorkspaceInfo => ({ id: "wks_1", name: "App", project: "app", directory, worktree: false, status, activityAt: Date.now() - 3_600_000, branch: "main", devServers: [] });
 const calm = (processes: HostSnapshot["processes"] = [], open: string[] = []): HostSnapshot => ({ processes, open, complete: true, why: null });
-const proc = (argv: string[], cwd: string | null = app, pid = 9) => ({ pid, argv, cwd });
+const proc = (argv: string[], cwd: string | null = app, pid = 9, ppid: number | null = 1) => ({ pid, ppid, argv, cwd });
 
 async function scanned(workspaces: WorkspaceInfo[] = [idleWorkspace()]) {
   const scanner = new DiskScanner({ places, uid: UID, listWorkspaces: async () => workspaces, cacheFile: null, scanSeconds: 60, pnpmStore: async () => null });
@@ -123,6 +123,7 @@ describe("one complete snapshot, or nothing", () => {
   it("Linux: another user's process is skipped; this user's must be fully readable; rewritten titles are kept", async () => {
     const ok = await hostSnapshot("linux", 1000, linux({ "1": { uid: 0, cwdUnreadable: true }, "50": { uid: 1000, cmdline: "npm install", cwd: "/home/u/app", fds: { "3": "/home/u/app/node_modules/x" } }, "60": { status: "missing" } }));
     expect(ok).toMatchObject({ complete: true, processes: [{ pid: 50, argv: ["npm install"], cwd: "/home/u/app" }] });
+    expect(ok.processes[0]!.ppid).toBeNull();
     expect(ok.open).toContain("/home/u/app/node_modules/x");
     for (const broken of [{ uid: 1000, cwdUnreadable: true }, { uid: 1000, cwd: "/x", fds: { "4": "/y" }, badFd: "4" }, { status: "unreadable" as const }]) {
       expect(await hostSnapshot("linux", 1000, linux({ "50": broken }))).toMatchObject({ complete: false, why: expect.any(String) });
@@ -132,12 +133,12 @@ describe("one complete snapshot, or nothing", () => {
 
   it("macOS: ps or lsof failing, or a live process with no lsof record, is incomplete; zombies and exited processes are fine", async () => {
     const deps = (ps: { code: number | null; stdout: string }, lsof: { code: number | null; stdout: string }, alive: (pid: number) => boolean = () => true): SnapshotDeps => ({ readdir: async () => [], readFile: async () => "", readlink: async () => "", run: async (file: string) => (file === "ps" ? ps : lsof), alive });
-    expect(await hostSnapshot("darwin", 501, deps({ code: 1, stdout: "  9 501 S node x.js\n" }, { code: 0, stdout: "" }))).toMatchObject({ complete: false, why: expect.stringMatching(/ps/) });
-    expect(await hostSnapshot("darwin", 501, deps({ code: 0, stdout: "  9 501 S node x.js\n" }, { code: 1, stdout: "p9\nfcwd\nn/Users/x/app\n" }))).toMatchObject({ complete: false, why: expect.stringMatching(/lsof/) });
-    expect(await hostSnapshot("darwin", 501, deps({ code: 0, stdout: "  9 501 S node x.js\n 11 501 S vim\n" }, { code: 0, stdout: "p9\nfcwd\nn/Users/x/app\n" }))).toMatchObject({ complete: false, why: expect.stringMatching(/PID 11/) });
-    const ok = await hostSnapshot("darwin", 501, deps({ code: 0, stdout: "  9 501 S npm run build\n 10 0 Ss /sbin/launchd\n 12 501 Z (node)\n 13 501 S gone\n" }, { code: 0, stdout: "p9\nfcwd\nn/Users/x/app\nf12\nn/Users/x/app/dist/a.js\n" }, (pid) => pid !== 13));
-    expect(ok).toEqual({ complete: true, why: null, processes: [{ pid: 9, argv: ["npm", "run", "build"], cwd: "/Users/x/app" }, { pid: 13, argv: ["gone"], cwd: null }], open: ["/Users/x/app", "/Users/x/app/dist/a.js"] });
-    expect(parsePs("  9 501 S a b\n 10 0 S c\n", 501)).toEqual([{ pid: 9, argv: ["a", "b"], zombie: false }]);
+    expect(await hostSnapshot("darwin", 501, deps({ code: 1, stdout: "  9 1 501 S node x.js\n" }, { code: 0, stdout: "" }))).toMatchObject({ complete: false, why: expect.stringMatching(/ps/) });
+    expect(await hostSnapshot("darwin", 501, deps({ code: 0, stdout: "  9 1 501 S node x.js\n" }, { code: 1, stdout: "p9\nfcwd\nn/Users/x/app\n" }))).toMatchObject({ complete: false, why: expect.stringMatching(/lsof/) });
+    expect(await hostSnapshot("darwin", 501, deps({ code: 0, stdout: "  9 1 501 S node x.js\n 11 1 501 S vim\n" }, { code: 0, stdout: "p9\nfcwd\nn/Users/x/app\n" }))).toMatchObject({ complete: false, why: expect.stringMatching(/PID 11/) });
+    const ok = await hostSnapshot("darwin", 501, deps({ code: 0, stdout: "  9 1 501 S npm run build\n 10 0 0 Ss /sbin/launchd\n 12 1 501 Z (node)\n 13 1 501 S gone\n" }, { code: 0, stdout: "p9\nfcwd\nn/Users/x/app\nf12\nn/Users/x/app/dist/a.js\n" }, (pid) => pid !== 13));
+    expect(ok).toEqual({ complete: true, why: null, processes: [{ pid: 9, ppid: 1, argv: ["npm", "run", "build"], cwd: "/Users/x/app" }, { pid: 13, ppid: 1, argv: ["gone"], cwd: null }], open: ["/Users/x/app", "/Users/x/app/dist/a.js"] });
+    expect(parsePs("  9 3 501 S a b\n 10 1 0 S c\n", 501)).toEqual([{ pid: 9, ppid: 3, argv: ["a", "b"], zombie: false }]);
     expect(parseLsof("p9\nfcwd\nn/a\n").cwd.get(9)).toBe("/a");
     expect([...lsofPids("p9\nfcwd\nn/a\np10\n")]).toEqual([9, 10]);
   });
@@ -364,10 +365,11 @@ describe("clearing", () => {
     const order: string[] = [];
     const gitSpy = (async (cwd: string, args: readonly string[]) => { order.push("git"); return { code: args[0] === "rev-parse" ? 0 : args[0] === "check-ignore" ? 0 : 0, stdout: args[0] === "rev-parse" ? `${app}\n` : args[0] === "check-ignore" ? ".next/\0dist/\0" : "", stderr: "" }; }) as never;
     let calls = 0;
-    const job = await run(cleaner(tokens, scanner, { git: gitSpy, snapshot: async () => { order.push("snapshot"); return calls++ === 0 ? calm() : calm([proc(["npm", "run", "build"])]); } }).instance, [item(report, ".next")!.token!, item(report, "dist")!.token!]);
+    // Item 1: the check's snapshot and the final one before rm are calm; then a build starts.
+    const job = await run(cleaner(tokens, scanner, { git: gitSpy, snapshot: async () => { order.push("snapshot"); return calls++ < 2 ? calm() : calm([proc(["npm", "run", "build"])]); } }).instance, [item(report, ".next")!.token!, item(report, "dist")!.token!]);
     expect(job.results.map((r) => r.ok)).toEqual([true, false]);
     expect(order.indexOf("snapshot")).toBeGreaterThan(order.indexOf("git"));
-    expect(order.filter((step) => step === "snapshot")).toHaveLength(2);
+    expect(order.filter((step) => step === "snapshot")).toHaveLength(3);
     expect(order.lastIndexOf("git")).toBeLessThan(order.lastIndexOf("snapshot"));
   });
 
@@ -414,5 +416,125 @@ describe("unloading", () => {
     release();
     await closing;
     expect(existsSync(join(app, "node_modules", "react", "index.js"))).toBe(true);
+  });
+});
+
+describe("Astra review of 09b0955", () => {
+  it("1: names compare case- and Unicode-insensitively: .ENV.production, a .GIT pointer, an uppercase bare repo", async () => {
+    const { foldName, isClearableName, isEnvFile, describeName, protectedReason, protectedSet } = await import("../shared/disk");
+    expect(isEnvFile(".ENV.production")).toBe(true);
+    expect(isEnvFile(".Env")).toBe(true);
+    expect(isClearableName("Node_Modules")).toBe(true);
+    expect(describeName("NODE_MODULES")?.what).toBe("Installed packages");
+    expect(foldName("café")).toBe(foldName("café"));
+    const set = protectedSet({ home: "/home/u", paseoHome: "/home/u/.paseo", stateDir: "/home/u/.paseo/daemon-link" }, ["/home/u/code/app"], []);
+    expect(protectedReason("/home/u/.Claude/x", set)).toMatch(/Agents' history/);
+    expect(protectedReason("/home/u/.PASEO/config", set)).not.toBeNull();
+    expect(protectedReason("/home/u/Code/App", set)).not.toBeNull();
+    // The physical look inside, on disk.
+    const remove = (path: string) => { const st = lstatSync(path); return quarantineAndRemove(path, { dev: st.dev, ino: st.ino, bytes: 1 }, { group: new ChildGroup(), deadline: Date.now() + 120_000 }); };
+    big(join(app, "dist", ".ENV.production"), 10);
+    expect(await remove(join(app, "dist"))).toMatchObject({ ok: false, error: expect.stringMatching(/\.env file or a git repository/) });
+    expect(existsSync(join(app, "dist", ".ENV.production"))).toBe(true);
+    writeFileSync(join(app, ".next", ".GIT"), "gitdir: /elsewhere\n");
+    expect(await remove(join(app, ".next"))).toMatchObject({ ok: false });
+    expect(existsSync(join(app, ".next", ".GIT"))).toBe(true);
+    mkdirSync(join(app, "node_modules", "dep", "OBJECTS"), { recursive: true }); mkdirSync(join(app, "node_modules", "dep", "Refs"), { recursive: true }); writeFileSync(join(app, "node_modules", "dep", "head"), "ref\n");
+    expect(await remove(join(app, "node_modules"))).toMatchObject({ ok: false });
+    expect(existsSync(join(app, "node_modules", "dep", "head"))).toBe(true);
+    expect(hasQuarantine(app)).toBe(false);
+  });
+
+  it("2: only a bare interactive shell with no children is idle; scripts, -c, -s, -l and a shell with a child are busy", async () => {
+    const { workspaceUsers } = await import("../server/disk-inuse");
+    const classify = (argv: string[]) => classifyJob(argv)?.label ?? null;
+    for (const argv of [["zsh"], ["-zsh"], ["bash"], ["-bash"], ["/bin/zsh"]]) expect(busyInWorkspace(argv, classify), argv.join(" ")).toBeNull();
+    for (const argv of [["bash", "build.sh"], ["bash", "-lc", "make"], ["sh", "-s"], ["zsh", "-l"], ["zsh", "-i"], ["bash", "-c", "x"], ["sh", "./deploy.sh"]]) expect(busyInWorkspace(argv, classify), argv.join(" ")).not.toBeNull();
+    expect(workspaceUsers({ processes: [proc(["zsh"], app, 40)] }, app, classify)).toBeNull();
+    expect(workspaceUsers({ processes: [proc(["zsh"], app, 40), proc(["sleep", "100"], "/elsewhere", 41, 40)] }, app, classify)).toMatchObject({ why: expect.stringMatching(/shell with something running/) });
+    const { scanner, tokens, report } = await scanned();
+    const job = await run(cleaner(tokens, scanner, { snapshot: async () => calm([proc(["bash", "build.sh"])]) }).instance, [item(report, ".next")!.token!]);
+    expect(job.results[0]).toMatchObject({ ok: false, message: expect.stringMatching(/running in this workspace \(a bash script\)/) });
+    expect(existsSync(join(app, ".next", "cache", "a.bin"))).toBe(true);
+  });
+
+  it("3: macOS, both ways: a live PID in lsof but not in ps is incomplete; one that has gone since is fine", async () => {
+    const deps = (lsofOut: string, alive: (pid: number) => boolean): SnapshotDeps => ({ readdir: async () => [], readFile: async () => "", readlink: async () => "", run: async (file: string) => (file === "ps" ? { code: 0, stdout: "  9 1 501 S node x.js\n" } : { code: 0, stdout: lsofOut }), alive });
+    expect(await hostSnapshot("darwin", 501, deps("p9\nfcwd\nn/Users/x/app\np77\nfcwd\nn/Users/x/app/node_modules\n", () => true))).toMatchObject({ complete: false, why: expect.stringMatching(/PID 77/) });
+    expect(await hostSnapshot("darwin", 501, deps("p9\nfcwd\nn/Users/x/app\np77\nfcwd\nn/Users/x/app\n", (pid) => pid !== 77))).toMatchObject({ complete: true });
+    // A process whose folder is inside the workspace uses it, open files beneath or not.
+    const { scanner, tokens, report } = await scanned();
+    const job = await run(cleaner(tokens, scanner, { snapshot: async () => calm([proc(["python3", "-m", "http.server"], join(app, "src"))]) }).instance, [item(report, "node_modules")!.token!]);
+    expect(job.results[0]).toMatchObject({ ok: false, message: expect.stringMatching(/running in this workspace/) });
+  });
+
+  it("4: a fresh snapshot after the look inside and right before rm: something that started meanwhile puts it back", async () => {
+    const { scanner, tokens, report } = await scanned();
+    let calls = 0;
+    const late = (procs: HostSnapshot) => cleaner(tokens, scanner, { snapshot: async () => (calls++ === 0 ? calm() : procs) }).instance;
+    let job = await run(late(calm([proc(["npm", "install"])])), [item(report, ".next")!.token!]);
+    expect(job.results[0]).toMatchObject({ ok: false, message: expect.stringMatching(/started in this workspace .*put back/) });
+    expect(existsSync(join(app, ".next", "cache", "a.bin"))).toBe(true);
+    calls = 0;
+    const { scanner: s2, tokens: t2, report: r2 } = await scanned();
+    job = await run(cleaner(t2, s2, { snapshot: async () => (calls++ === 0 ? calm() : calm([], [join(app, readdirSync(app).find((name) => name.startsWith(".hosts-quarantine-")) ?? "x", ".next", "cache", "a.bin")])) }).instance, [item(r2, ".next")!.token!]);
+    expect(job.results[0]).toMatchObject({ ok: false, message: expect.stringMatching(/opened a file in it|put back/) });
+    calls = 0;
+    const { scanner: s3, tokens: t3, report: r3 } = await scanned();
+    job = await run(cleaner(t3, s3, { snapshot: async () => (calls++ === 0 ? calm() : { processes: [], open: [], complete: false, why: "lsof timed out" }) }).instance, [item(r3, ".next")!.token!]);
+    expect(job.results[0]).toMatchObject({ ok: false, message: expect.stringMatching(/just before deleting \(lsof timed out\)/) });
+    expect(existsSync(join(app, ".next", "cache", "a.bin"))).toBe(true);
+    expect(hasQuarantine(app)).toBe(false);
+  });
+
+  it("5: a quarantine Hosts can't look at (EACCES) keeps its entry, shows as couldn't-check, and blocks every delete", async () => {
+    const { chmodSync, mkdtempSync } = await import("node:fs");
+    const { UNCHECKED_PROBLEM } = await import("../server/disk-quarantine");
+    const locked = join(root, "locked");
+    mkdirSync(locked);
+    const quarantine = mkdtempSync(join(locked, ".hosts-quarantine-"));
+    const inventory = new QuarantineInventory(join(places.stateDir, "quarantine.json"));
+    await inventory.add({ quarantine, original: join(app, "build"), name: "build", dev: 1, ino: 1, bytes: 10, at: Date.now() });
+    chmodSync(locked, 0o000);
+    try {
+      const outcome = await inventory.recover();
+      expect(outcome.unchecked).toHaveLength(1);
+      expect(outcome.problem).toBe(UNCHECKED_PROBLEM);
+      expect(await inventory.list()).toHaveLength(1);
+      expect((await inventory.status()).entries[0]).toMatchObject({ state: "unchecked" });
+      const { scanner, tokens, report } = await scanned();
+      const job = await run(cleaner(tokens, scanner, { inventory }).instance, [item(report, ".next")!.token!]);
+      expect(job.results[0]).toMatchObject({ ok: false, message: UNCHECKED_PROBLEM });
+      expect(existsSync(join(app, ".next", "cache", "a.bin"))).toBe(true);
+    } finally { chmodSync(locked, 0o700); }
+  });
+
+  it("6: a delete interrupted after rm started is never shown as restored; its record stays until dismissed", async () => {
+    const { mkdtempSync } = await import("node:fs");
+    const inventory = new QuarantineInventory(join(places.stateDir, "quarantine.json"));
+    // What remove() records: "moved", then "removing" right before rm.
+    const seen: string[] = [];
+    const st = lstatSync(join(app, "dist"));
+    await quarantineAndRemove(join(app, "dist"), { dev: st.dev, ino: st.ino, bytes: 1 }, { group: new ChildGroup(), deadline: Date.now() + 60_000, inventory, beforeRemove: async () => { seen.push(...(await inventory.list()).map((entry) => entry.stage ?? "?")); } });
+    expect(seen).toEqual(["removing"]);
+    // An rm that stopped halfway: the item is in its quarantine with part of it gone.
+    const quarantine = mkdtempSync(join(app, ".hosts-quarantine-"));
+    const nm = lstatSync(join(app, "node_modules"));
+    await inventory.add({ quarantine, original: join(app, "node_modules"), name: "node_modules", dev: nm.dev, ino: nm.ino, bytes: 3 * MB, at: Date.now() });
+    renameSync(join(app, "node_modules"), join(quarantine, "node_modules"));
+    await inventory.removing(quarantine);
+    rmSync(join(quarantine, "node_modules", "react"), { recursive: true });
+    const outcome = await inventory.recover();
+    expect(outcome.restored).toEqual([]);
+    expect(outcome.partial).toHaveLength(1);
+    expect(existsSync(join(app, "node_modules"))).toBe(false);
+    expect((await inventory.status()).entries).toEqual([expect.objectContaining({ state: "partial", quarantine })]);
+    expect(await inventory.blocker()).toBeNull();
+    // A second load changes nothing; only dismissing drops the record.
+    await inventory.recover();
+    expect(await inventory.list()).toHaveLength(1);
+    expect(await inventory.dismiss(quarantine)).toBe(true);
+    expect(await inventory.list()).toEqual([]);
+    expect(existsSync(quarantine)).toBe(true);
   });
 });

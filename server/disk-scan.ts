@@ -520,10 +520,11 @@ export class DiskScanner {
 }
 
 /** "Ask an agent" about a folder Hosts won't remove itself: an unlinked worktree, a /tmp leftover, or what an interrupted clear left. */
-export function folderAskText(folder: { path: string; bytes: number; branch: string | null; changedAt: number | null; kind?: "worktree" | "tmp" | "leftover"; original?: string }, home: string, now = Date.now()): string {
+export function folderAskText(folder: { path: string; bytes: number; branch: string | null; changedAt: number | null; kind?: "worktree" | "tmp" | "leftover"; original?: string; partial?: boolean }, home: string, now = Date.now()): string {
   const kind = folder.kind ?? "worktree";
   const lead = kind === "worktree" ? `Hosts found a Paseo worktree that no workspace uses any more. It takes up ${formatSize(folder.bytes)}.`
-    : kind === "leftover" ? `A clear in Hosts was interrupted and left a build folder set aside (${formatSize(folder.bytes)}). Hosts couldn't put it back${folder.original ? ` at ${homeRelative(folder.original, home)}` : ""} without replacing something, so it left it alone.`
+    : kind === "leftover" && folder.partial ? `A delete in Hosts was interrupted after it had started removing a build folder${folder.original ? ` (${homeRelative(folder.original, home)})` : ""}. Part of it is gone; what's left (about ${formatSize(folder.bytes)} before) is set aside, untouched.`
+    : kind === "leftover" ? `A delete in Hosts was interrupted and left a build folder set aside (${formatSize(folder.bytes)}). Hosts couldn't put it back${folder.original ? ` at ${homeRelative(folder.original, home)}` : ""} without replacing something, so it left it alone.`
     : `Hosts found a folder in the temporary folder that takes up ${formatSize(folder.bytes)}. Hosts doesn't delete anything itself.`;
   const check = kind === "worktree"
     ? ["Please check whether anything in it still matters: uncommitted changes (git status) and commits that aren't pushed anywhere (git log --branches --not --remotes).", "Tell me what you find. If nothing is needed, suggest removing it properly with \"git worktree remove\" from its main repository, then \"git worktree prune\"."]

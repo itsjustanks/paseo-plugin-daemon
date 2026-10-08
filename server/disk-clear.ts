@@ -8,7 +8,7 @@ import { friendlyPath } from "../shared/paths";
 import type { ActionLogEntry } from "../shared/processes";
 import { ChildGroup } from "./disk-children";
 import { gitAllows, gitVerdicts, groupGit, type GitRun } from "./disk-git";
-import { busyInWorkspace, hostSnapshot, usedBeneath, type HostSnapshot } from "./disk-inuse";
+import { hostSnapshot, usedBeneath, workspaceUsers, type HostSnapshot } from "./disk-inuse";
 import { JOURNAL_PROBLEM, type QuarantineInventory } from "./disk-quarantine";
 import { quarantineAndRemove, type DeleteResult, type RmFlavour } from "./disk-remove";
 import { busyReason, canonicalChain, homeRelative, protectionFor, workspaceState, type DiskPlaces, type WorkspaceInfo } from "./disk-scan";
@@ -114,7 +114,7 @@ export interface CleanerDeps {
   now?: () => number;
 }
 
-export interface Checked { ok: boolean; reason: string | null; payload: DiskTokenPayload | null; workspace: string; where: string; path: string; bytes: number }
+export interface Checked { ok: boolean; reason: string | null; payload: DiskTokenPayload | null; workspace: string; where: string; path: string; bytes: number; root?: string }
 
 /** Resolves to the value, or `fallback` once `ms` pass or `signal` aborts. The slow work is not awaited further. */
 function within<T>(start: () => Promise<T>, ms: number, fallback: T, signal: AbortSignal): Promise<T> {
@@ -151,9 +151,25 @@ export class DiskCleaner {
   async close(): Promise<void> { this.abort.abort(); this.group.killAll(); await this.wait(); }
   wait(): Promise<void> { return this.running ?? Promise.resolve(); }
 
-  private snapshot(): Promise<HostSnapshot> {
-    return (this.deps.snapshot ?? (() => hostSnapshot(this.deps.places.platform, this.deps.uid)))()
+  /** A complete snapshot or why not; one retry, since a process starting mid-look makes one incomplete. */
+  private async snapshot(): Promise<HostSnapshot> {
+    const take = () => (this.deps.snapshot ?? (() => hostSnapshot(this.deps.places.platform, this.deps.uid)))()
       .catch(() => ({ processes: [], open: [], complete: false, why: "This user's processes couldn't be read." }));
+    const first = await take();
+    return first.complete ? first : take();
+  }
+
+  /** Right before rm (0.16.0 review fix): a fresh snapshot; anything using the workspace or the quarantine puts it back. */
+  private finalCheck(root: string): (quarantined: string) => Promise<string | null> {
+    return async (quarantined) => {
+      const snap = await this.snapshot();
+      if (!snap.complete) return `Hosts couldn't get a complete picture of what's running just before deleting (${(snap.why ?? "unknown reason").replace(/\.$/, "")}), so it was put back.`;
+      const users = workspaceUsers(snap, root, (argv) => classifyJob(argv)?.label ?? null);
+      if (users?.unknownFolder) return "Something started and Hosts can't tell in which folder, so it was put back.";
+      if (users) return `Something started in this workspace (${users.why}), so it was put back.`;
+      if (usedBeneath(quarantined, snap.open)) return "Something opened a file in it, so it was put back.";
+      return null;
+    };
   }
 
   /**
@@ -199,6 +215,7 @@ export class DiskCleaner {
       const payload = checked.payload!;
       const outcome: DeleteResult = await quarantineAndRemove(payload.p, { dev: payload.d, ino: payload.i, bytes: payload.b }, {
         group: this.group, flavour: this.deps.flavour, beforeRemove: this.deps.beforeRemove, inventory: this.deps.inventory, probe: this.deps.probe, deadline,
+        finalCheck: this.finalCheck(checked.root!),
       });
       this.job.freedBytes += outcome.removedBytes;
       if (outcome.ok) this.deps.cleared?.(payload.p, payload.b);
@@ -227,8 +244,8 @@ export class DiskCleaner {
     const base = payload ? { workspace: payload.w, where: label(payload.p, payload.r), path: payload.p } : { workspace: "", where: "", path: "" };
     const no = (reason: string): Checked => ({ ok: false, reason, payload, bytes: 0, ...base });
     if (!payload) return no("This list is out of date. Check disk space again and try once more.");
-    const journal = await this.deps.inventory.inspect().catch(() => ({ entries: [], problem: JOURNAL_PROBLEM }));
-    if (journal.problem) return no(journal.problem);
+    const blocked = await this.deps.inventory.blocker().catch(() => JOURNAL_PROBLEM);
+    if (blocked) return no(blocked);
 
     const path = payload.p;
     const st = await lstat(path).catch(() => null);
@@ -265,16 +282,9 @@ export class DiskCleaner {
     const no = (reason: string): Checked => ({ ...item, ok: false, reason, bytes: 0 });
     if (!snap.complete) return no(`Hosts couldn't get a complete picture of what's running (${(snap.why ?? "unknown reason").replace(/\.$/, "")}), so it deleted nothing.`);
     const root = item.root!;
-    const classify = (argv: string[]) => classifyJob(argv)?.label ?? null;
-    for (const proc of snap.processes) {
-      if (proc.cwd === null) {
-        if (busyInWorkspace(proc.argv, classify) !== null) return no("Something is running and Hosts can't tell in which folder, so it won't delete anything until that finishes.");
-        continue;
-      }
-      if (proc.cwd !== root && !isWithin(proc.cwd, root)) continue;
-      const why = busyInWorkspace(proc.argv, classify);
-      if (why) return no(`Something is running in this workspace (${why}). Delete once that's finished.`);
-    }
+    const users = workspaceUsers(snap, root, (argv) => classifyJob(argv)?.label ?? null);
+    if (users?.unknownFolder) return no("Something is running and Hosts can't tell in which folder, so it won't delete anything until that finishes.");
+    if (users) return no(`Something is running in this workspace (${users.why}). Delete once that's finished.`);
     if (usedBeneath(item.path, snap.open)) return no("Something has a file in it open right now. Try again once it's closed.");
     return { ...item, ok: true, reason: null };
   }

@@ -3,7 +3,7 @@ import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc } from "@getpaseo/plugin/client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ago, diskClearStatus, diskReport, formatSize, stateWords, type CacheGroup, type ClearItem, type DiskJob, type DiskReport, type DiskSpace, type WorkspaceUsage } from "../shared/disk";
+import { ago, diskClearStatus, diskLeftoverDismiss, diskReport, formatSize, stateWords, type CacheGroup, type ClearItem, type DiskJob, type DiskReport, type DiskSpace, type WorkspaceUsage } from "../shared/disk";
 import { runningIn, type ProcessRow } from "../shared/processes";
 import { ClearResults } from "./clear";
 import { useSafeToast } from "./feedback";
@@ -63,6 +63,32 @@ export function cacheBytes(report: DiskReport | undefined): number {
   return (report?.caches ?? []).flatMap((group) => group.items).reduce((sum, item) => sum + item.bytes, 0);
 }
 
+/**
+ * What interrupted deletes left (0.16.0 review fix): each with its plain
+ * sentence and Ask an agent; a "removed part of…" record stays until the
+ * person dismisses it. Hosts deletes none of it by itself.
+ */
+function Leftovers({ theme, report }: { theme: Theme; report: DiskReport }) {
+  const dismiss = useRpc(diskLeftoverDismiss);
+  const client = useQueryClient();
+  const toast = useSafeToast();
+  return (
+    <View style={{ gap: SPACE.row }}>
+      <ItemTitle theme={theme}>Left over from an interrupted delete</ItemTitle>
+      {(report.leftovers ?? []).map((leftover) => (
+        <View key={leftover.id} style={{ gap: SPACE.sm }}>
+          <Note theme={theme} tone={leftover.state === "left" ? "warning" : "danger"}>{leftover.message ?? `Left over from an interrupted delete: ${leftover.where}`}</Note>
+          <Meta theme={theme}>{`${formatSize(leftover.bytes)} when it was set aside · ${ago(leftover.at)}`}</Meta>
+          <Row>
+            <AskAgentButton theme={theme} subject={{ kind: "folder", id: leftover.id }} />
+            {leftover.state === "partial" ? <Button theme={theme} label="Dismiss" accessibilityLabel={`Dismiss the note about ${leftover.where}`} onPress={() => void dismiss({ id: leftover.id }).then((result) => { if (!result.ok) toast.show("That note couldn't be dismissed. Check disk space again.", { variant: "warning" }); void client.invalidateQueries({ queryKey: ["daemon-link"] }); })} /> : null}
+          </Row>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 /** Status first: the disk, what looks safe to clear, and the check's age. */
 export function DiskCard({ theme, report, loading, scanning, onScan, onCaches, askNow, onAsked, onDelete }: {
   theme: Theme; report: DiskReport | undefined; loading: boolean; scanning: boolean; onScan(): void; onCaches(): void;
@@ -89,6 +115,8 @@ export function DiskCard({ theme, report, loading, scanning, onScan, onCaches, a
           {disk.sentence ? <Note theme={theme} tone={DISK_TONE[disk.level]}>{disk.sentence}</Note> : null}
         </View>
       ) : <Meta theme={theme}>{loading ? "Checking…" : "This disk's size couldn't be read."}</Meta>}
+      {report?.journalProblem ? <Note theme={theme} tone="danger">{report.journalProblem}</Note> : null}
+      {report?.leftovers?.length ? <Leftovers theme={theme} report={report} /> : null}
       <Divider theme={theme} />
       {running ? (
         <View style={{ gap: SPACE.xs }}>

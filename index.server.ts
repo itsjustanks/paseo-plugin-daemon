@@ -20,7 +20,7 @@ import { createAsk } from "./server/ask";
 import { ArchivedWorkspaces } from "./server/archived";
 import { homedir } from "node:os";
 import { guardState, pluginRestart, pluginRestartStatus } from "./shared/guard";
-import { diskClear, diskClearStatus, diskPreview, diskReport } from "./shared/disk";
+import { diskClear, diskClearStatus, diskLeftoverDismiss, diskPreview, diskReport } from "./shared/disk";
 
 type SettingsHandle = { read?: () => Promise<{ status: string; values?: unknown }>; subscribe?: (listener: () => void) => () => void } | undefined;
 
@@ -83,6 +83,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(diskPreview, ({ tokens }, context) => runtime.withContext(context, () => runtime.disk.preview(tokens)));
   server.handle(diskClear, ({ tokens }, context) => runtime.withContext(context, async () => runtime.disk.clear(tokens)));
   server.handle(diskClearStatus, async () => runtime.disk.status());
+  server.handle(diskLeftoverDismiss, async ({ id }) => runtime.disk.dismissLeftover(id));
   server.handle(watchSuggestions, async () => ({ suggestions: await suggestions((await readSettings().catch(() => HOSTS_SETTINGS_DEFAULTS)).watchedServices) }));
   server.handle(sync.syncStatus, (_input, context) => runtime!.withContext(context, async () => {
     await runtime!.scope.refresh(); return { projects: runtime!.scope.status().projects.map((p) => ({ id: p.id, name: p.name })), history: await runtime!.transfers.history(), grants: await runtime!.peers.projectGrants() };

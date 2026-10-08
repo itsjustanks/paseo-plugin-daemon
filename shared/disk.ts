@@ -95,12 +95,20 @@ export const IGNORED_ONLY_NAMES: Readonly<Record<string, { what: string; cost: s
 /** dist/build/out deeper than this inside a workspace aren't considered (they're usually a package's own). */
 export const IGNORED_ONLY_MAX_DEPTH = 4;
 
-export const isClearableName = (name: string) => Object.prototype.hasOwnProperty.call(CLEARABLE_NAMES, name);
-export const isIgnoredOnlyName = (name: string) => Object.prototype.hasOwnProperty.call(IGNORED_ONLY_NAMES, name);
-export const describeName = (name: string) => CLEARABLE_NAMES[name] ?? IGNORED_ONLY_NAMES[name] ?? null;
+/**
+ * A name as the disk may treat it (0.16.0 review fix): macOS's APFS is
+ * usually case-insensitive and stores names in either Unicode form, so
+ * ".ENV.production" is a .env file there and "Node_Modules" is node_modules.
+ * Every name check compares folded names: Unicode NFC, then lower case.
+ */
+export const foldName = (name: string) => String(name).normalize("NFC").toLowerCase();
+const has = (table: Readonly<Record<string, unknown>>, name: string) => Object.prototype.hasOwnProperty.call(table, foldName(name));
+export const isClearableName = (name: string) => has(CLEARABLE_NAMES, name);
+export const isIgnoredOnlyName = (name: string) => has(IGNORED_ONLY_NAMES, name);
+export const describeName = (name: string) => CLEARABLE_NAMES[foldName(name)] ?? IGNORED_ONLY_NAMES[foldName(name)] ?? null;
 
 /** A name that is never part of anything cleared: a whole item is blocked if one sits inside it. */
-export const isEnvFile = (name: string) => name === ".env" || name.startsWith(".env.");
+export const isEnvFile = (name: string) => { const folded = foldName(name); return folded === ".env" || folded.startsWith(".env."); };
 
 /**
  * Known regenerable tool caches, by folder name under ~/.cache (Linux) or
@@ -142,18 +150,25 @@ export interface ProtectedSet { whole: readonly string[]; inside: readonly strin
 const trim = (path: string) => (path.length > 1 ? path.replace(/\/+$/, "") : path);
 export const isWithin = (path: string, root: string) => { const r = trim(root); return r === "/" ? path !== "/" : path.startsWith(`${r}/`); };
 
+/**
+ * Protection compares folded paths (Unicode NFC, lower case: 0.16.0 review
+ * fix), so on a case-insensitive disk "~/.Claude" is ~/.claude. Folding only
+ * ever protects more; the one exception it would widen (a worktree's own
+ * build folders inside Paseo's data) is matched exactly.
+ */
 export function protectedReason(target: string, set: ProtectedSet): string | null {
-  const path = trim(target);
+  const exact = trim(target);
+  const path = foldName(exact);
   for (const raw of set.whole) {
-    const root = trim(raw);
+    const root = foldName(trim(raw));
     if (path === root) return "That's a whole folder Hosts never deletes.";
     if (isWithin(root, path)) return "It contains a folder Hosts protects (your home, Paseo's data, agents' history or a workspace), so Hosts leaves it.";
   }
   for (const raw of set.inside) {
     const root = trim(raw);
-    if (!isWithin(path, root)) continue;
-    if (set.worktreeRoots.some((worktree) => isWithin(path, worktree) && isWithin(trim(worktree), root))) continue;
-    return /\.(claude|codex)(\/|$)/.test(root) ? "Agents' history and settings are your data. Hosts never deletes them." : "Paseo's own data (settings, history, logs) and Hosts' own files are never deleted.";
+    if (!isWithin(path, foldName(root))) continue;
+    if (set.worktreeRoots.some((worktree) => isWithin(exact, worktree) && isWithin(trim(worktree), root))) continue;
+    return /\.(claude|codex)(\/|$)/i.test(root) ? "Agents' history and settings are your data. Hosts never deletes them." : "Paseo's own data (settings, history, logs) and Hosts' own files are never deleted.";
   }
   return null;
 }
@@ -255,7 +270,13 @@ export const DiskReportSchema = z.object({
   clearableBytes: z.number().min(0),
   warnings: z.array(z.string()),
   /** 0.16.0: what an interrupted clear set aside and couldn't put back; shown, never deleted by Hosts. */
-  leftovers: z.array(z.object({ id: z.string(), name: z.string(), where: z.string(), bytes: z.number().min(0), at: z.number() })).optional(),
+  leftovers: z.array(z.object({
+    id: z.string(), name: z.string(), where: z.string(), bytes: z.number().min(0), at: z.number(),
+    /** "left": set aside, couldn't go back; "partial": an interrupted delete removed part of it; "unchecked": Hosts couldn't look at it. */
+    state: z.enum(["left", "partial", "unchecked"]).optional(),
+    /** One plain sentence for the person. */
+    message: z.string().optional(),
+  })).optional(),
   /** 0.16.0: the record of interrupted clears is damaged; nothing is cleared until it's checked. */
   journalProblem: z.string().nullable().optional(),
 });
@@ -314,6 +335,8 @@ export const diskPreview = defineRpc({ name: "daemon-link.disk.preview", input: 
 /** Starts deleting in the background, each item checked again just before it goes; poll `diskClearStatus`. */
 export const diskClear = defineRpc({ name: "daemon-link.disk.clear", input: Tokens, output: DiskJobSchema });
 export const diskClearStatus = defineRpc({ name: "daemon-link.disk.clear-status", input: z.object({}), output: DiskJobSchema });
+/** 0.16.0 review fix: drop the record of an interrupted delete that removed part of a folder, once the person has read it. */
+export const diskLeftoverDismiss = defineRpc({ name: "daemon-link.disk.leftover-dismiss", input: z.object({ id: z.string().min(1).max(4096) }), output: z.object({ ok: z.boolean() }) });
 
 /** "Idle 3 days", "Agent working now". */
 export function stateWords(state: WorkspaceState, activeAt: number | null, now = Date.now()): string {

@@ -23,7 +23,8 @@ import { mapLimit } from "./platform";
  *    nothing").
  */
 
-export interface SnapshotProcess { pid: number; argv: string[]; cwd: string | null }
+/** `ppid`: its parent, so an "idle" shell with a child at work is seen as busy (0.16.0 review fix). */
+export interface SnapshotProcess { pid: number; ppid: number | null; argv: string[]; cwd: string | null }
 export interface HostSnapshot { processes: SnapshotProcess[]; open: string[]; complete: boolean; why: string | null }
 
 export interface SnapshotDeps {
@@ -72,12 +73,18 @@ export function parseLsof(text: string): { cwd: Map<number, string>; open: strin
   return { cwd, open };
 }
 
-/** `ps -axo pid=,uid=,stat=,command=` rows for one user. Lossy argv (space-split), which is enough to spot a build or an install. */
-export function parsePs(text: string, uid: number): Array<{ pid: number; argv: string[]; zombie: boolean }> {
+/** `ps -axo pid=,ppid=,uid=,stat=,command=` rows for one user. Lossy argv (space-split), which is enough to spot a build or an install. */
+export function parsePs(text: string, uid: number): Array<{ pid: number; ppid: number; argv: string[]; zombie: boolean }> {
   return text.split("\n").flatMap((line) => {
-    const match = /^\s*(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(line);
-    return match && Number(match[2]) === uid ? [{ pid: Number(match[1]), argv: match[4]!.trim().split(/\s+/), zombie: match[3]!.startsWith("Z") }] : [];
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(line);
+    return match && Number(match[3]) === uid ? [{ pid: Number(match[1]), ppid: Number(match[2]), argv: match[5]!.trim().split(/\s+/), zombie: match[4]!.startsWith("Z") }] : [];
   });
+}
+
+/** `/proc/<pid>/status` → its parent PID, or null. */
+export function statusPpid(text: string): number | null {
+  const match = /^PPid:\s+(\d+)/m.exec(text);
+  return match ? Number(match[1]) : null;
 }
 
 /** Which PIDs lsof said anything about (a `p<pid>` line). */
@@ -94,7 +101,7 @@ export async function hostSnapshot(platform: "linux" | "darwin", uid: number, de
   const incomplete = (why: string): HostSnapshot => ({ processes: [], open: [], complete: false, why });
   if (platform === "darwin") {
     const [ps, lsof] = await Promise.all([
-      deps.run("ps", ["-axo", "pid=,uid=,stat=,command="]).catch(() => ({ code: null, stdout: "" })),
+      deps.run("ps", ["-axo", "pid=,ppid=,uid=,stat=,command="]).catch(() => ({ code: null, stdout: "" })),
       deps.run("lsof", ["-nP", "-w", "-Fpfn", "-u", String(uid)]).catch(() => ({ code: null, stdout: "" })),
     ]);
     if (ps.code !== 0) return incomplete("The process list (ps) couldn't be read completely.");
@@ -103,10 +110,15 @@ export async function hostSnapshot(platform: "linux" | "darwin", uid: number, de
     const seen = lsofPids(lsof.stdout);
     const rows = parsePs(ps.stdout, uid);
     const alive = deps.alive ?? isAlive;
-    // A live process of this user that lsof said nothing about: Hosts can't tell what it has open.
+    // Both ways (0.16.0 review fix). A live process of this user that lsof said nothing about: Hosts can't
+    // tell what it has open. A live process lsof saw that ps didn't list: Hosts can't tell what it is.
+    // Only a process that has verifiably gone since may be missing from one of them.
     const unseen = rows.find((row) => !row.zombie && !seen.has(row.pid) && alive(row.pid));
     if (unseen) return incomplete(`What one of your processes (PID ${unseen.pid}) has open couldn't be read.`);
-    return { processes: rows.filter((row) => !row.zombie).map((row) => ({ pid: row.pid, argv: row.argv, cwd: files.cwd.get(row.pid) ?? null })), open: files.open, complete: true, why: null };
+    const listed = new Set(rows.map((row) => row.pid));
+    const unlisted = [...seen].find((pid) => !listed.has(pid) && alive(pid));
+    if (unlisted !== undefined) return incomplete(`One of your processes (PID ${unlisted}) started while Hosts was looking, so the picture isn't complete.`);
+    return { processes: rows.filter((row) => !row.zombie).map((row) => ({ pid: row.pid, ppid: row.ppid, argv: row.argv, cwd: files.cwd.get(row.pid) ?? null })), open: files.open, complete: true, why: null };
   }
   let pids: string[];
   try { pids = (await deps.readdir("/proc")).filter((entry) => /^\d+$/.test(entry)); } catch { return incomplete("/proc couldn't be read."); }
@@ -126,7 +138,7 @@ export async function hostSnapshot(platform: "linux" | "darwin", uid: number, de
       cwd = clean(await deps.readlink(`/proc/${pid}/cwd`));
       fds = await deps.readdir(`/proc/${pid}/fd`);
     } catch (error) { if (!gone(error)) fail(); return; }
-    processes.push({ pid: Number(pid), argv: cmdline.split("\0").filter(Boolean), cwd });
+    processes.push({ pid: Number(pid), ppid: statusPpid(status), argv: cmdline.split("\0").filter(Boolean), cwd });
     open.push(cwd);
     for (const fd of fds) {
       try { const target = await deps.readlink(`/proc/${pid}/fd/${fd}`); if (target.startsWith("/")) open.push(clean(target)); }
@@ -156,18 +168,37 @@ export function titleArgv(argv: readonly string[]): string[] {
 }
 
 /**
- * Why a process in a workspace stops Hosts clearing anything there, or null
- * only for an idle interactive shell (bash, zsh… with no -c script). Anything
- * else in the workspace (an install, a build, a test, a dev server, a package
- * manager running a script, an agent, an editor, something Hosts doesn't
- * know) counts as using it.
+ * Why a process in a workspace stops Hosts deleting anything there, or null
+ * ONLY for an idle interactive shell (0.16.0 review fix): argv is just the
+ * shell's name ("zsh", or "-zsh" for a login shell), with no arguments at
+ * all, and (checked by the caller) no child process. A shell with a script,
+ * -c, -s, -l or anything else is busy, as is everything else in the
+ * workspace (an install, a build, a test, a dev server, a package manager
+ * running a script, an agent, an editor, something Hosts doesn't know).
  */
 export function busyInWorkspace(argv: readonly string[], classify: (argv: string[]) => string | null): string | null {
   const words = titleArgv(argv);
   if (!words.length) return "a process Hosts can't identify";
   const first = base(words[0]);
-  if (SHELLS.test(first) && !words.slice(1).some((word) => word === "-c" || word.startsWith("-c"))) return null;
+  if (words.length === 1 && SHELLS.test(first)) return null;
+  if (SHELLS.test(first)) return `a ${first.replace(/^-/, "")} script`;
   const tool = words.slice(0, 6).map((word) => base(word).replace(/^(npm|npx)-cli(\.js)?$/, "$1")).find((word) => PACKAGE_TOOLS.test(word));
   if (tool) return `${tool} ${words.slice(1).find((word) => !word.startsWith("-") && !word.includes("/")) ?? ""}`.trim();
   return classify(words) ?? first ?? "a running program";
+}
+
+/**
+ * Everything running in or beneath `root` that uses it, from one snapshot: a
+ * process there that isn't an idle shell, an idle shell with a child, and a
+ * process whose folder can't be told (unless it's an idle shell itself).
+ */
+export function workspaceUsers(snap: Pick<HostSnapshot, "processes">, root: string, classify: (argv: string[]) => string | null): { why: string; unknownFolder: boolean } | null {
+  const parents = new Set(snap.processes.map((proc) => proc.ppid).filter((ppid): ppid is number => ppid !== null));
+  const inside = (cwd: string) => cwd === root || cwd.startsWith(`${root.replace(/\/+$/, "")}/`);
+  for (const proc of snap.processes) {
+    const why = busyInWorkspace(proc.argv, classify) ?? (parents.has(proc.pid) ? "a shell with something running in it" : null);
+    if (proc.cwd === null) { if (why) return { why, unknownFolder: true }; continue; }
+    if (inside(proc.cwd) && why) return { why, unknownFolder: false };
+  }
+  return null;
 }
