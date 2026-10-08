@@ -87,6 +87,10 @@ later version (kept on a branch, not shipped).
   - A disk report or ask waits at most 5 seconds for Paseo's registry or the process list; a check
     starts before either is read. One registry read gives up after 20 seconds (a late answer is
     dropped), and the scan's discovery steps stop at its deadline or on unload.
+  - Unloading during a check never leaves a rejected promise unhandled: once cancelled, no step
+    starts new work, and every started step's failure is handled even after it was given up on.
+  - pnpm's config files are read safely: regular files only (a symlink only to one), opened
+    non-blocking, at most 64 KB, and dropped when the check is cancelled.
 - **Help:** "My disk is filling up. What can I clear?", "What does the agent check before it
   deletes anything?" and "Where else does Hosts show disk space?". Old `tab=servers` links land on
   Workspaces. No settings change.

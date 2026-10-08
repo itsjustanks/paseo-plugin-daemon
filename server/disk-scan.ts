@@ -1,4 +1,5 @@
-import { lstat, readdir, readFile, realpath, statfs, stat, writeFile, mkdir } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import { lstat, open, readdir, readFile, realpath, statfs, stat, writeFile, mkdir } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
@@ -189,7 +190,7 @@ const CACHE_HOW: Record<ScanCache["kind"], string> = {
  * environment or pnpm's config files (~/.npmrc, pnpm's global rc), else the
  * default place for this system. Null when none of them exists.
  */
-export async function findPnpmStore(places: Pick<DiskPlaces, "platform" | "home">, env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+export async function findPnpmStore(places: Pick<DiskPlaces, "platform" | "home">, env: NodeJS.ProcessEnv = process.env, signal?: AbortSignal): Promise<string | null> {
   const home = places.home;
   const expand = (value: string) => value.trim().replace(/^["']|["']$/g, "").replace(/^~(?=\/|$)/, home).replace(/\$\{?HOME\}?/g, home);
   const configured: string[] = [];
@@ -197,7 +198,8 @@ export async function findPnpmStore(places: Pick<DiskPlaces, "platform" | "home"
   const xdgConfig = env.XDG_CONFIG_HOME || join(home, ".config");
   const rcFiles = [join(home, ".npmrc"), ...(places.platform === "darwin" ? [join(home, "Library", "Preferences", "pnpm", "rc")] : []), join(xdgConfig, "pnpm", "rc")];
   for (const file of rcFiles) {
-    const text = await safe(() => readFile(file, "utf8"), "");
+    if (signal?.aborted) return null;
+    const text = await readConfigFile(file, signal);
     const match = /^\s*store-dir\s*=\s*(.+?)\s*$/m.exec(text);
     if (match) configured.push(match[1]!);
   }
@@ -206,11 +208,45 @@ export async function findPnpmStore(places: Pick<DiskPlaces, "platform" | "home"
     ...(places.platform === "darwin" ? [join(home, "Library", "pnpm", "store")] : [join(env.XDG_DATA_HOME || join(home, ".local", "share"), "pnpm", "store")]),
   ];
   for (const candidate of [...configured.map(expand), ...defaults]) {
+    if (signal?.aborted) return null;
     if (!candidate.startsWith("/")) continue;
     const st = await safe(() => lstat(candidate), null);
     if (st?.isDirectory() && !st.isSymbolicLink()) return candidate;
   }
   return null;
+}
+
+/** Config files are small; anything past this is never read. */
+export const CONFIG_READ_LIMIT = 64 * 1024;
+
+/**
+ * A config file's text, read safely (review fix): only a regular file (a
+ * symlink only when its target is one), opened non-blocking so a FIFO swapped
+ * in can't hold the open, checked again on the open handle, at most
+ * CONFIG_READ_LIMIT bytes, and abandoned on cancellation. "" otherwise.
+ */
+export async function readConfigFile(path: string, signal?: AbortSignal, limit = CONFIG_READ_LIMIT): Promise<string> {
+  if (signal?.aborted) return "";
+  const link = await safe(() => lstat(path), null);
+  if (!link) return "";
+  const target = link.isSymbolicLink() ? await safe(() => stat(path), null) : link;
+  if (!target?.isFile()) return "";
+  const handle = await safe(() => open(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK), null);
+  if (!handle) return "";
+  const read = (async () => {
+    try {
+      if (!(await handle.stat()).isFile()) return "";
+      const buffer = Buffer.alloc(Math.min(limit, CONFIG_READ_LIMIT));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      return buffer.subarray(0, bytesRead).toString("utf8");
+    } catch { return ""; } finally { await handle.close().catch(() => undefined); }
+  })();
+  if (!signal) return read;
+  return new Promise((resolve) => {
+    const stop = () => resolve("");
+    signal.addEventListener("abort", stop, { once: true });
+    read.then((text) => { signal.removeEventListener("abort", stop); resolve(signal.aborted ? "" : text); });
+  });
 }
 
 /** A sign this computer uses pnpm: a pnpm-lock.yaml at the top of a workspace (a stat, no walk). */
@@ -278,18 +314,22 @@ export class DiskScanner {
     this.abort = abort;
     if (this.group.closed) abort.abort(); // Unloading began before the scan got here.
     const signal = abort.signal;
-    const within = <T>(work: Promise<T>, fallback: T): Promise<T> => new Promise((resolve) => {
+    // Takes the work as a function: once cancelled nothing new is started, and every promise it does
+    // start has its rejection handled, even one that settles after the step gave up (review fix).
+    const within = <T>(start: () => Promise<T>, fallback: T): Promise<T> => new Promise((resolve) => {
       if (signal.aborted) { resolve(fallback); return; }
+      let work: Promise<T>;
+      try { work = start(); } catch { resolve(fallback); return; }
       const timer = setTimeout(() => { abort.abort(); resolve(fallback); }, left());
-      signal.addEventListener("abort", () => { clearTimeout(timer); resolve(fallback); }, { once: true });
       (timer as { unref?: () => void }).unref?.();
+      signal.addEventListener("abort", () => { clearTimeout(timer); resolve(fallback); }, { once: true });
       work.then((value) => { clearTimeout(timer); resolve(value); }, () => { clearTimeout(timer); resolve(fallback); });
     });
     const warnings: string[] = [];
-    const workspaces = await within(this.deps.listWorkspaces(), [] as WorkspaceInfo[]);
+    const workspaces = await within(() => this.deps.listWorkspaces(), [] as WorkspaceInfo[]);
     if (!workspaces.length) warnings.push("Paseo's workspaces couldn't be read in time, so only shared caches were checked. Open Hosts once after the daemon starts, then check again.");
-    const folders = await within(this.folders(workspaces, signal), [] as ScanFolder[]);
-    const caches = await within(this.cacheCandidates(warnings, workspaces, signal), [] as ScanCache[]);
+    const folders = await within(() => this.folders(workspaces, signal), [] as ScanFolder[]);
+    const caches = await within(() => this.cacheCandidates(warnings, workspaces, signal), [] as ScanCache[]);
     const roots: WalkRoot[] = [
       ...folders.map((folder) => ({ id: folder.key, path: folder.path, mode: "workspace" as const })),
       ...caches.map((cache) => ({ id: cache.key, path: cache.path, mode: "whole" as const })),
@@ -381,7 +421,7 @@ export class DiskScanner {
     const npm = join(places.home, ".npm");
     await add("npm", join(npm, "_cacache"), "npm cache", "Packages npm downloaded", "Package managers");
     await add("npx", join(npm, "_npx"), "npx downloads", "Tools fetched with npx", "Package managers");
-    const store = await (this.deps.pnpmStore ?? (() => findPnpmStore(places)))().catch(() => null);
+    const store = signal?.aborted ? null : await (this.deps.pnpmStore ?? (() => findPnpmStore(places, process.env, signal)))().catch(() => null);
     if (store && store.startsWith("/")) await add("pnpm", store, "pnpm store", "Packages shared by your pnpm projects", "Package managers");
     else if (await usesPnpm(workspaces)) warnings.push("pnpm store: not found.");
     for (const root of places.browserRoots) {

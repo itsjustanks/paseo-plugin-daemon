@@ -123,3 +123,82 @@ describe("one deadline (review fix)", () => {
     expect(Date.now() - closing).toBeLessThan(60_000);
   });
 });
+
+describe("second review (1ba11b3)", () => {
+  const scannerFor = (name: string, listWorkspaces: () => Promise<never[]>) => {
+    const e = home(name);
+    const places = { platform: "darwin" as const, home: e, paseoHome: join(e, ".paseo"), stateDir: join(e, ".paseo", "daemon-link"), tmpDirs: [], cacheBases: [], browserRoots: [] };
+    return new DiskScanner({ places, uid: process.getuid?.() ?? 0, listWorkspaces, cacheFile: null, scanSeconds: 60, walk: (async () => ({ results: [], timedOut: false, error: null })) as never, pnpmStore: async () => null });
+  };
+  const watchRejections = () => {
+    const seen: unknown[] = [];
+    const listener = (reason: unknown) => { seen.push(reason); };
+    process.on("unhandledRejection", listener);
+    return { seen, stop: () => process.off("unhandledRejection", listener) };
+  };
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+  it("start, close, then a registry rejection: no unhandledRejection, and no read started after close", async () => {
+    const watch = watchRejections();
+    try {
+      let reject: ((error: Error) => void) | null = null;
+      let calls = 0;
+      const scanner = scannerFor("unload-1", () => { calls += 1; return new Promise<never[]>((_, no) => { reject = no; }); });
+      scanner.start();
+      await scanner.close();
+      (reject as ((error: Error) => void) | null)?.(new Error("registry went away"));
+      await settle();
+      expect(watch.seen).toEqual([]);
+      expect(calls).toBe(0);
+    } finally { watch.stop(); }
+  });
+
+  it("a registry read already started, then close, then it rejects: handled", async () => {
+    const watch = watchRejections();
+    try {
+      let reject: ((error: Error) => void) | null = null;
+      let called: () => void = () => undefined;
+      const started = new Promise<void>((resolve) => { called = resolve; });
+      const scanner = scannerFor("unload-2", () => { called(); return new Promise<never[]>((_, no) => { reject = no; }); });
+      scanner.start();
+      await started;
+      await scanner.close();
+      (reject as ((error: Error) => void) | null)?.(new Error("registry went away"));
+      await settle(); await settle();
+      expect(watch.seen).toEqual([]);
+    } finally { watch.stop(); }
+  });
+});
+
+describe("config files are read safely (second review)", () => {
+  it("a FIFO is skipped at once, not opened and waited on", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const { readConfigFile } = await import("../server/disk-scan");
+    const f = home("fifo");
+    execFileSync("mkfifo", [join(f, ".npmrc")]);
+    mkdirSync(join(f, "Library", "pnpm", "store"), { recursive: true });
+    const started = Date.now();
+    expect(await readConfigFile(join(f, ".npmrc"))).toBe("");
+    expect(await findPnpmStore({ platform: "darwin", home: f }, {})).toBe(join(f, "Library", "pnpm", "store"));
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it("reads at most 64 KB, follows a symlink only to a regular file, and stops when cancelled", async () => {
+    const { symlinkSync } = await import("node:fs");
+    const { CONFIG_READ_LIMIT, readConfigFile } = await import("../server/disk-scan");
+    const g = home("big");
+    writeFileSync(join(g, "huge"), `store-dir=/early\n${"x".repeat(4 * 1024 * 1024)}\nstore-dir=/late\n`);
+    const text = await readConfigFile(join(g, "huge"));
+    expect(text.length).toBe(CONFIG_READ_LIMIT);
+    expect(text).toContain("store-dir=/early");
+    expect(text).not.toContain("store-dir=/late");
+    symlinkSync("/dev/zero", join(g, "endless"));
+    expect(await readConfigFile(join(g, "endless"))).toBe("");
+    writeFileSync(join(g, "real"), "store-dir=~/s\n");
+    symlinkSync(join(g, "real"), join(g, "linked"));
+    expect(await readConfigFile(join(g, "linked"))).toBe("store-dir=~/s\n");
+    const cancelled = new AbortController(); cancelled.abort();
+    expect(await readConfigFile(join(g, "real"), cancelled.signal)).toBe("");
+    expect(await findPnpmStore({ platform: "darwin", home: g }, {}, cancelled.signal)).toBeNull();
+  });
+});
