@@ -213,7 +213,7 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
       icon: "HardDrive", question: "My disk is filling up. What can I clear?",
       answer: [
         "Open Workspaces. It shows how much space is free, what each Paseo workspace uses (biggest first, with whether an agent is working in it) and how much of it is safe to clear. The sidebar dot warns when the disk is 85% full and turns red at 95%.",
-        "Safe to clear means things that come back by themselves: installed packages (node_modules), build files (.next, .nuxt, .turbo, dist when git ignores it), test reports, Python caches, npm's download cache, old browser downloads, tool caches, and leftovers in the temporary folder older than 6 hours. Each one says what clearing it costs, such as \"comes back on the next install (a few minutes)\".",
+        "Safe to clear means things that come back by themselves: installed packages (node_modules), build files (.next, .nuxt, .turbo, dist), test reports and Python caches, but only when git confirms the folder is ignored and holds nothing else. Also npm's download cache, old browser downloads, tool caches, and leftovers in the temporary folder older than 6 hours. Each one says what clearing it costs, such as \"comes back on the next install (a few minutes)\".",
         "Press Clear on one workspace, or clear every idle workspace at once. You see exactly what goes and its size first, then confirm once. pnpm's shared store is pruned by pnpm itself, which removes only packages no project uses.",
         "Checking sizes reads a lot of files, so it runs in the background at low priority, one check at a time, and stops after a few minutes with what it found. Press Refresh at the top to check again.",
       ],
@@ -223,7 +223,7 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
       icon: "ShieldBan", question: "What will Hosts never delete?",
       answer: [
         "Anything git tracks, .git folders, .env files, your source code, Paseo's own data (settings, history, logs), agents' history (~/.claude and ~/.codex), and never a whole workspace or worktree folder.",
-        "Nothing that's in use: if a program has a file open in it, an agent is working or waiting in that workspace, or a dev server, build or test is running there, Hosts leaves it and says why. Each folder is checked again just before it goes, links are never followed, and every deletion is logged.",
+        "Nothing that's in use: if a program has a file open in it, an agent is working or waiting in that workspace, or a dev server, build, test or install is running there, Hosts leaves it and says why. If Hosts can't tell what's in use, it clears nothing. Each folder is checked again just before it goes, links are never followed, and every deletion is logged.",
         "A worktree no workspace uses any more (usually an archived one) shows its size, but Hosts won't remove it: it may hold work that isn't pushed. Ask an agent instead; it checks the worktree and removes it properly with git, after asking you.",
       ],
     },

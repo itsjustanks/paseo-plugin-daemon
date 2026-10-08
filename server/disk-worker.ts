@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
-import { setPriority } from "node:os";
+import { lowPriority, type ChildGroup } from "./disk-remove";
 
 /**
- * The heavy part of 0.14.0's disk work (walking folders, deleting them),
+ * The heavy part of 0.14.0's disk scan (walking folders to measure them),
  * run in a child process at the lowest CPU and disk priority, so a scan of
  * dozens of node_modules folders on a starved host never slows Paseo, the
  * plugin's own calls, or the 10-second check loop.
@@ -13,9 +13,8 @@ import { setPriority } from "node:os";
  *
  * Rules it keeps: lstat only (a symlink is never followed, only counted as
  * itself or unlinked as itself); never cross onto another device; stop at the
- * deadline and say so (partial); every byte counted once per inode. A delete
- * never removes a .env file or anything in a .git folder: they're left, and
- * reported as leftovers.
+ * deadline and say so (partial); every byte counted once per inode. It only
+ * reads: deleting is done by the system rm (disk-remove.ts).
  */
 
 export interface WalkRoot { id: string; path: string; mode: "workspace" | "whole" }
@@ -29,7 +28,6 @@ export interface ScanRequest {
   ignoredMaxDepth: number;
   maxItemsPerRoot: number;
 }
-export interface DeleteRequest { op: "delete"; path: string; dev: number; deadline: number }
 export interface WalkItem { rel: string; name: string; dev: number; ino: number; mtimeMs: number; bytes: number; sharedBytes: number; partial: boolean; hasEnv: boolean; hasGit: boolean; depth: number; ignoredOnly: boolean }
 export interface WalkResult {
   id: string;
@@ -47,54 +45,15 @@ export interface WalkResult {
   hasGit: boolean;
   items: WalkItem[];
 }
-export interface DeleteResult { ok: boolean; removedBytes: number; leftovers: number; partial: boolean; error?: string }
 
 type FsLike = {
   lstatSync(path: string): { dev: number; ino: number; nlink: number; size: number; blocks?: number; mtimeMs: number; isDirectory(): boolean; isSymbolicLink(): boolean };
   readdirSync(path: string): string[];
-  unlinkSync(path: string): void;
-  rmdirSync(path: string): void;
 };
 
-export function diskWorker(fs: FsLike, request: ScanRequest | DeleteRequest, emit: (result: unknown) => void): void {
+export function diskWorker(fs: FsLike, request: ScanRequest, emit: (result: unknown) => void): void {
   var bytesOf = function (st: { blocks?: number; size: number }) { return typeof st.blocks === "number" && st.blocks >= 0 ? st.blocks * 512 : st.size; };
   var join = function (a: string, b: string) { return a.endsWith("/") ? a + b : a + "/" + b; };
-
-  if (request.op === "delete") {
-    var removed = 0, leftovers = 0, cut = false;
-    var root: ReturnType<FsLike["lstatSync"]>;
-    try { root = fs.lstatSync(request.path); } catch (error) { emit({ ok: false, removedBytes: 0, leftovers: 0, partial: false, error: String(error) }); return; }
-    if (!root.isDirectory() || root.isSymbolicLink() || root.dev !== request.dev) { emit({ ok: false, removedBytes: 0, leftovers: 0, partial: false, error: "not the folder that was checked" }); return; }
-    // Post-order, without recursion: children first, then the folder itself.
-    var stack: Array<{ path: string; expanded: boolean }> = [{ path: request.path, expanded: false }];
-    while (stack.length) {
-      if (Date.now() > request.deadline) { cut = true; break; }
-      var top = stack[stack.length - 1]!;
-      var base = top.path.slice(top.path.lastIndexOf("/") + 1);
-      // A last line of defence: a .env file or a .git folder is never deleted, whatever was checked before.
-      if (top.path !== request.path && (base === ".git" || base === ".env" || base.indexOf(".env.") === 0)) { leftovers += 1; stack.pop(); continue; }
-      var st: ReturnType<FsLike["lstatSync"]>;
-      try { st = fs.lstatSync(top.path); } catch { stack.pop(); continue; }
-      if (st.isDirectory() && !st.isSymbolicLink()) {
-        if (st.dev !== request.dev) { leftovers += 1; stack.pop(); continue; }
-        if (!top.expanded) {
-          top.expanded = true;
-          var names: string[] = [];
-          try { names = fs.readdirSync(top.path); } catch { names = []; }
-          for (var n = 0; n < names.length; n += 1) stack.push({ path: join(top.path, names[n]!), expanded: false });
-          continue;
-        }
-        stack.pop();
-        try { fs.rmdirSync(top.path); } catch { leftovers += 1; }
-      } else {
-        stack.pop();
-        // A symlink is removed as itself; its target is never touched.
-        try { fs.unlinkSync(top.path); if (st.nlink <= 1) removed += bytesOf(st); } catch { leftovers += 1; }
-      }
-    }
-    emit({ ok: !cut && leftovers === 0, removedBytes: removed, leftovers: leftovers, partial: cut });
-    return;
-  }
 
   var clearable: Record<string, true> = {}, ignoredOnly: Record<string, true> = {};
   request.clearable.forEach(function (name) { clearable[name] = true; });
@@ -176,21 +135,18 @@ export interface WorkerRun<T> { results: T[]; timedOut: boolean; error: string |
  * when `ionice` exists) and collects its lines as they come. `onResult` sees
  * each one at once (scan progress). The child is killed at `hardLimitMs`.
  */
-export function runWorker<T>(request: ScanRequest | DeleteRequest, hardLimitMs: number, onResult?: (result: T) => void): Promise<WorkerRun<T>> {
+export function runWorker<T>(request: ScanRequest, hardLimitMs: number, onResult?: (result: T) => void, group?: ChildGroup): Promise<WorkerRun<T>> {
   return new Promise((resolve) => {
     const results: T[] = [];
     let buffer = "", timedOut = false, settled = false;
-    const child = spawn(process.execPath, ["-e", WORKER_SCRIPT], { stdio: ["pipe", "pipe", "ignore"], env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }, windowsHide: true });
-    const done = (error: string | null) => { if (settled) return; settled = true; clearTimeout(timer); resolve({ results, timedOut, error }); };
-    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, hardLimitMs);
+    if (group?.closed) { resolve({ results, timedOut: false, error: "Hosts is unloading." }); return; }
+    // Its own process group, so unloading Hosts can end it (group.killAll).
+    const child = spawn(process.execPath, ["-e", WORKER_SCRIPT], { detached: true, stdio: ["pipe", "pipe", "ignore"], env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" }, windowsHide: true });
+    const untrack = group && child.pid ? group.track(child.pid) : () => undefined;
+    const done = (error: string | null) => { if (settled) return; settled = true; clearTimeout(timer); untrack(); resolve({ results, timedOut, error }); };
+    const timer = setTimeout(() => { timedOut = true; try { if (child.pid) process.kill(-child.pid, "SIGKILL"); } catch { child.kill("SIGKILL"); } }, hardLimitMs);
     (timer as { unref?: () => void }).unref?.();
-    if (child.pid) {
-      try { setPriority(child.pid, 19); } catch { /* Best effort. */ }
-      if (process.platform === "linux") {
-        const io = spawn("ionice", ["-c", "3", "-p", String(child.pid)], { stdio: "ignore" });
-        io.on("error", () => undefined);
-      }
-    }
+    if (child.pid) lowPriority(child.pid);
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
       buffer += chunk;

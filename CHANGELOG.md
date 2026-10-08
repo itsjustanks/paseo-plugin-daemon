@@ -45,6 +45,33 @@ each Paseo workspace with what's running in it, what it uses on disk, and what's
   child process at nice 19 and (Linux) the idle disk class, time-boxed to 4 minutes with a fair share
   per folder and partial results marked "at least". Plugin calls get 30 seconds, so scans and clears
   run in the background and the app polls, like 0.13's Restart.
+- **Deletion safety, after an independent review (before release).** Simpler, and fail-closed:
+  - Inside a workspace a folder is clearable only when git says it is ignored (every name,
+    node_modules and coverage included) and lists nothing tracked and nothing untracked-but-not-
+    ignored beneath it. No repository, no git, an error or no answer in time: not clearable. A new,
+    uncommitted `src/coverage/route.ts` is never offered.
+  - Shared caches: the item must be a real folder (lstat, not a symlink) directly inside a known
+    cache root that is itself a real folder. Nothing is canonicalised, so a `chromium-1` symlink
+    pointing at your documents can't be followed.
+  - Protected set: refused if it equals, encloses, or (for data folders) is inside home, Paseo's
+    home, ~/.claude, ~/.codex, any workspace or worktree root, Hosts' own folder, or /. An old /tmp
+    folder that contains Paseo's home is now refused.
+  - Deleting: the item is moved into a private quarantine folder beside it (mode 700, same disk),
+    its inode re-checked, put back if a .env file or .git folder turns up inside, then removed with
+    the system `rm -rf` plus `--one-file-system` (GNU) or `-x` (macOS), argv only, `--`, no shell.
+    rm walks physically, so a folder swapped for a symlink mid-delete is unlinked, never followed.
+    The hand-written JavaScript delete walk is gone; a Linux without GNU rm deletes nothing.
+  - In use: any lsof error, timeout or nonzero exit means in use. On Linux a process is skipped only
+    when /proc/<pid>/status shows another user; a same-user process whose cwd or any fd can't be read
+    means in use. No fd cap.
+  - Running work: a fresh look at workspaces, processes and open files before each item. Caches and
+    pnpm's prune wait while any npm/pnpm/npx/yarn/bun/Playwright/agent-browser install or download
+    runs. A build, test or install whose folder can't be told (macOS asks lsof first) blocks every
+    workspace clear, and says so.
+  - One deadline for the whole scan, git's checks included; anything cut off isn't clearable.
+  - Unloading Hosts stops the clear between items and kills the scan walk, find, rm and pnpm with
+    their whole process groups, then waits for them.
+  - Fleet layout: agent-browser downloads are also looked for in /opt/agent-home/.agent-browser.
 - **Fewer calls to the daemon.** Passive reads (the sidebar dot, Overview, Processes, Workspaces)
   now share one cached copy of the project and workspace registry for 60 seconds (was 5), with one
   read in flight at a time and a 10-second back-off after a failed read. A busy daemon logged about

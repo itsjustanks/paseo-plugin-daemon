@@ -4,11 +4,12 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
   CLEARABLE_NAMES, IGNORED_ONLY_MAX_DEPTH, IGNORED_ONLY_NAMES, PROTECTED_NAME, TMP_MIN_AGE_HOURS, TMP_NEVER,
-  ago, describeName, diskSpace, formatSize, neverDelete, olderVersions, toolCacheName,
+  ago, describeName, diskSpace, formatSize, olderVersions, protectedReason, protectedSet, toolCacheName, type ProtectedSet,
   type CacheGroup, type ClearItem, type DiskReport, type DiskSpace, type WorkspaceState, type WorkspaceUsage,
 } from "../shared/disk";
 import { stateDirectory } from "./binaries";
-import { gitVerdicts, type GitRun, runGit } from "./disk-git";
+import { gitAllows, gitVerdicts, type GitRun, type GitVerdict, runGit } from "./disk-git";
+import { ChildGroup } from "./disk-remove";
 import { runWorker, type WalkItem, type WalkResult, type WalkRoot } from "./disk-worker";
 import type { MintInput } from "./disk-clear";
 
@@ -31,14 +32,30 @@ export const SCAN_SECONDS = 240;
 /** One Paseo workspace as the SDK describes it, read defensively (fields vary across Paseo versions). */
 export interface WorkspaceInfo { id: string; name: string; project: string | null; directory: string; worktree: boolean; status: string | null; activityAt: number | null; branch: string | null; devServers: string[] }
 
-export interface DiskPlaces { platform: "linux" | "darwin"; home: string; paseoHome: string; tmpDirs: string[]; cacheBases: string[] }
+/**
+ * Where things are. `browserRoots` are the folders of versioned browser
+ * downloads; `stateDir` is Hosts' own folder (always protected).
+ */
+export interface DiskPlaces { platform: "linux" | "darwin"; home: string; paseoHome: string; stateDir: string; tmpDirs: string[]; cacheBases: string[]; browserRoots: string[] }
 
 export function defaultPlaces(platform: "linux" | "darwin"): DiskPlaces {
   const home = homedir();
   const paseoHome = process.env.PASEO_HOME || join(home, ".paseo");
-  return platform === "darwin"
-    ? { platform, home, paseoHome, tmpDirs: ["/private/tmp"], cacheBases: [join(home, "Library", "Caches"), join(home, ".cache")] }
-    : { platform, home, paseoHome, tmpDirs: [...new Set(["/tmp", tmpdir()])], cacheBases: [join(home, ".cache")] };
+  const cacheBases = platform === "darwin" ? [join(home, "Library", "Caches"), join(home, ".cache")] : [join(home, ".cache")];
+  const browserRoots = [
+    ...cacheBases.map((base) => join(base, "ms-playwright")),
+    join(home, ".cache", "puppeteer", "chrome"), join(home, ".cache", "puppeteer", "chrome-headless-shell"),
+    join(home, ".agent-browser", "browsers"), join(home, ".cache", "agent-browser"),
+    // The fleet's containers keep a second agent-browser home here (items must still be this user's).
+    "/opt/agent-home/.agent-browser/browsers",
+  ];
+  return { platform, home, paseoHome, stateDir: stateDirectory(), cacheBases, browserRoots: [...new Set(browserRoots)], tmpDirs: platform === "darwin" ? ["/private/tmp"] : [...new Set(["/tmp", tmpdir()])] };
+}
+
+/** A known cache root that is a real folder (not a symlink), or null. */
+export async function realRoot(path: string): Promise<boolean> {
+  const st = await lstat(path).catch(() => null);
+  return !!st && st.isDirectory() && !st.isSymbolicLink();
 }
 
 /** A workspace descriptor from `paseo.workspaces.list` → what Hosts needs, or null when it has no folder. */
@@ -93,7 +110,7 @@ export interface ScanData {
   startedAt: number; finishedAt: number | null; partial: boolean; done: number; total: number;
   folders: ScanFolder[];
   /** Per item path: git's answers. */
-  git: Record<string, { tracked: boolean | null; ignored: boolean | null }>;
+  git: Record<string, GitVerdict>;
   caches: ScanCache[];
   warnings: string[];
 }
@@ -113,6 +130,9 @@ export interface ScannerDeps {
   walk?: typeof runWorker;
 }
 
+/** The walk gets this share of the scan's time; git's checks get the rest, inside the same deadline. */
+export const WALK_SHARE = 0.8;
+
 const pnpmStorePath = () => new Promise<string | null>((resolve) => {
   execFile("pnpm", ["store", "path"], { timeout: 10_000, env: { ...process.env, NO_COLOR: "1" } }, (error, stdout) => resolve(error ? null : String(stdout).trim() || null));
 });
@@ -125,8 +145,12 @@ export class DiskScanner {
   private progress = { done: 0, total: 0 };
   private loaded = false;
   private readonly now: () => number;
+  private readonly group = new ChildGroup();
 
   constructor(private readonly deps: ScannerDeps) { this.now = deps.now ?? Date.now; }
+
+  /** Unloading: kill the walk's process group and wait for the scan to stop. */
+  async close(): Promise<void> { this.group.killAll(); await this.wait(); }
 
   get isRunning(): boolean { return this.running !== null; }
   last(): ScanData | null { return this.data; }
@@ -146,7 +170,7 @@ export class DiskScanner {
 
   /** Start a scan unless one is running (then join it). Returns at once; `wait()` resolves when it ends. */
   start(): void {
-    if (this.running) return;
+    if (this.running || this.group.closed) return;
     this.running = this.scan().catch((error) => {
       console.error("daemon-link: disk scan failed", error instanceof Error ? error.name : "unknown");
     }).finally(() => { this.running = null; });
@@ -178,36 +202,38 @@ export class DiskScanner {
     this.progress = { done: 0, total: roots.length };
     this.data = { startedAt, finishedAt: null, partial: false, done: 0, total: roots.length, folders, git: {}, caches: [], warnings };
     const seconds = this.deps.scanSeconds ?? SCAN_SECONDS;
+    // One deadline for everything; the walk stops early enough to leave git its share.
+    const deadline = startedAt + seconds * 1000;
     const byId = new Map<string, WalkResult>();
     const walk = this.deps.walk ?? runWorker;
     const run = await walk<WalkResult>({
-      op: "scan", roots, deadline: startedAt + seconds * 1000,
+      op: "scan", roots, deadline: startedAt + seconds * 1000 * WALK_SHARE,
       clearable: Object.keys(CLEARABLE_NAMES), ignoredOnly: Object.keys(IGNORED_ONLY_NAMES), ignoredMaxDepth: IGNORED_ONLY_MAX_DEPTH, maxItemsPerRoot: 200,
-    }, (seconds + 30) * 1000, (result) => {
+    }, seconds * 1000 * WALK_SHARE + 10_000, (result) => {
       byId.set(result.id, result);
       this.progress.done += 1;
       if (this.data) this.data.done = this.progress.done;
       const folder = folders.find((item) => item.key === result.id);
       if (folder) folder.result = result;
-    });
+    }, this.group);
     if (run.error) warnings.push("The disk check couldn't run here.");
     const partial = run.timedOut || [...byId.values()].some((result) => result.partial || result.skipped) || byId.size < roots.length;
     // Git's verdict on every candidate inside a workspace (tracked → source; dist/build/out must be ignored).
     const candidates = folders.flatMap((folder) => (folder.result?.items ?? []).map((item) => join(folder.path, item.rel)));
-    const verdicts = candidates.length ? await safe(() => gitVerdicts(candidates, this.deps.git ?? runGit), new Map()) : new Map();
+    const verdicts = candidates.length && !this.group.closed ? await safe(() => gitVerdicts(candidates, this.deps.git ?? runGit, deadline, this.now), new Map<string, GitVerdict>()) : new Map<string, GitVerdict>();
     const git: ScanData["git"] = {};
-    for (const [path, verdict] of verdicts) git[path] = { tracked: verdict.tracked, ignored: verdict.ignored };
+    for (const [path, verdict] of verdicts) git[path] = verdict;
     for (const cache of caches) {
       const result = byId.get(cache.key);
       if (result) {
         cache.dev = result.dev; cache.ino = result.ino; cache.bytes = result.totalBytes; cache.partial = result.partial || !!result.skipped;
+        if (cache.partial) cache.blocked = "Not fully checked before the time ran out. Check again to clear it.";
         if (cache.kind === "tmp") {
           const ageHours = (this.now() - Math.max(result.newestMtimeMs, cache.mtimeMs)) / 3_600_000;
           if (ageHours < TMP_MIN_AGE_HOURS) cache.blocked = "Changed in the last 6 hours, so it may still be in use.";
           if (result.hasEnv || result.hasGit) cache.blocked = "Has a .env file or a .git folder inside, so Hosts leaves it.";
         }
-      } else if (cache.bytes < 0) { cache.bytes = 0; cache.partial = true; }
-      else if (cache.kind === "tmp" && (this.now() - cache.mtimeMs) / 3_600_000 < TMP_MIN_AGE_HOURS) cache.blocked = "Changed in the last 6 hours, so it may still be in use.";
+      } else if (cache.bytes < 0) { cache.bytes = 0; cache.partial = true; cache.blocked = "Not checked before the time ran out. Check again to clear it."; }
     }
     this.data = { startedAt, finishedAt: this.now(), partial, done: byId.size, total: roots.length, folders, git, caches: caches.filter((cache) => cache.bytes > 0 || cache.partial), warnings };
     const file = this.cacheFile();
@@ -239,57 +265,67 @@ export class DiskScanner {
       const own = await safe(() => lstat(join(projectPath, ".git")), null);
       const candidates = own ? [projectPath] : (await safe(() => readdir(projectPath), [] as string[])).map((name) => join(projectPath, name));
       for (const candidate of candidates) {
-        const real = await safe(() => realpath(candidate), null);
-        const st = real ? await safe(() => lstat(real), null) : null;
-        if (!real || !st?.isDirectory() || isClaimed(real)) continue;
-        out.push(real);
+        // A worktree folder must be a real folder where it is: a symlink here is never followed.
+        const st = await safe(() => lstat(candidate), null);
+        if (!st?.isDirectory() || st.isSymbolicLink() || isClaimed(candidate)) continue;
+        out.push(candidate);
       }
     }
     return out;
   }
 
-  /** Shared caches and /tmp leftovers to measure (sizes are filled in by the walk). */
+  /**
+   * Shared caches and /tmp leftovers to measure (sizes are filled in by the
+   * walk). Each is a real folder (lstat, never a symlink) directly inside a
+   * known root that is itself a real folder, owned by this user, and outside
+   * the protected set. Nothing is canonicalised: a link is skipped, not followed.
+   */
   private async cacheCandidates(warnings: string[]): Promise<ScanCache[]> {
     const { places, uid } = this.deps;
     const out: ScanCache[] = [];
-    const add = async (kind: ScanCache["kind"], path: string, label: string, what: string, cost: string, group: string, action: "delete" | "prune" = "delete") => {
-      const real = await safe(() => realpath(path), null);
-      const st = real ? await safe(() => lstat(real), null) : null;
-      if (!real || !st || st.isSymbolicLink() || (!st.isDirectory() && kind !== "tmp") || st.uid !== uid) return;
-      if (PROTECTED_NAME.test(basename(real)) || neverDelete(real, places)) return;
-      out.push({ kind, key: `${kind}:${real}`, path: real, label, what, cost, group, dev: st.dev, ino: st.ino, mtimeMs: st.mtimeMs, bytes: st.isDirectory() ? -1 : st.blocks * 512, sharedBytes: 0, partial: false, action, blocked: null });
+    const guard = await this.protection();
+    const add = async (kind: ScanCache["kind"], root: string, name: string, label: string, what: string, cost: string, group: string, action: "delete" | "prune" = "delete") => {
+      if (!await realRoot(root)) return;
+      const path = join(root, name);
+      const st = await safe(() => lstat(path), null);
+      if (!st || st.isSymbolicLink() || !st.isDirectory() || st.uid !== uid) return;
+      if (PROTECTED_NAME.test(name) || protectedReason(path, guard)) return;
+      out.push({ kind, key: `${kind}:${path}`, path, label, what, cost, group, dev: st.dev, ino: st.ino, mtimeMs: st.mtimeMs, bytes: -1, sharedBytes: 0, partial: false, action, blocked: null });
     };
     const npm = join(places.home, ".npm");
-    await add("npm", join(npm, "_cacache"), "npm cache", "Packages npm downloaded", "Packages download again when a project next installs them.", "Package managers");
-    await add("npm", join(npm, "_npx"), "npx downloads", "Tools fetched with npx", "Fetched again the next time you run them with npx.", "Package managers");
+    await add("npm", npm, "_cacache", "npm cache", "Packages npm downloaded", "Packages download again when a project next installs them.", "Package managers");
+    await add("npm", npm, "_npx", "npx downloads", "Tools fetched with npx", "Fetched again the next time you run them with npx.", "Package managers");
     const store = await (this.deps.pnpmStore ?? pnpmStorePath)();
-    if (store) await add("pnpm", store, "pnpm store", "Packages shared by your pnpm projects", "Pruning removes only packages no project uses; nothing a project needs is lost.", "Package managers", "prune");
-    // Browser downloads: keep the newest of each kind.
-    const browserDirs = [
-      ...places.cacheBases.map((base) => join(base, "ms-playwright")),
-      join(places.home, ".cache", "puppeteer", "chrome"), join(places.home, ".cache", "puppeteer", "chrome-headless-shell"),
-      join(places.home, ".agent-browser", "browsers"), join(places.home, ".cache", "agent-browser"),
-    ];
-    for (const dir of [...new Set(browserDirs)]) {
-      const names = await safe(() => readdir(dir), [] as string[]);
-      for (const name of olderVersions(names)) {
-        await add("versions", join(dir, name), name, "An older browser download", "Downloaded again only if a project still asks for this version.", "Old browser downloads");
+    if (store && store.startsWith("/")) await add("pnpm", dirname(store), basename(store), "pnpm store", "Packages shared by your pnpm projects", "Pruning removes only packages no project uses; nothing a project needs is lost.", "Package managers", "prune");
+    for (const root of places.browserRoots) {
+      for (const name of olderVersions(await safe(() => readdir(root), [] as string[]))) {
+        await add("versions", root, name, name, "An older browser download", "Downloaded again only if a project still asks for this version.", "Old browser downloads");
       }
     }
     for (const base of places.cacheBases) {
       for (const name of await safe(() => readdir(base), [] as string[])) {
         const what = toolCacheName(name);
-        if (what) await add("tool", join(base, name), name, what, "Filled again the next time the tool needs it.", "Tool caches");
+        if (what) await add("tool", base, name, name, what, "Filled again the next time the tool needs it.", "Tool caches");
       }
     }
     for (const dir of places.tmpDirs) {
       for (const name of await safe(() => readdir(dir), [] as string[])) {
         if (TMP_NEVER.test(name) || name.startsWith(".hosts-")) continue;
-        await add("tmp", join(dir, name), name, "Left in the temporary folder", "Temporary files. Nothing should need them after 6 hours.", "Temporary files");
+        await add("tmp", dir, name, name, "Left in the temporary folder", "Temporary files. Nothing should need them after 6 hours.", "Temporary files");
       }
     }
     if (!out.length) warnings.push("No shared caches were found here.");
     return out;
+  }
+
+  /** The protected set for this host now: home, Paseo's data, agents' history, Hosts' folder, every workspace and worktree root. */
+  async protection(workspaces?: readonly WorkspaceInfo[]): Promise<ProtectedSet> {
+    const list = workspaces ?? await safe(() => this.deps.listWorkspaces(), [] as WorkspaceInfo[]);
+    const roots = (await Promise.all(list.map((workspace) => safe(() => realpath(workspace.directory), workspace.directory)))).concat(list.map((workspace) => workspace.directory));
+    const worktrees = await this.unlinkedWorktrees(roots);
+    const { places } = this.deps;
+    const aliases = await Promise.all([places.home, places.paseoHome, places.stateDir].map((path) => safe(() => realpath(path), path)));
+    return protectedSet(places, roots, worktrees, aliases);
   }
 
   /** The report: sizes from the last scan, status read fresh. Tokens are minted by the caller. */
@@ -302,6 +338,7 @@ export class DiskScanner {
       const path = await safe(() => realpath(workspace.directory), workspace.directory);
       byFolder.set(path, [...(byFolder.get(path) ?? []), workspace]);
     }
+    const guard = await this.protection(workspacesNow);
     const workspaces: WorkspaceUsage[] = [];
     const folderList = data?.folders ?? [...byFolder.keys()].map((path) => ({ key: `ws:${path}`, path, kind: "workspace" as const, result: null }));
     for (const folder of folderList) {
@@ -312,7 +349,7 @@ export class DiskScanner {
       const label = owners.length ? owners.map((owner) => owner.name).join(", ") : basename(folder.path);
       const items: ClearItem[] = (folder.result?.items ?? []).flatMap((item) => {
         const path = join(folder.path, item.rel);
-        const blocked = itemBlocked(item, data?.git[path] ?? null, path, this.deps.places);
+        const blocked = itemBlocked(item, data?.git[path] ?? null, path, guard);
         if (blocked === "hide") return [];
         const words = describeName(item.name)!;
         const why = blocked ?? busy;
@@ -382,18 +419,21 @@ export function folderAskText(folder: { path: string; bytes: number; branch: str
 }
 
 /**
- * Why a found folder can't be cleared, "hide" when it isn't clearable at all
- * (git tracks it, or it's a dist/build/out that git doesn't ignore: it's
- * just part of the project), or null when it may be.
+ * Why a found folder can't be cleared, "hide" when it's part of the project
+ * (git doesn't ignore it, tracks something in it, or sees untracked work in
+ * it), or null when it may be cleared. Clearable needs git's three definite
+ * answers (disk-git.ts); no answer, a cut-off check, a .env or .git inside,
+ * or a protected path all say no.
  */
-export function itemBlocked(item: Pick<WalkItem, "name" | "hasEnv" | "hasGit" | "ignoredOnly">, git: { tracked: boolean | null; ignored: boolean | null } | null, path: string, places: Pick<DiskPlaces, "home" | "paseoHome">): string | null | "hide" {
-  if (item.ignoredOnly && git?.ignored !== true) return "hide";
-  if (!git || git.tracked === null) return "Git couldn't check it, so Hosts leaves it.";
-  // Tracked means it's part of the project (a source folder that happens to be called "coverage"): not listed at all.
-  if (git.tracked) return "hide";
+export function itemBlocked(item: Pick<WalkItem, "name" | "hasEnv" | "hasGit" | "ignoredOnly" | "partial">, git: GitVerdict | null, path: string, guard: ProtectedSet): string | null | "hide" {
+  if (git && (git.ignored === false || git.tracked === true || git.untracked === true)) return "hide";
+  // dist/build/out are only build output when git says so; otherwise they're just part of the project.
+  if (item.ignoredOnly && !gitAllows(git)) return "hide";
+  if (item.partial) return "Not fully checked before the time ran out. Check again to clear it.";
+  if (!gitAllows(git)) return "Git couldn't confirm it's ignored build output (no repository, or no answer in time), so Hosts leaves it.";
   if (item.hasEnv) return "It has a .env file inside, so Hosts leaves it.";
   if (item.hasGit) return "It has a .git folder inside, so Hosts leaves it.";
-  return neverDelete(path, places);
+  return protectedReason(path, guard);
 }
 
 /** The disks the given folders live on, fullest first, one entry per device (statfs and stat only: instant). */

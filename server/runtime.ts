@@ -140,6 +140,8 @@ export function createRuntime(options: RuntimeOptions = {}) {
       return disk.cleaner.start(tokens);
     },
     status: (): DiskJob => disk ? disk.cleaner.status() : { state: "idle", freedBytes: 0, results: [], message: null },
+    /** Unloading: stop the scan and the clear job, kill their process groups (walk, find, rm, pnpm), and wait for both. */
+    async close(): Promise<void> { if (disk) await Promise.all([disk.scanner.close(), disk.cleaner.close()]); },
     /** "Ask an agent" about a worktree no workspace uses: only folders the last check found as such. */
     async folderAsk(id: string): Promise<AskContext | null> {
       const folder = disk?.scanner.last()?.folders.find((item) => item.key === id && item.kind === "worktree");

@@ -1,43 +1,49 @@
 import { execFile } from "node:child_process";
-import { setPriority } from "node:os";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import { lstat, readdir, realpath, rename, unlink } from "node:fs/promises";
+import { lstat, readdir, realpath } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import {
   CLEARABLE_NAMES, PROTECTED_NAME, TMP_MIN_AGE_HOURS, TMP_NEVER,
-  formatSize, isClearableName, isIgnoredOnlyName, neverDelete, olderVersions, toolCacheName,
-  type DiskJob, type DiskPlan,
+  formatSize, isClearableName, isIgnoredOnlyName, isWithin, olderVersions, protectedReason, protectedSet, toolCacheName,
+  type DiskJob, type DiskPlan, type ProtectedSet,
 } from "../shared/disk";
 import type { ActionLogEntry } from "../shared/processes";
-import { gitVerdicts, runGit, type GitRun } from "./disk-git";
-import { openPaths, usedBeneath, type OpenPaths } from "./disk-inuse";
-import { busyReason, homeRelative, workspaceState, type DiskPlaces, type WorkspaceInfo } from "./disk-scan";
-import { runWorker, type DeleteResult } from "./disk-worker";
-import { isAgentTool } from "./scope";
-import { classifyJob } from "./jobs";
+import { gitAllows, gitVerdicts, runGit, type GitRun } from "./disk-git";
+import { darwinCwds, openPaths, usedBeneath, type OpenPaths } from "./disk-inuse";
+import { ChildGroup, quarantineAndRemove, type DeleteResult, type RmFlavour } from "./disk-remove";
+import { busyReason, homeRelative, realRoot, workspaceState, type DiskPlaces, type WorkspaceInfo } from "./disk-scan";
+import { classifyJob, isPackageDownload } from "./jobs";
 import type { RawProcess } from "./platform";
+import { isAgentTool } from "./scope";
 
 /**
- * Clearing (0.14.0), after the person has seen the list and confirmed.
+ * Clearing (0.14.0, reviewed after a deletion-safety audit), after the person
+ * has seen the list and confirmed. Designed to fail closed: any doubt is a
+ * refusal with the reason.
  *
- * Each item is a signed token (HMAC, this process's key, 30 minutes) bound
- * to the folder's path, device, inode and modification time from the scan,
- * plus what it is (a workspace's build folder, a cache, a /tmp leftover).
- * Immediately before each item goes, every rule is checked again against a
- * fresh read; any doubt is a refusal with the reason:
- *  - it is still the same folder (lstat: device, inode, modification time),
- *    not a symlink, its real path is its path, it is on the same device as
- *    the folder it belongs to, and it is owned by this user;
- *  - it is still allow-listed for its kind, and never on the never list
- *    ($PASEO_HOME's data, ~/.claude, ~/.codex, a whole workspace…);
- *  - git still doesn't track anything in it (dist/build/out: still ignored);
- *  - nothing has it open or as its working directory, and no agent is
- *    working, waiting, or running a build, test or dev server in its workspace.
- * Then it is renamed out of the way (atomic, same folder), checked once more
- * to be the very same inode, and deleted by the low-priority worker, which
- * never follows a symlink, never leaves the device and never removes a .env
- * file or a .git folder. pnpm's store is pruned by pnpm itself. Every step is
- * logged as this user; nothing runs with raised privileges.
+ * Each item is a signed token (HMAC, this process's key, 30 minutes) bound to
+ * the folder's path, device, inode and modification time from the scan.
+ * Immediately before EACH item, with a fresh read of Paseo's workspaces, this
+ * user's processes and what they have open:
+ *  - it is the same real folder (lstat: device, inode, mtime; not a symlink),
+ *    owned by this user, and outside the protected set (never equal to,
+ *    inside, or an ancestor of home, Paseo's data, agents' history, Hosts'
+ *    folder or any workspace/worktree root);
+ *  - workspace items: the path is its own real path, inside a workspace or
+ *    worktree root, allow-listed by name, and git says right now that it is
+ *    ignored with nothing tracked and nothing untracked-and-unignored in it;
+ *    no agent is working or waiting there, no build/test/install/dev server
+ *    runs in it, and no such job runs anywhere with an unknown folder;
+ *  - shared caches: a real folder directly inside its known root (itself a
+ *    real folder), still allow-listed for its kind, and no package manager or
+ *    browser download is running for this user;
+ *  - nothing has a file in it open or as a working directory, and the
+ *    in-use picture is complete.
+ * Then disk-remove.ts quarantines it, re-checks the inode, refuses if a .env
+ * file or .git folder is inside, and deletes it with the system rm. pnpm's
+ * store is only ever pruned by pnpm. Every step is logged, as this user.
+ * Unloading Hosts stops the job between items and kills any running rm,
+ * find or pnpm with its whole process group.
  */
 
 export const TOKEN_TTL_MS = 30 * 60_000;
@@ -76,52 +82,64 @@ export interface CleanerDeps {
   tokens: DiskTokens;
   listWorkspaces(): Promise<WorkspaceInfo[]>;
   unlinkedWorktrees(claimed: readonly string[]): Promise<string[]>;
-  /** This user's processes now (for agents and jobs working inside a workspace). */
+  /** This user's processes now. */
   processes(): Promise<RawProcess[]>;
   openPaths?(): Promise<OpenPaths>;
+  /** macOS: working directories for these processes (the process list only knows them for listeners). */
+  cwds?(pids: readonly number[]): Promise<Map<number, string>>;
   pnpmStore(): Promise<string | null>;
   log(entry: ActionLogEntry): Promise<void>;
   /** Told what was freed, so the cached scan drops it. */
   cleared?(path: string, bytes: number): void;
   git?: GitRun;
-  remove?(path: string, dev: number): Promise<DeleteResult>;
-  prune?(): Promise<{ ok: boolean; message: string }>;
+  flavour?(): Promise<RmFlavour>;
+  /** Tests only: runs after quarantine and checks, just before rm. */
+  beforeRemove?(quarantined: string): Promise<void> | void;
+  prune?(group: ChildGroup): Promise<{ ok: boolean; message: string }>;
   now?: () => number;
 }
 
-interface Checked { ok: boolean; reason: string | null; payload: DiskTokenPayload | null; name: string; where: string; bytes: number; isFile: boolean }
+interface Checked { ok: boolean; reason: string | null; payload: DiskTokenPayload | null; name: string; where: string; bytes: number }
+
+/** One fresh look at the host, taken just before an item. */
+export interface Fresh { open: OpenPaths; workspaces: WorkspaceInfo[] | null; processes: RawProcess[] | null }
 
 const safe = async <T>(action: () => Promise<T>, fallback: T): Promise<T> => { try { return await action(); } catch { return fallback; } };
-const inside = (path: string, root: string) => path.startsWith(`${root.replace(/\/+$/, "")}/`);
 
-const defaultPrune = () => new Promise<{ ok: boolean; message: string }>((resolve) => {
-  const child = execFile("pnpm", ["store", "prune"], { timeout: 15 * 60_000, env: { ...process.env, NO_COLOR: "1" } }, (error) => resolve(error ? { ok: false, message: "pnpm couldn't prune its store." } : { ok: true, message: "pnpm removed the packages no project uses." }));
-  try { if (child.pid) setPriority(child.pid, 19); } catch { /* Best effort. */ }
-});
+const defaultPrune = async (group: ChildGroup) => {
+  const result = await group.run("pnpm", ["store", "prune"], { timeoutMs: 15 * 60_000, env: { ...process.env, NO_COLOR: "1" } });
+  return result.code === 0 ? { ok: true, message: "pnpm removed the packages no project uses." } : { ok: false, message: result.killed ? "Pruning was stopped before it finished." : "pnpm couldn't prune its store." };
+};
 
 export class DiskCleaner {
   private job: DiskJob = { state: "idle", freedBytes: 0, results: [], message: null };
   private running: Promise<void> | null = null;
   private readonly now: () => number;
+  private readonly group = new ChildGroup();
 
   constructor(private readonly deps: CleanerDeps) { this.now = deps.now ?? Date.now; }
 
   get isRunning(): boolean { return this.running !== null; }
   status(): DiskJob { return { ...this.job, results: [...this.job.results] }; }
 
+  /** Unloading: stop between items, kill any running rm/find/pnpm group, and wait for the job to end. */
+  async close(): Promise<void> { this.group.killAll(); await this.wait(); }
+
   /** The ask-first list: light checks only (the full checks run again just before each item goes). */
   async preview(tokens: readonly string[]): Promise<DiskPlan> {
     const items: DiskPlan["items"] = [];
+    const guard = await this.protection(await safe(() => this.deps.listWorkspaces(), [] as WorkspaceInfo[]));
     for (const token of tokens) {
       const payload = this.deps.tokens.verify(token);
       if (!payload) { items.push({ name: "Folder", where: "", owner: "", bytes: 0, action: "delete", cost: "", ok: false, reason: "This list is out of date. Check again and try once more." }); continue; }
       const st = await safe(() => lstat(payload.p), null);
-      const same = !!st && st.dev === payload.d && st.ino === payload.i && !st.isSymbolicLink();
+      const same = !!st && st.dev === payload.d && st.ino === payload.i && !st.isSymbolicLink() && st.isDirectory();
       const words = CLEARABLE_NAMES[basename(payload.p)];
+      const blocked = protectedReason(payload.p, guard);
       items.push({
         name: payload.n ?? basename(payload.p), where: homeRelative(payload.p, this.deps.places.home), owner: payload.o, bytes: payload.b, action: payload.a,
         cost: payload.c ?? (payload.a === "prune" ? "Removes only packages no project uses." : words?.cost ?? "Made again when it's needed."),
-        ok: same && !neverDelete(payload.p, this.deps.places), reason: !st ? "It's already gone." : same ? null : "It changed since it was checked. Check again first.",
+        ok: same && !blocked, reason: !st ? "It's already gone." : !same ? "It changed since it was checked. Check again first." : blocked,
       });
     }
     return { items, bytes: items.filter((item) => item.ok).reduce((sum, item) => sum + item.bytes, 0) };
@@ -129,7 +147,7 @@ export class DiskCleaner {
 
   /** Start clearing in the background; one job at a time. */
   start(tokens: readonly string[]): DiskJob {
-    if (this.running) return this.status();
+    if (this.running || this.group.closed) return this.status();
     this.job = { state: "running", freedBytes: 0, results: [], message: `Clearing ${tokens.length} item${tokens.length === 1 ? "" : "s"}… Each one is checked again just before it goes.` };
     this.running = this.run(tokens).catch((error) => {
       console.error("daemon-link: disk clear failed", error instanceof Error ? error.name : "unknown");
@@ -139,15 +157,25 @@ export class DiskCleaner {
   }
   wait(): Promise<void> { return this.running ?? Promise.resolve(); }
 
-  private async run(tokens: readonly string[]): Promise<void> {
-    // One picture of what's open and who's working, for the whole job; each item is still re-read just before it goes.
+  /** A fresh look at the host: open files, Paseo's workspaces, this user's processes (with macOS cwds for jobs). */
+  async fresh(): Promise<Fresh> {
     const [open, workspaces, processes] = await Promise.all([
       (this.deps.openPaths ?? (() => openPaths(this.deps.places.platform, this.deps.uid)))().catch(() => ({ paths: [], complete: false })),
       safe(() => this.deps.listWorkspaces(), null as WorkspaceInfo[] | null),
       safe(() => this.deps.processes(), null as RawProcess[] | null),
     ]);
+    if (processes && this.deps.places.platform === "darwin") {
+      const unknown = processes.filter((proc) => !proc.cwd && (classifyJob(proc.argv) !== null || isAgentTool(proc))).map((proc) => proc.pid);
+      const found = await safe(() => (this.deps.cwds ?? darwinCwds)(unknown), new Map<number, string>());
+      for (const proc of processes) if (!proc.cwd && found.has(proc.pid)) proc.cwd = found.get(proc.pid)!;
+    }
+    return { open, workspaces, processes };
+  }
+
+  private async run(tokens: readonly string[]): Promise<void> {
     for (const token of tokens) {
-      const checked = await this.check(token, open, workspaces, processes);
+      if (this.group.closed) { this.job.message = "Hosts was unloaded; clearing stopped between items."; return; }
+      const checked = await this.check(token, await this.fresh());
       const owner = checked.payload?.o ?? "";
       if (!checked.ok) {
         this.job.results.push({ name: checked.name, owner, ok: false, bytes: 0, message: checked.reason ?? "Not cleared." });
@@ -156,120 +184,94 @@ export class DiskCleaner {
       }
       const payload = checked.payload!;
       if (payload.a === "prune") {
-        const pruned = await (this.deps.prune ?? defaultPrune)();
+        const pruned = await (this.deps.prune ?? defaultPrune)(this.group);
         this.job.results.push({ name: checked.name, owner, ok: pruned.ok, bytes: 0, message: pruned.message });
         await this.record("disk-prune", checked, pruned.ok ? "done" : "failed", 0, `${pruned.message} Confirmed in the Paseo app.`);
         continue;
       }
-      const outcome = await this.remove(payload, checked.isFile);
-      const freed = outcome.removedBytes;
-      this.job.freedBytes += freed;
-      if (freed > 0 || outcome.ok) this.deps.cleared?.(payload.p, checked.bytes);
-      const message = outcome.ok ? `Cleared ${checked.name} (${formatSize(Math.max(freed, 0))}).` : outcome.error ?? `Cleared most of ${checked.name}; ${outcome.leftovers} item${outcome.leftovers === 1 ? " was" : "s were"} left (kept on purpose or in use).`;
-      this.job.results.push({ name: checked.name, owner, ok: outcome.ok, bytes: freed, message });
-      await this.record("disk-clear", checked, outcome.ok ? "done" : "failed", freed, `${message} Confirmed in the Paseo app.`);
+      const outcome: DeleteResult = await quarantineAndRemove(payload.p, { dev: payload.d, ino: payload.i, bytes: payload.b }, { group: this.group, flavour: this.deps.flavour, beforeRemove: this.deps.beforeRemove });
+      this.job.freedBytes += outcome.removedBytes;
+      if (outcome.ok) this.deps.cleared?.(payload.p, payload.b);
+      const message = outcome.ok ? `Cleared ${checked.name} (${formatSize(outcome.removedBytes)}).` : outcome.error ?? "It wasn't cleared.";
+      this.job.results.push({ name: checked.name, owner, ok: outcome.ok, bytes: outcome.removedBytes, message });
+      await this.record("disk-clear", checked, outcome.ok ? "done" : "failed", outcome.removedBytes, `${message} Confirmed in the Paseo app.`);
     }
     const ok = this.job.results.filter((result) => result.ok).length;
     this.job.message = `${ok} of ${tokens.length} cleared, ${formatSize(this.job.freedBytes)} freed.${ok < tokens.length ? " The rest were left; each says why." : ""}`;
   }
 
-  /** Every rule, against a fresh read. Public so tests can ask about one item. */
-  async check(token: string, open: OpenPaths, workspaces: WorkspaceInfo[] | null, processes: RawProcess[] | null): Promise<Checked> {
+  private async protection(workspaces: readonly WorkspaceInfo[]): Promise<ProtectedSet> {
+    const roots = (await Promise.all(workspaces.map((workspace) => safe(() => realpath(workspace.directory), workspace.directory)))).concat(workspaces.map((workspace) => workspace.directory));
+    const worktrees = await safe(() => this.deps.unlinkedWorktrees(roots), [] as string[]);
+    const { places } = this.deps;
+    const aliases = await Promise.all([places.home, places.paseoHome, places.stateDir].map((path) => safe(() => realpath(path), path)));
+    return protectedSet(places, roots, worktrees, aliases);
+  }
+
+  /** Every rule, against the fresh look. Public so tests can ask about one item. */
+  async check(token: string, now: Fresh): Promise<Checked> {
     const { places, uid } = this.deps;
     const payload = this.deps.tokens.verify(token);
-    const no = (reason: string, extra: Partial<Checked> = {}): Checked => ({ ok: false, reason, payload, name: payload ? payload.n ?? basename(payload.p) : "Folder", where: payload ? homeRelative(payload.p, places.home) : "", bytes: 0, isFile: false, ...extra });
+    const no = (reason: string): Checked => ({ ok: false, reason, payload, name: payload ? payload.n ?? basename(payload.p) : "Folder", where: payload ? homeRelative(payload.p, places.home) : "", bytes: 0 });
     if (!payload) return no("This list is out of date. Check again and try once more.");
     const path = payload.p;
     const st = await safe(() => lstat(path), null);
     if (!st) return no("It's already gone.");
     if (st.isSymbolicLink()) return no("It's a link to somewhere else, and Hosts never follows links.");
+    if (!st.isDirectory()) return no("It isn't a folder.");
     if (st.dev !== payload.d || st.ino !== payload.i) return no("It isn't the same folder that was checked any more. Check again first.");
     if (Math.floor(st.mtimeMs) !== payload.m) return no("It changed since it was checked (something wrote to it). Check again first.");
     if (st.uid !== uid) return no("It belongs to another user, and Hosts only clears this user's files.");
-    const real = await safe(() => realpath(path), null);
-    if (real !== path) return no("Its real location is somewhere else (a link on the way), so Hosts leaves it.");
-    const never = neverDelete(path, places);
-    if (never) return no(never);
-    const isFile = !st.isDirectory();
-    if (isFile && payload.k !== "tmp") return no("It isn't a folder any more.");
+    if (!now.workspaces) return no("Paseo's workspaces couldn't be read, so Hosts can't tell what's protected right now.");
+    if (!now.processes) return no("This host's processes couldn't be read, so Hosts can't tell what's running.");
+    const guard = await this.protection(now.workspaces);
+    const protectedWhy = protectedReason(path, guard);
+    if (protectedWhy) return no(protectedWhy);
+    const name = basename(path);
+    const parent = dirname(path);
 
-    // Allow-listed for its kind, inside the place it belongs, on the same device.
-    let root: string | null = null;
     if (payload.k === "workspace") {
-      if (!workspaces) return no("Paseo's workspaces couldn't be read, so Hosts can't confirm where this belongs.");
-      const folders = await Promise.all(workspaces.map(async (workspace) => ({ workspace, path: await safe(() => realpath(workspace.directory), null) })));
+      if ((await safe(() => realpath(path), null)) !== path) return no("Its real location is somewhere else (a link on the way), so Hosts leaves it.");
+      const folders = await Promise.all(now.workspaces.map(async (workspace) => ({ workspace, path: await safe(() => realpath(workspace.directory), null) })));
       const claimed = folders.filter((folder) => folder.path).map((folder) => folder.path!);
       const unlinked = await safe(() => this.deps.unlinkedWorktrees(claimed), [] as string[]);
-      root = [...claimed, ...unlinked].filter((folder) => inside(path, folder)).sort((a, b) => b.length - a.length)[0] ?? null;
+      const root = [...claimed, ...unlinked].filter((folder) => isWithin(path, folder)).sort((a, b) => b.length - a.length)[0] ?? null;
       if (!root) return no("It isn't inside one of your Paseo workspaces any more.");
-      const name = basename(path);
       if (!isClearableName(name) && !isIgnoredOnlyName(name)) return no("It isn't on the list of folders Hosts may clear.");
-      const owners = folders.filter((folder) => folder.path === root).map((folder) => folder.workspace);
-      const busy = owners.map((owner) => busyReason(workspaceState(owner.status), owner.devServers)).find(Boolean);
+      const busy = folders.filter((folder) => folder.path === root).map((folder) => busyReason(workspaceState(folder.workspace.status), folder.workspace.devServers)).find(Boolean);
       if (busy) return no(busy);
-      if (!processes) return no("This host's processes couldn't be read, so Hosts can't tell whether the workspace is busy.");
-      const worker = processes.find((proc) => proc.cwd && (proc.cwd === root || inside(proc.cwd, root!)) && (isAgentTool(proc) || classifyJob(proc.argv) !== null));
+      const jobs = now.processes.filter((proc) => classifyJob(proc.argv) !== null);
+      if (jobs.some((proc) => !proc.cwd)) return no("A build, test or install is running and Hosts can't tell in which folder, so it won't clear any workspace until that finishes.");
+      const worker = now.processes.find((proc) => proc.cwd && (proc.cwd === root || isWithin(proc.cwd, root)) && (isAgentTool(proc) || classifyJob(proc.argv) !== null));
       if (worker) return no(`Something is running in this workspace (${classifyJob(worker.argv)?.label ?? "an agent"}). Clear it once that's finished.`);
-      const verdict = (await safe(() => gitVerdicts([path], this.deps.git ?? runGit), new Map())).get(path);
-      if (!verdict || verdict.tracked === null) return no("Git couldn't check it, so Hosts leaves it.");
-      if (verdict.tracked) return no("Git tracks files in it, so it's part of the project, not build output.");
-      if (isIgnoredOnlyName(name) && verdict.ignored !== true) return no("Git doesn't ignore it, so it may be part of the project.");
+      const verdict = (await safe(() => gitVerdicts([path], this.deps.git ?? runGit, this.now() + 30_000), new Map())).get(path);
+      if (!gitAllows(verdict)) return no("Git didn't confirm it's ignored build output with nothing else inside, so Hosts leaves it.");
     } else {
-      const name = basename(path);
       if (PROTECTED_NAME.test(name)) return no("Agents' and Paseo's own files are never cleared.");
-      const parent = dirname(path);
-      if (payload.k === "npm") {
-        const npm = join(places.home, ".npm");
-        if (path !== join(npm, "_cacache") && path !== join(npm, "_npx")) return no("It isn't npm's cache.");
-        root = npm;
-      } else if (payload.k === "pnpm") {
-        const store = await safe(() => this.deps.pnpmStore(), null);
-        const storeReal = store ? await safe(() => realpath(store), null) : null;
-        if (!storeReal || storeReal !== path || payload.a !== "prune") return no("It isn't pnpm's store, or pnpm isn't available.");
-        root = dirname(path);
-      } else if (payload.k === "versions") {
-        const siblings = await safe(() => readdir(parent), [] as string[]);
-        if (!olderVersions(siblings).includes(name)) return no("It's the newest download of its kind now, so it stays.");
-        root = parent;
-      } else if (payload.k === "tool") {
-        if (!places.cacheBases.includes(parent) || !toolCacheName(name)) return no("It isn't one of the tool caches Hosts knows.");
-        root = parent;
-      } else if (payload.k === "tmp") {
-        if (!places.tmpDirs.includes(parent) || TMP_NEVER.test(name)) return no("It isn't a leftover in the temporary folder.");
+      const download = now.processes.find((proc) => isPackageDownload(proc.argv));
+      if (download) return no("A package install or browser download is running and may be using its caches. Try again once it's finished.");
+      // A real folder directly inside a known root that is itself a real folder. No canonicalising.
+      const roots = payload.k === "npm" ? [join(places.home, ".npm")]
+        : payload.k === "versions" ? places.browserRoots
+        : payload.k === "tool" ? places.cacheBases
+        : payload.k === "tmp" ? places.tmpDirs
+        : payload.k === "pnpm" ? [dirname(path)] : [];
+      if (!roots.includes(parent) || !await realRoot(parent)) return no("It isn't directly inside a cache folder Hosts knows, so Hosts leaves it.");
+      if (payload.k === "npm" && name !== "_cacache" && name !== "_npx") return no("It isn't npm's cache.");
+      if (payload.k === "versions" && !olderVersions(await safe(() => readdir(parent), [] as string[])).includes(name)) return no("It's the newest download of its kind now, so it stays.");
+      if (payload.k === "tool" && !toolCacheName(name)) return no("It isn't one of the tool caches Hosts knows.");
+      if (payload.k === "tmp") {
+        if (TMP_NEVER.test(name)) return no("It isn't a leftover in the temporary folder.");
         if ((this.now() - st.mtimeMs) / 3_600_000 < TMP_MIN_AGE_HOURS) return no("It changed in the last 6 hours, so it may still be in use.");
-        root = parent;
       }
-      if (!root) return no("Hosts doesn't know what this is.");
+      if (payload.k === "pnpm") {
+        const store = await safe(() => this.deps.pnpmStore(), null);
+        if (!store || store !== path || payload.a !== "prune") return no("It isn't pnpm's store, or pnpm isn't available.");
+      } else if (payload.a !== "delete") return no("Hosts doesn't know how to clear this.");
     }
-    const rootStat = await safe(() => lstat(root!), null);
-    if (!rootStat || rootStat.dev !== st.dev) return no("It's on a different disk from the folder it belongs to, so Hosts leaves it.");
-    if (path === root) return no("That's a whole folder Hosts never deletes.");
-    if (!open.complete) return no("Hosts couldn't check what's in use right now, so it left this alone.");
-    const using = usedBeneath(path, open.paths);
-    if (using) return no("Something has a file in it open right now. Try again once it's closed.");
-    return { ok: true, reason: null, payload, name: payload.n ?? basename(path), where: homeRelative(path, places.home), bytes: payload.b, isFile };
-  }
-
-  /** Rename out of the way (atomic), confirm it's the same inode, then delete at low priority. */
-  private async remove(payload: DiskTokenPayload, isFile: boolean): Promise<DeleteResult> {
-    if (isFile) {
-      const st = await safe(() => lstat(payload.p), null);
-      if (!st || st.ino !== payload.i || st.dev !== payload.d) return { ok: false, removedBytes: 0, leftovers: 0, partial: false, error: "It changed just before it was cleared, so it was left." };
-      try { await unlink(payload.p); return { ok: true, removedBytes: st.nlink <= 1 ? st.blocks * 512 : 0, leftovers: 0, partial: false }; }
-      catch { return { ok: false, removedBytes: 0, leftovers: 1, partial: false, error: "It couldn't be removed." }; }
-    }
-    const aside = join(dirname(payload.p), `.hosts-clearing-${basename(payload.p)}-${randomBytes(4).toString("hex")}`);
-    try { await rename(payload.p, aside); } catch { return { ok: false, removedBytes: 0, leftovers: 0, partial: false, error: "It couldn't be moved aside to clear, so it was left." }; }
-    const moved = await safe(() => lstat(aside), null);
-    if (!moved || moved.ino !== payload.i || moved.dev !== payload.d || moved.isSymbolicLink()) {
-      await safe(() => rename(aside, payload.p), undefined);
-      return { ok: false, removedBytes: 0, leftovers: 0, partial: false, error: "It changed just before it was cleared, so it was put back." };
-    }
-    const remove = this.deps.remove ?? (async (path: string, dev: number) => {
-      const run = await runWorker<DeleteResult>({ op: "delete", path, dev, deadline: Date.now() + 20 * 60_000 }, 21 * 60_000);
-      return run.results[0] ?? { ok: false, removedBytes: 0, leftovers: 0, partial: true, error: "Clearing took too long and stopped; what's left is set aside and can be cleared again." };
-    });
-    return remove(aside, payload.d);
+    if (!now.open.complete) return no("Hosts couldn't check what's in use right now, so it left this alone.");
+    if (usedBeneath(path, now.open.paths)) return no("Something has a file in it open right now. Try again once it's closed.");
+    return { ok: true, reason: null, payload, name: payload.n ?? name, where: homeRelative(path, places.home), bytes: payload.b };
   }
 
   private record(action: ActionLogEntry["action"], checked: Checked, status: ActionLogEntry["status"], bytes: number, message: string) {

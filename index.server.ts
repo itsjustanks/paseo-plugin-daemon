@@ -105,5 +105,5 @@ export default function contribute(server: PluginServerContext) {
   server.handle(peer.peerServices, ({ id }, context) => runtime.withContext(context, () => runtime.peers.services(id)));
   server.handle(peer.peerForward, ({ id, port }, context) => runtime.withContext(context, () => runtime.peers.forward(id, port)));
   server.handle(peer.peerDisconnect, ({ id }, context) => runtime.withContext(context, () => runtime.peers.disconnect(id)));
-  return async () => { removeHooks(); unsubscribe(); health.close(); runtime.guard?.close(); runtime.processes.close(); await Promise.all([runtime.links.close(), runtime.peers.close(), runtime.transfers.close()]); };
+  return async () => { removeHooks(); unsubscribe(); health.close(); runtime.guard?.close(); await runtime.disk.close().catch(() => undefined); runtime.processes.close(); await Promise.all([runtime.links.close(), runtime.peers.close(), runtime.transfers.close()]); };
 }

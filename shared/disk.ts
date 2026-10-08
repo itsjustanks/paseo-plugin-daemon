@@ -127,7 +127,7 @@ export const toolCacheName = (name: string): string | null => {
 /** Names a cache or /tmp scan never offers, whatever they hold: agents' history and Paseo's own state. */
 export const PROTECTED_NAME = /claude|codex|paseo|anthropic|openai/i;
 
-/** /tmp entries are offered only when this old (newest change inside included). */
+/** /tmp folders are offered only when this old (newest change inside included). */
 export const TMP_MIN_AGE_HOURS = 6;
 /** System and session folders in /tmp that are never leftovers. */
 export const TMP_NEVER = /^(\.X11-unix|\.ICE-unix|\.font-unix|\.XIM-unix|\.Test-unix|tmux-|ssh-|systemd-|snap-|com\.apple|launchd|powerlog|claude|codex|paseo)/i;
@@ -160,21 +160,46 @@ export function compareVersions(a: readonly number[], b: readonly number[]): num
 }
 
 /**
- * Paths nothing in Hosts may ever delete, whatever a scan or a token says:
- * the home folder and its agents' history, Paseo's home (worktrees inside it
- * are allowed only for allow-listed folders deep inside a worktree), and the
- * filesystem root. `target` and every entry are absolute, normalised paths.
+ * What Hosts protects, whatever a scan or a token says (0.14.0, reviewed).
+ *  - `whole`: never deleted, and never an ancestor of a target either (so a
+ *    /tmp folder that happens to contain $PASEO_HOME is refused): home,
+ *    Paseo's home, ~/.claude, ~/.codex, every workspace and worktree root,
+ *    Hosts' own state folder, and /.
+ *  - `inside`: nothing beneath these is ever deleted: ~/.claude, ~/.codex,
+ *    Hosts' state folder, and Paseo's home except inside a worktree root
+ *    (where a worktree's own build folders live).
+ * Paths are absolute and normalised; callers pass each protected path both
+ * as given and as its real path, so a symlinked home is still matched.
  */
-export function neverDelete(target: string, places: { home: string; paseoHome: string }): string | null {
-  const inside = (root: string) => target === root || target.startsWith(`${root.replace(/\/+$/, "")}/`);
-  if (target === "/" || target === places.home) return "That's a whole folder Hosts never deletes.";
-  for (const agentHome of [".claude", ".codex"]) if (inside(`${places.home}/${agentHome}`)) return "Agents' history and settings are your data. Hosts never deletes them.";
-  if (inside(places.paseoHome)) {
-    const worktrees = `${places.paseoHome}/worktrees/`;
-    // Inside $PASEO_HOME only allow-listed folders inside a worktree: worktrees/<project>/<slug>/…/<item>.
-    if (!target.startsWith(worktrees) || target.slice(worktrees.length).split("/").length < 3) return "Paseo's own data (settings, history, logs). Hosts never deletes it.";
+export interface ProtectedSet { whole: readonly string[]; inside: readonly string[]; worktreeRoots: readonly string[] }
+
+const trim = (path: string) => (path.length > 1 ? path.replace(/\/+$/, "") : path);
+export const isWithin = (path: string, root: string) => { const r = trim(root); return r === "/" ? path !== "/" : path.startsWith(`${r}/`); };
+
+export function protectedReason(target: string, set: ProtectedSet): string | null {
+  const path = trim(target);
+  for (const raw of set.whole) {
+    const root = trim(raw);
+    if (path === root) return "That's a whole folder Hosts never deletes.";
+    if (isWithin(root, path)) return "It contains a folder Hosts protects (your home, Paseo's data, agents' history or a workspace), so Hosts leaves it.";
+  }
+  for (const raw of set.inside) {
+    const root = trim(raw);
+    if (!isWithin(path, root)) continue;
+    if (set.worktreeRoots.some((worktree) => isWithin(path, worktree) && isWithin(trim(worktree), root))) continue;
+    return /\.(claude|codex)(\/|$)/.test(root) ? "Agents' history and settings are your data. Hosts never deletes them." : "Paseo's own data (settings, history, logs) and Hosts' own files are never deleted.";
   }
   return null;
+}
+
+/** The protected set for a home, Paseo home and state folder, plus the given workspace and worktree roots. */
+export function protectedSet(places: { home: string; paseoHome: string; stateDir: string }, workspaceRoots: readonly string[], worktreeRoots: readonly string[], aliases: readonly string[] = []): ProtectedSet {
+  const agents = [`${trim(places.home)}/.claude`, `${trim(places.home)}/.codex`];
+  return {
+    whole: [...new Set([places.home, places.paseoHome, ...agents, places.stateDir, ...workspaceRoots, ...worktreeRoots, "/", ...aliases].map(trim))],
+    inside: [...new Set([...agents, places.stateDir, places.paseoHome].map(trim))],
+    worktreeRoots: worktreeRoots.map(trim),
+  };
 }
 
 // --------------------------------------------------------- wire types

@@ -91,6 +91,28 @@ export function isScriptTestRun(argv: readonly string[]): boolean {
   return args.some((arg) => !arg.startsWith("-") && /\.(test|spec)\.[cm]?[jt]sx?$/.test(arg));
 }
 
+const PACKAGE_RUNNERS = /^(npm|pnpm|yarn|bun)$/;
+const ALWAYS_DOWNLOADS = /^(npx|pnpx|bunx)$/;
+const DOWNLOAD_VERBS = /^(install|i|ci|add|update|up|upgrade|dlx|x|exec|create|init|fetch|import|rebuild|store|cache)$/;
+
+/**
+ * A package manager or browser download at work (0.14.0): npm/pnpm/yarn/bun
+ * installing or fetching, npx-style runners (they download first), and
+ * Playwright or agent-browser installing browsers. While one runs, shared
+ * caches and pnpm's store are left alone: it may be writing to them.
+ */
+export function isPackageDownload(argv: readonly string[]): boolean {
+  // npm's own entry is often run as `node …/npm/bin/npm-cli.js`.
+  const all = argv.slice(0, 12).map((arg) => base(arg).replace(/^(npm|npx)-cli$/, "$1"));
+  const at = all.findIndex((word) => PACKAGE_RUNNERS.test(word) || ALWAYS_DOWNLOADS.test(word) || word === "playwright" || word === "agent-browser");
+  if (at < 0) return false;
+  const tool = all[at]!;
+  const rest = argv.slice(at + 1, at + 6).filter((arg) => !arg.startsWith("-")).map((arg) => arg.toLowerCase());
+  if (ALWAYS_DOWNLOADS.test(tool)) return true;
+  if (tool === "playwright" || tool === "agent-browser") return rest[0] === "install";
+  return rest.length === 0 ? tool !== "bun" : DOWNLOAD_VERBS.test(rest[0]!);
+}
+
 /** Paseo's own processes: the daemon, its supervisor, plugin hosts, terminal workers and its bundled tools. */
 export function isPaseoInternal(process: { argv: readonly string[]; comm: string }): boolean {
   const first = process.argv[0] ?? "";
