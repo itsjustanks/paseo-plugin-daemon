@@ -59,8 +59,9 @@ export function diskWorker(fs: FsLike, request: ScanRequest, emit: (result: unkn
   // 0.16.0 review fix: names compared folded (Unicode NFC, lower case), as a case-insensitive disk sees them.
   var fold = function (name: string) { return String(name).normalize("NFC").toLowerCase(); };
   var clearable: Record<string, true> = {}, ignoredOnly: Record<string, true> = {};
-  request.clearable.forEach(function (name) { clearable[fold(name)] = true; });
-  request.ignoredOnly.forEach(function (name) { ignoredOnly[fold(name)] = true; });
+  // Eligibility is exact (the spelling readdir returns must be the allow-listed one); protection folds.
+  request.clearable.forEach(function (name) { clearable[name] = true; });
+  request.ignoredOnly.forEach(function (name) { ignoredOnly[name] = true; });
   var isEnv = function (name: string) { var folded = fold(name); return folded === ".env" || folded.indexOf(".env.") === 0; };
   var isGit = function (name: string) { return fold(name) === ".git"; };
 
@@ -112,9 +113,9 @@ export function diskWorker(fs: FsLike, request: ScanRequest, emit: (result: unkn
       var item = entry.item;
       var inGit = entry.git || isGit(name);
       if (spec.mode === "workspace" && item < 0 && !inGit && entry.depth > 0 && result.items.length < request.maxItemsPerRoot) {
-        var only = !!ignoredOnly[fold(name)] && entry.depth <= request.ignoredMaxDepth;
-        if (clearable[fold(name)] || only) {
-          result.items.push({ rel: entry.rel, name: name, dev: stat.dev, ino: stat.ino, mtimeMs: stat.mtimeMs, bytes: bytes, sharedBytes: 0, partial: false, hasEnv: false, hasGit: false, depth: entry.depth, ignoredOnly: !clearable[fold(name)] });
+        var only = Object.prototype.hasOwnProperty.call(ignoredOnly, name) && entry.depth <= request.ignoredMaxDepth;
+        if (Object.prototype.hasOwnProperty.call(clearable, name) || only) {
+          result.items.push({ rel: entry.rel, name: name, dev: stat.dev, ino: stat.ino, mtimeMs: stat.mtimeMs, bytes: bytes, sharedBytes: 0, partial: false, hasEnv: false, hasGit: false, depth: entry.depth, ignoredOnly: !Object.prototype.hasOwnProperty.call(clearable, name) });
           item = result.items.length - 1;
         }
       }

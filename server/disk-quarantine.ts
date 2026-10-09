@@ -1,4 +1,4 @@
-import { lstat, mkdir, readFile, rename, rmdir, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rename, rmdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 /**
@@ -17,16 +17,23 @@ import { dirname, join } from "node:path";
  */
 
 /**
- * `stage` (0.16.0 review fix): "moved" once the item is set aside, "removing"
- * just before rm starts. A "removing" entry (or one without a stage) is never
- * put back as if whole: part of it may already be gone.
+ * `stage` (second review): "moving" before the rename (the original may still
+ * be where it was), "moved" after the look inside (with `manifest`: what was
+ * in it), "removing" just before rm starts. `outcome`, once known, is what
+ * the report says: "left" (whole, couldn't go back), "partial" (rm removed
+ * part of it), "unconfirmed" (Hosts can't tell how complete it is).
  */
-export interface QuarantineEntry { quarantine: string; original: string; name: string; dev: number; ino: number; bytes: number; at: number; stage?: "moved" | "removing" }
+export interface QuarantineEntry {
+  quarantine: string; original: string; name: string; dev: number; ino: number; bytes: number; at: number;
+  stage?: "moving" | "moved" | "removing";
+  manifest?: { entries: number; bytes: number };
+  outcome?: "left" | "partial" | "unconfirmed";
+}
 export interface JournalRead { entries: QuarantineEntry[]; problem: string | null }
-export interface RecoveryOutcome { restored: QuarantineEntry[]; left: QuarantineEntry[]; partial: QuarantineEntry[]; unchecked: QuarantineEntry[]; problem: string | null }
-/** What the report shows for each entry: left (couldn't go back), partial (an interrupted delete removed part of it), unchecked (couldn't be looked at). */
-export type EntryState = "left" | "partial" | "unchecked";
+export interface RecoveryOutcome { restored: QuarantineEntry[]; dropped: QuarantineEntry[]; left: QuarantineEntry[]; partial: QuarantineEntry[]; unconfirmed: QuarantineEntry[]; unchecked: QuarantineEntry[]; problem: string | null }
+export type EntryState = "left" | "partial" | "unconfirmed" | "unchecked";
 export interface JournalStatus { problem: string | null; entries: Array<QuarantineEntry & { state: EntryState }> }
+export type Measure = (path: string) => Promise<{ entries: number; bytes: number } | null>;
 
 export const JOURNAL_PROBLEM = "Hosts' record of interrupted deletes couldn't be read, so it isn't sure what was set aside. Nothing is deleted until it's checked.";
 export const UNCHECKED_PROBLEM = "Hosts couldn't check a leftover from an interrupted delete, so nothing is deleted until it can.";
@@ -48,7 +55,9 @@ const isEntry = (value: unknown): value is QuarantineEntry => {
     && typeof entry.original === "string" && entry.original.startsWith("/")
     && typeof entry.name === "string" && entry.name.length > 0 && !entry.name.includes("/")
     && Number.isFinite(entry.dev) && Number.isFinite(entry.ino) && Number.isFinite(entry.bytes) && Number.isFinite(entry.at)
-    && (entry.stage === undefined || entry.stage === "moved" || entry.stage === "removing");
+    && (entry.stage === undefined || entry.stage === "moving" || entry.stage === "moved" || entry.stage === "removing")
+    && (entry.outcome === undefined || entry.outcome === "left" || entry.outcome === "partial" || entry.outcome === "unconfirmed")
+    && (entry.manifest === undefined || (!!entry.manifest && Number.isFinite(entry.manifest.entries) && Number.isFinite(entry.manifest.bytes)));
 };
 
 /**
@@ -116,7 +125,11 @@ export class QuarantineInventory {
     return next;
   }
 
-  add(entry: QuarantineEntry): Promise<void> { return this.change((entries) => [...entries.filter((item) => item.quarantine !== entry.quarantine), { stage: "moved" as const, ...entry }]); }
+  add(entry: QuarantineEntry): Promise<void> { return this.change((entries) => [...entries.filter((item) => item.quarantine !== entry.quarantine), { stage: "moving" as const, ...entry }]); }
+  /** After the look inside: set aside, untouched, with what was in it. */
+  moved(quarantine: string, manifest: { entries: number; bytes: number }): Promise<void> { return this.change((entries) => entries.map((item) => (item.quarantine === quarantine ? { ...item, stage: "moved" as const, manifest } : item))); }
+  /** What the report says about it, once known. */
+  outcome(quarantine: string, outcome: "left" | "partial" | "unconfirmed"): Promise<void> { return this.change((entries) => entries.map((item) => (item.quarantine === quarantine ? { ...item, outcome } : item))); }
   done(quarantine: string): Promise<void> { return this.change((entries) => entries.filter((item) => item.quarantine !== quarantine)); }
   /** Recorded just before rm starts: from here on the item is never put back as if whole. */
   removing(quarantine: string): Promise<void> { return this.change((entries) => entries.map((item) => (item.quarantine === quarantine ? { ...item, stage: "removing" as const } : item))); }
@@ -129,7 +142,8 @@ export class QuarantineInventory {
     for (const entry of read.entries) {
       const quarantine = await look(entry.quarantine);
       if (quarantine.state === "absent") continue;
-      entries.push({ ...entry, state: quarantine.state === "unknown" ? "unchecked" : entry.stage === "moved" ? "left" : "partial" });
+      // An entry without an outcome yet is a delete in progress or one recovery hasn't looked at: unconfirmed.
+      entries.push({ ...entry, state: quarantine.state === "unknown" ? "unchecked" : entry.outcome ?? "unconfirmed" });
     }
     return { problem: entries.some((entry) => entry.state === "unchecked") ? UNCHECKED_PROBLEM : null, entries };
   }
@@ -142,7 +156,7 @@ export class QuarantineInventory {
   /** The person read "an interrupted delete removed part of…" and dismissed it: only then is that record dropped. */
   async dismiss(quarantine: string): Promise<boolean> {
     const status = await this.status();
-    const entry = status.entries.find((item) => item.quarantine === quarantine && item.state === "partial");
+    const entry = status.entries.find((item) => item.quarantine === quarantine && (item.state === "partial" || item.state === "unconfirmed"));
     if (!entry) return false;
     await this.done(quarantine);
     return true;
@@ -153,30 +167,61 @@ export class QuarantineInventory {
    * one whose item can go back without replacing anything is put back; the
    * rest stay listed, untouched. A damaged journal is reported, not acted on.
    */
-  async recover(): Promise<RecoveryOutcome> {
-    const outcome: RecoveryOutcome = { restored: [], left: [], partial: [], unchecked: [], problem: null };
+  /**
+   * On load. Only ENOENT is "gone"; any other error keeps the entry
+   * (unchecked, blocks deletes). Then, by stage:
+   *  - "moving": the original is still there and the quarantine is empty or
+   *    gone: nothing happened, the entry is dropped. Otherwise the item was
+   *    moved but never counted: unconfirmed, left set aside.
+   *  - "moved" / "removing": counted again; exactly the manifest means
+   *    untouched, so it goes back whole (never replacing anything; a conflict
+   *    leaves it whole, set aside). Anything else: "removing" was partly
+   *    removed, "moved" changed while set aside (unconfirmed).
+   * Nothing is ever said to be restored unless it went back whole.
+   */
+  async recover(measure: Measure): Promise<RecoveryOutcome> {
+    const outcome: RecoveryOutcome = { restored: [], dropped: [], left: [], partial: [], unconfirmed: [], unchecked: [], problem: null };
     const read = await this.inspect();
     if (read.problem) return { ...outcome, problem: read.problem };
+    const settle = async (entry: QuarantineEntry, state: "left" | "partial" | "unconfirmed") => {
+      if (entry.outcome !== state) await this.outcome(entry.quarantine, state).catch(() => undefined);
+      outcome[state].push(entry);
+    };
     for (const entry of read.entries) {
       const quarantine = await look(entry.quarantine);
-      // Only ENOENT is "gone" (rm finished); any other error keeps the entry and blocks deletes.
       if (quarantine.state === "absent") { await this.done(entry.quarantine).catch(() => undefined); continue; }
       if (quarantine.state === "unknown") { outcome.unchecked.push(entry); continue; }
-      // rm had started: part of it may be gone, so it's never put back as if whole. It stays listed until dismissed.
-      if (entry.stage !== "moved") { outcome.partial.push(entry); continue; }
       const moved = join(entry.quarantine, entry.name);
       const item = await look(moved);
       if (item.state === "unknown") { outcome.unchecked.push(entry); continue; }
-      if (item.state === "present" && item.isDir && !item.isLink && item.ino === entry.ino && quarantine.isDir && !quarantine.isLink) {
-        const result = await moveNoReplace(moved, entry.original, entry.ino);
+      if (entry.stage === "moving") {
+        const original = await look(entry.original);
+        const empty = item.state === "absent" && (await readdir(entry.quarantine).catch(() => null))?.length === 0;
+        if (original.state === "present" && empty) {
+          await rmdir(entry.quarantine).catch(() => undefined);
+          await this.done(entry.quarantine).catch(() => undefined);
+          outcome.dropped.push(entry);
+          continue;
+        }
+        await settle(entry, "unconfirmed");
+        continue;
+      }
+      if (entry.outcome === "partial") { outcome.partial.push(entry); continue; }
+      if (item.state !== "present" || !item.isDir || item.isLink || !quarantine.isDir || quarantine.isLink || !entry.manifest) { await settle(entry, entry.stage === "removing" ? "partial" : "unconfirmed"); continue; }
+      const now = await measure(moved).catch(() => null);
+      if (!now) { await settle(entry, "unconfirmed"); continue; }
+      if (now.entries === entry.manifest.entries && now.bytes === entry.manifest.bytes) {
+        const result = await moveNoReplace(moved, entry.original, item.ino);
         if (result === "moved") {
           await rmdir(entry.quarantine).catch(() => undefined);
           await this.done(entry.quarantine).catch(() => undefined);
           outcome.restored.push(entry);
           continue;
         }
+        await settle(entry, "left");
+        continue;
       }
-      outcome.left.push(entry);
+      await settle(entry, entry.stage === "removing" ? "partial" : "unconfirmed");
     }
     outcome.problem = outcome.unchecked.length ? UNCHECKED_PROBLEM : null;
     return outcome;

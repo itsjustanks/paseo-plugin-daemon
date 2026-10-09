@@ -29,6 +29,8 @@ import { join } from "node:path";
 import { isWithin, type DiskJob, type DiskPlan, type DiskReport } from "../shared/disk";
 import { DiskCleaner, DiskTokens, defaultTmpRoots } from "./disk-clear";
 import { JOURNAL_PROBLEM, QuarantineInventory } from "./disk-quarantine";
+import { measure } from "./disk-remove";
+import { ChildGroup } from "./disk-children";
 
 /** A disk report or ask waits this long for the registry or a process snapshot, then uses what it has. */
 export const REPORT_READ_MS = 5000;
@@ -97,7 +99,8 @@ export function createRuntime(options: RuntimeOptions = {}) {
     // 0.16.0: one-press Clear, for build folders inside a workspace or worktree only (disk-clear.ts).
     const tokens = new DiskTokens();
     const inventory = new QuarantineInventory(join(places.stateDir, "quarantine.json"));
-    void inventory.recover().then((outcome) => {
+    const recoveryGroup = new ChildGroup();
+    void inventory.recover((path) => measure(path, recoveryGroup, Date.now() + 5 * 60_000)).then((outcome) => {
       if (outcome.restored.length) console.log(`daemon-link: put back ${outcome.restored.length} folder(s) an interrupted clear had set aside`);
     }).catch(() => undefined);
     const tmpRoots = defaultTmpRoots();
@@ -165,9 +168,11 @@ export function createRuntime(options: RuntimeOptions = {}) {
       const journal = await disk.inventory.status().catch(() => ({ problem: JOURNAL_PROBLEM, entries: [] }));
       const leftovers = disk.cleaner.isRunning ? [] : journal.entries.map((entry) => {
         const where = friendlyPath(entry.original, { home: disk!.places.home, paseoHome: disk!.places.paseoHome }).label;
+        // Only what's known (second review).
         const message = entry.state === "partial" ? `An interrupted delete removed part of ${where}. Run the project's install to rebuild it. What's left of it is set aside in a hidden folder beside it; ask an agent to remove it.`
           : entry.state === "unchecked" ? `Couldn't check a leftover from an interrupted delete (${where}). Nothing is deleted until Hosts can look at it.`
-          : `Left over from an interrupted delete: ${where} couldn't be put back without replacing something, so it's set aside, untouched.`;
+          : entry.state === "unconfirmed" ? `An interrupted delete set ${where} aside, and Hosts can't confirm how complete it is. If the project needs it, run its install to rebuild it. It's set aside in a hidden folder beside it; ask an agent to check it.`
+          : `Left over from an interrupted delete: ${where} is set aside, whole and untouched, because it couldn't be put back without replacing something.`;
         return { id: `leftover:${entry.quarantine}`, name: entry.name, where, bytes: entry.bytes, at: entry.at, state: entry.state, message };
       });
       return { ...report, leftovers, journalProblem: journal.problem };

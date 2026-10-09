@@ -54,6 +54,23 @@ belongs to. `requirements.paseo` stays `>=0.9.0`; no settings change, so no migr
   - A delete interrupted after rm started is never shown as restored: "An interrupted delete
     removed part of <folder>. Run the project's install to rebuild it." stays until dismissed, with
     Ask an agent for what's left.
+- **Second data-safety review fixes (before release):**
+  - Deleting needs the exact allow-listed spelling: a hand-made `Build` is never taken for `build`
+    (on a case-insensitive disk the parent folder must list exactly that spelling). The protective
+    checks (.env, .git, protected places) still ignore case and Unicode form.
+  - A process that names a path in the workspace on its command line (`python3 -m http.server
+    --directory …/dist`) uses it, wherever it runs.
+  - macOS: a process that exited between ps and lsof (or whose number now belongs to a newer
+    process) is dropped instead of blocking every workspace; only a live, unexplained one refuses.
+    On this Mac, 20 snapshots in a row gave no false refusals.
+  - A shell reading a script (`bash < build.sh`) or not attached to a terminal is busy.
+  - The journal records "moving" before the rename, "moved" with a count of what was inside after
+    the look inside, and "removing" just before rm. After a crash Hosts puts a folder back whole only
+    when its contents match that count exactly; otherwise it says only what it knows ("removed part
+    of…" only when rm had started, "can't confirm how complete it is" otherwise).
+  - **Known limit:** a program that starts using a build folder in the split second after the last
+    check can still lose it. The worst case is running the install or build again. (Source,
+    hand-made files, credentials and git data are never in scope.)
 - **Where processes belong.** Processes groups rows under their project and workspace ("project-hub ·
   feature-x", "Not in a workspace", "Paseo itself") and each row shows its project chip. What needs
   attention on Overview and in the sidebar popover says which project it's in.

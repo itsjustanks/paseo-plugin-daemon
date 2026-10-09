@@ -1,8 +1,8 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { lstat } from "node:fs/promises";
+import { lstat, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename } from "node:path";
+import { basename, dirname } from "node:path";
 import { describeName, formatSize, isClearableName, isIgnoredOnlyName, isWithin, protectedReason, type DiskJob, type DiskPlan } from "../shared/disk";
 import { friendlyPath } from "../shared/paths";
 import type { ActionLogEntry } from "../shared/processes";
@@ -264,6 +264,9 @@ export class DiskCleaner {
     if (protectedWhy) return no(protectedWhy);
     const name = basename(path);
     if (!isClearableName(name) && !isIgnoredOnlyName(name)) return no("It isn't on the list of build folders Hosts may delete.");
+    // Exactly that spelling on disk (a case-insensitive disk would also answer to "NODE_MODULES" or "Build").
+    const siblings = await readdir(dirname(path)).catch(() => null);
+    if (!siblings || !siblings.includes(name)) return no("Its name on disk isn't exactly one Hosts may delete, so it leaves it.");
     const roots = [...guard.workspaceRoots, ...guard.worktreeRoots];
     const root = roots.filter((folder) => isWithin(path, folder)).sort((a, b) => b.length - a.length)[0] ?? null;
     if (!root) return no("It isn't inside one of your Paseo workspaces any more.");

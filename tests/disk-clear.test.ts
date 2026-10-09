@@ -8,7 +8,7 @@ import { ChildGroup } from "../server/disk-children";
 import { DiskCleaner, DiskTokens } from "../server/disk-clear";
 import { busyInWorkspace, hostSnapshot, lsofPids, parseLsof, parsePs, statusUids, titleArgv, usedBeneath, type HostSnapshot, type SnapshotDeps } from "../server/disk-inuse";
 import { JOURNAL_PROBLEM, QuarantineInventory, moveNoReplace } from "../server/disk-quarantine";
-import { quarantineAndRemove, rmArgs } from "../server/disk-remove";
+import { measure, quarantineAndRemove, rmArgs } from "../server/disk-remove";
 import { DiskScanner, type DiskPlaces, type WorkspaceInfo } from "../server/disk-scan";
 import { classifyJob } from "../server/jobs";
 import { DiskReportSchema, isBigDelete } from "../shared/disk";
@@ -27,6 +27,8 @@ const big = (path: string, bytes = MB) => { mkdirSync(join(path, ".."), { recurs
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.invalid" } });
 const UID = process.getuid!();
 const bare = (path: string) => { mkdirSync(join(path, "objects"), { recursive: true }); mkdirSync(join(path, "refs", "heads"), { recursive: true }); writeFileSync(join(path, "HEAD"), "ref: refs/heads/main\n"); };
+/** The real count the probe and recovery use. */
+const measureIt = (path: string) => measure(path, new ChildGroup(), Date.now() + 60_000);
 const hasQuarantine = (dir: string) => readdirSync(dir).some((name) => name.startsWith(".hosts-quarantine-"));
 
 let root = "";
@@ -61,7 +63,7 @@ function world() {
 
 const idleWorkspace = (status = "done", directory = app): WorkspaceInfo => ({ id: "wks_1", name: "App", project: "app", directory, worktree: false, status, activityAt: Date.now() - 3_600_000, branch: "main", devServers: [] });
 const calm = (processes: HostSnapshot["processes"] = [], open: string[] = []): HostSnapshot => ({ processes, open, complete: true, why: null });
-const proc = (argv: string[], cwd: string | null = app, pid = 9, ppid: number | null = 1) => ({ pid, ppid, argv, cwd });
+const proc = (argv: string[], cwd: string | null = app, pid = 9, ppid: number | null = 1, stdin: "tty" | "file" | "pipe" | "none" | "other" = "tty") => ({ pid, ppid, argv, cwd, stdin });
 
 async function scanned(workspaces: WorkspaceInfo[] = [idleWorkspace()]) {
   const scanner = new DiskScanner({ places, uid: UID, listWorkspaces: async () => workspaces, cacheFile: null, scanSeconds: 60, pnpmStore: async () => null });
@@ -132,13 +134,14 @@ describe("one complete snapshot, or nothing", () => {
   });
 
   it("macOS: ps or lsof failing, or a live process with no lsof record, is incomplete; zombies and exited processes are fine", async () => {
-    const deps = (ps: { code: number | null; stdout: string }, lsof: { code: number | null; stdout: string }, alive: (pid: number) => boolean = () => true): SnapshotDeps => ({ readdir: async () => [], readFile: async () => "", readlink: async () => "", run: async (file: string) => (file === "ps" ? ps : lsof), alive });
-    expect(await hostSnapshot("darwin", 501, deps({ code: 1, stdout: "  9 1 501 S node x.js\n" }, { code: 0, stdout: "" }))).toMatchObject({ complete: false, why: expect.stringMatching(/ps/) });
-    expect(await hostSnapshot("darwin", 501, deps({ code: 0, stdout: "  9 1 501 S node x.js\n" }, { code: 1, stdout: "p9\nfcwd\nn/Users/x/app\n" }))).toMatchObject({ complete: false, why: expect.stringMatching(/lsof/) });
-    expect(await hostSnapshot("darwin", 501, deps({ code: 0, stdout: "  9 1 501 S node x.js\n 11 1 501 S vim\n" }, { code: 0, stdout: "p9\nfcwd\nn/Users/x/app\n" }))).toMatchObject({ complete: false, why: expect.stringMatching(/PID 11/) });
-    const ok = await hostSnapshot("darwin", 501, deps({ code: 0, stdout: "  9 1 501 S npm run build\n 10 0 0 Ss /sbin/launchd\n 12 1 501 Z (node)\n 13 1 501 S gone\n" }, { code: 0, stdout: "p9\nfcwd\nn/Users/x/app\nf12\nn/Users/x/app/dist/a.js\n" }, (pid) => pid !== 13));
-    expect(ok).toEqual({ complete: true, why: null, processes: [{ pid: 9, ppid: 1, argv: ["npm", "run", "build"], cwd: "/Users/x/app" }, { pid: 13, ppid: 1, argv: ["gone"], cwd: null }], open: ["/Users/x/app", "/Users/x/app/dist/a.js"] });
-    expect(parsePs("  9 3 501 S a b\n 10 1 0 S c\n", 501)).toEqual([{ pid: 9, ppid: 3, argv: ["a", "b"], zombie: false }]);
+    const deps = (ps: { code: number | null; stdout: string }, lsof: { code: number | null; stdout: string }, alive: (pid: number) => boolean = () => true): SnapshotDeps => ({ readdir: async () => [], readFile: async () => "", readlink: async () => "", run: async (file: string) => (file === "ps" ? ps : lsof), alive, startOf: async (pid) => (alive(pid) ? "Thu Oct 8 17:01:23 2026" : null) });
+    expect(await hostSnapshot("darwin", 501, deps({ code: 1, stdout: "  9 1 501 S Thu Oct  8 17:01:23 2026 node x.js\n" }, { code: 0, stdout: "" }))).toMatchObject({ complete: false, why: expect.stringMatching(/ps/) });
+    expect(await hostSnapshot("darwin", 501, deps({ code: 0, stdout: "  9 1 501 S Thu Oct  8 17:01:23 2026 node x.js\n" }, { code: 1, stdout: "p9\nfcwd\nn/Users/x/app\n" }))).toMatchObject({ complete: false, why: expect.stringMatching(/lsof/) });
+    expect(await hostSnapshot("darwin", 501, deps({ code: 0, stdout: "  9 1 501 S Thu Oct  8 17:01:23 2026 node x.js\n 11 1 501 S Thu Oct  8 17:01:23 2026 vim\n" }, { code: 0, stdout: "p9\nfcwd\nn/Users/x/app\n" }))).toMatchObject({ complete: false, why: expect.stringMatching(/PID 11/) });
+    const ok = await hostSnapshot("darwin", 501, deps({ code: 0, stdout: "  9 1 501 S Thu Oct  8 17:01:23 2026 npm run build\n 10 0 0 Ss Thu Oct  8 17:01:23 2026 /sbin/launchd\n 12 1 501 Z Thu Oct  8 17:01:23 2026 (node)\n 13 1 501 S Thu Oct  8 17:01:23 2026 gone\n" }, { code: 0, stdout: "p9\nfcwd\nn/Users/x/app\nf12\nn/Users/x/app/dist/a.js\n" }, (pid) => pid !== 13));
+    // PID 13 exited (no lsof record, not alive): dropped, so it can't block every workspace as "folder unknown".
+    expect(ok).toEqual({ complete: true, why: null, processes: [{ pid: 9, ppid: 1, argv: ["npm", "run", "build"], cwd: "/Users/x/app", stdin: "none" }], open: ["/Users/x/app", "/Users/x/app/dist/a.js"] });
+    expect(parsePs("  9 3 501 S Thu Oct  8 17:01:23 2026 a b\n 10 1 0 S Thu Oct  8 17:01:23 2026 c\n", 501)).toEqual([{ pid: 9, ppid: 3, argv: ["a", "b"], zombie: false, start: "Thu Oct 8 17:01:23 2026" }]);
     expect(parseLsof("p9\nfcwd\nn/a\n").cwd.get(9)).toBe("/a");
     expect([...lsofPids("p9\nfcwd\nn/a\np10\n")]).toEqual([9, 10]);
   });
@@ -222,13 +225,15 @@ describe("the quarantine journal and putting things back", () => {
     const st = lstatSync(original);
     await inventory.add({ quarantine, original, name: "node_modules", dev: st.dev, ino: st.ino, bytes: 3 * MB, at: Date.now() });
     renameSync(original, join(quarantine, "node_modules"));
+    // A crash after the look inside: "moved", with what was in it.
+    await inventory.moved(quarantine, (await measureIt(join(quarantine, "node_modules")))!);
     return quarantine;
   }
 
   it("puts an interrupted clear back where its place is still free", async () => {
     const inventory = new QuarantineInventory(join(places.stateDir, "quarantine.json"));
     await interrupted(inventory, join(app, "node_modules"));
-    const outcome = await inventory.recover();
+    const outcome = await inventory.recover(measureIt);
     expect(outcome.restored).toHaveLength(1);
     expect(existsSync(join(app, "node_modules", "react", "index.js"))).toBe(true);
     expect(hasQuarantine(app)).toBe(false);
@@ -241,7 +246,7 @@ describe("the quarantine journal and putting things back", () => {
       const quarantine = await interrupted(inventory, join(app, "node_modules"));
       mkdirSync(join(app, "node_modules"));
       if (fill) big(join(app, "node_modules", "fresh-install.js"), 10);
-      const outcome = await inventory.recover();
+      const outcome = await inventory.recover(measureIt);
       expect(outcome.left).toHaveLength(1);
       expect(existsSync(join(quarantine, "node_modules", "react", "index.js"))).toBe(true);
       if (fill) expect(existsSync(join(app, "node_modules", "fresh-install.js"))).toBe(true);
@@ -268,7 +273,7 @@ describe("the quarantine journal and putting things back", () => {
       writeFileSync(file, content);
       const inventory = new QuarantineInventory(file);
       expect((await inventory.inspect()).problem).toBe(JOURNAL_PROBLEM);
-      expect((await inventory.recover()).problem).toBe(JOURNAL_PROBLEM);
+      expect((await inventory.recover(measureIt)).problem).toBe(JOURNAL_PROBLEM);
       await expect(inventory.add({ quarantine: "/q", original: "/o", name: "n", dev: 1, ino: 1, bytes: 1, at: 1 })).rejects.toThrow();
       expect((await import("node:fs")).readFileSync(file, "utf8")).toBe(content);
       const { scanner, tokens, report } = await scanned();
@@ -424,8 +429,10 @@ describe("Astra review of 09b0955", () => {
     const { foldName, isClearableName, isEnvFile, describeName, protectedReason, protectedSet } = await import("../shared/disk");
     expect(isEnvFile(".ENV.production")).toBe(true);
     expect(isEnvFile(".Env")).toBe(true);
-    expect(isClearableName("Node_Modules")).toBe(true);
-    expect(describeName("NODE_MODULES")?.what).toBe("Installed packages");
+    // Eligibility is exact (second review): protection folds, deleting doesn't.
+    expect(isClearableName("Node_Modules")).toBe(false);
+    expect(describeName("NODE_MODULES")).toBeNull();
+    expect(isClearableName("node_modules")).toBe(true);
     expect(foldName("café")).toBe(foldName("café"));
     const set = protectedSet({ home: "/home/u", paseoHome: "/home/u/.paseo", stateDir: "/home/u/.paseo/daemon-link" }, ["/home/u/code/app"], []);
     expect(protectedReason("/home/u/.Claude/x", set)).toMatch(/Agents' history/);
@@ -459,7 +466,7 @@ describe("Astra review of 09b0955", () => {
   });
 
   it("3: macOS, both ways: a live PID in lsof but not in ps is incomplete; one that has gone since is fine", async () => {
-    const deps = (lsofOut: string, alive: (pid: number) => boolean): SnapshotDeps => ({ readdir: async () => [], readFile: async () => "", readlink: async () => "", run: async (file: string) => (file === "ps" ? { code: 0, stdout: "  9 1 501 S node x.js\n" } : { code: 0, stdout: lsofOut }), alive });
+    const deps = (lsofOut: string, alive: (pid: number) => boolean): SnapshotDeps => ({ readdir: async () => [], readFile: async () => "", readlink: async () => "", run: async (file: string) => (file === "ps" ? { code: 0, stdout: "  9 1 501 S Thu Oct  8 17:01:23 2026 node x.js\n" } : { code: 0, stdout: lsofOut }), alive, startOf: async () => "Thu Oct 8 17:01:23 2026" });
     expect(await hostSnapshot("darwin", 501, deps("p9\nfcwd\nn/Users/x/app\np77\nfcwd\nn/Users/x/app/node_modules\n", () => true))).toMatchObject({ complete: false, why: expect.stringMatching(/PID 77/) });
     expect(await hostSnapshot("darwin", 501, deps("p9\nfcwd\nn/Users/x/app\np77\nfcwd\nn/Users/x/app\n", (pid) => pid !== 77))).toMatchObject({ complete: true });
     // A process whose folder is inside the workspace uses it, open files beneath or not.
@@ -497,7 +504,7 @@ describe("Astra review of 09b0955", () => {
     await inventory.add({ quarantine, original: join(app, "build"), name: "build", dev: 1, ino: 1, bytes: 10, at: Date.now() });
     chmodSync(locked, 0o000);
     try {
-      const outcome = await inventory.recover();
+      const outcome = await inventory.recover(measureIt);
       expect(outcome.unchecked).toHaveLength(1);
       expect(outcome.problem).toBe(UNCHECKED_PROBLEM);
       expect(await inventory.list()).toHaveLength(1);
@@ -524,17 +531,165 @@ describe("Astra review of 09b0955", () => {
     renameSync(join(app, "node_modules"), join(quarantine, "node_modules"));
     await inventory.removing(quarantine);
     rmSync(join(quarantine, "node_modules", "react"), { recursive: true });
-    const outcome = await inventory.recover();
+    const outcome = await inventory.recover(measureIt);
     expect(outcome.restored).toEqual([]);
     expect(outcome.partial).toHaveLength(1);
     expect(existsSync(join(app, "node_modules"))).toBe(false);
     expect((await inventory.status()).entries).toEqual([expect.objectContaining({ state: "partial", quarantine })]);
     expect(await inventory.blocker()).toBeNull();
     // A second load changes nothing; only dismissing drops the record.
-    await inventory.recover();
+    await inventory.recover(measureIt);
     expect(await inventory.list()).toHaveLength(1);
     expect(await inventory.dismiss(quarantine)).toBe(true);
     expect(await inventory.list()).toEqual([]);
     expect(existsSync(quarantine)).toBe(true);
+  });
+});
+
+describe("Astra re-review of de4291e", () => {
+  it("1: eligibility is the exact spelling: a hand-made Build is never build, on a case-sensitive or case-insensitive disk", async () => {
+    const { diskWorker } = await import("../server/disk-worker");
+    const { CLEARABLE_NAMES, IGNORED_ONLY_NAMES } = await import("../shared/disk");
+    // A case-sensitive disk (fake fs): both "Build" and "build" exist side by side.
+    const dirStat = { isDirectory: () => true, isSymbolicLink: () => false, dev: 1, ino: 1, nlink: 1, size: 0, blocks: 0, mtimeMs: 1 };
+    const files: Record<string, string[]> = { "/w": ["Build", "build", "NODE_MODULES", "node_modules"], "/w/Build": [], "/w/build": [], "/w/NODE_MODULES": [], "/w/node_modules": [] };
+    let ino = 10;
+    const fs = { lstatSync: () => ({ ...dirStat, ino: ino++ }), readdirSync: (path: string) => files[path] ?? [] };
+    const results: Array<{ items: Array<{ name: string }> }> = [];
+    diskWorker(fs as never, { op: "scan", roots: [{ id: "w", path: "/w", mode: "workspace" }], deadline: Date.now() + 10_000, clearable: Object.keys(CLEARABLE_NAMES), ignoredOnly: Object.keys(IGNORED_ONLY_NAMES), ignoredMaxDepth: 4, maxItemsPerRoot: 50 }, (result) => results.push(result as never));
+    expect(results[0]!.items.map((entry) => entry.name).sort()).toEqual(["build", "node_modules"]);
+    // This Mac's disk (usually case-insensitive): a real "Build" folder, git-ignored, is never offered, and a forged token for it is refused.
+    mkdirSync(join(app, "Build", "src"), { recursive: true }); writeFileSync(join(app, "Build", "src", "notes.txt"), "hand-made\n");
+    writeFileSync(join(app, ".gitignore"), "node_modules\n.next\ndist/\n.env\nBuild/\nbuild/\n");
+    const { scanner, tokens, report } = await scanned();
+    expect(report.workspaces.flatMap((w) => w.items).map((entry) => entry.where)).not.toContain("Build");
+    const job = await run(cleaner(tokens, scanner).instance, [mintFor(tokens, join(app, "Build"))]);
+    expect(job.results[0]).toMatchObject({ ok: false });
+    expect(existsSync(join(app, "Build", "src", "notes.txt"))).toBe(true);
+    // On a case-insensitive disk ".../build" opens the "Build" folder: a token spelled "build" is still refused (the parent lists "Build").
+    if (existsSync(join(app, "build"))) {
+      const st = lstatSync(join(app, "build"));
+      const forged = tokens.mint({ path: join(app, "build"), root: app, dev: st.dev, ino: st.ino, mtimeMs: st.mtimeMs, workspace: "App", bytes: 1, what: "x", cost: "y" });
+      const second = await run(cleaner(tokens, scanner).instance, [forged]);
+      expect(second.results[0]).toMatchObject({ ok: false, message: expect.stringMatching(/name on disk isn't exactly|isn't where its name says/) });
+      expect(existsSync(join(app, "Build", "src", "notes.txt"))).toBe(true);
+    }
+  });
+});
+
+describe("Astra re-review of de4291e (2, 3, 5)", () => {
+  const classify = (argv: string[]) => classifyJob(argv)?.label ?? null;
+  it("2: a process that names a path in the workspace on its command line uses it, wherever it runs", async () => {
+    const { argvPaths, workspaceUsers } = await import("../server/disk-inuse");
+    expect(argvPaths({ argv: ["python3", "-m", "http.server", "--directory", `${app}/dist`], cwd: "/elsewhere" })).toContain(`${app}/dist`);
+    expect(argvPaths({ argv: [`--root=${app}/dist`], cwd: null })).toContain(`${app}/dist`);
+    expect(argvPaths({ argv: ["serve", "../app/dist"], cwd: join(app, "..", "other") })).toContain(join(app, "dist"));
+    expect(workspaceUsers({ processes: [proc(["python3", "-m", "http.server", "--directory", `${app}/dist`], "/elsewhere")] }, app, classify)).toMatchObject({ unknownFolder: false });
+    expect(workspaceUsers({ processes: [proc(["node", "server.js", "--port=3000"], "/elsewhere")] }, app, classify)).toBeNull();
+    const { scanner, tokens, report } = await scanned();
+    let calls = 0;
+    // Started between the check and the final look: the final look sees it by its argv and puts the folder back.
+    const job = await run(cleaner(tokens, scanner, { snapshot: async () => (calls++ === 0 ? calm() : calm([proc(["python3", "-m", "http.server", "--directory", join(app, "dist")], "/elsewhere", 70)])) }).instance, [item(report, "dist")!.token!]);
+    expect(job.results[0]).toMatchObject({ ok: false, message: expect.stringMatching(/put back/) });
+    expect(existsSync(join(app, "dist", "main.js"))).toBe(true);
+  });
+
+  it("5: a bare shell reading a script (bash < build.sh) or not on a terminal is busy; only a terminal shell is idle", async () => {
+    const { workspaceUsers, stdinFromLink, parseLsof } = await import("../server/disk-inuse");
+    expect(workspaceUsers({ processes: [proc(["bash"], app, 50, 1, "tty")] }, app, classify)).toBeNull();
+    for (const stdin of ["file", "pipe", "none", "other"] as const) expect(workspaceUsers({ processes: [proc(["bash"], app, 50, 1, stdin)] }, app, classify), stdin).toMatchObject({ why: expect.stringMatching(/reading a script/) });
+    expect(stdinFromLink("/dev/pts/3")).toBe("tty");
+    expect(stdinFromLink("/home/u/app/build.sh")).toBe("file");
+    expect(stdinFromLink("pipe:[1234]")).toBe("pipe");
+    expect(stdinFromLink(null)).toBe("none");
+    const lsof = parseLsof("p9\nf0\ntCHR\nn/dev/ttys003\np10\nf0\ntREG\nn/Users/x/app/build.sh\np11\nf0\ntPIPE\nn->0x1234\n");
+    expect([lsof.stdin.get(9), lsof.stdin.get(10), lsof.stdin.get(11)]).toEqual(["tty", "file", "pipe"]);
+    const { scanner, tokens, report } = await scanned();
+    const job = await run(cleaner(tokens, scanner, { snapshot: async () => calm([proc(["bash"], app, 50, 1, "file")]) }).instance, [item(report, ".next")!.token!]);
+    expect(job.results[0]).toMatchObject({ ok: false });
+    expect(existsSync(join(app, ".next", "cache", "a.bin"))).toBe(true);
+  });
+
+  it("3: macOS: an exited ps row is dropped; a reused PID (different start) is dropped; a live one with the same start refuses", async () => {
+    const D = "Thu Oct  8 17:01:23 2026";
+    const deps = (alive: (pid: number) => boolean, start: (pid: number) => string | null): SnapshotDeps => ({ readdir: async () => [], readFile: async () => "", readlink: async () => "", alive, startOf: async (pid) => start(pid),
+      run: async (file: string) => (file === "ps" ? { code: 0, stdout: `  9 1 501 S ${D} node x.js\n 13 1 501 S ${D} gone\n` } : { code: 0, stdout: "p9\nfcwd\nn/Users/x/app\n" }) });
+    expect(await hostSnapshot("darwin", 501, deps((pid) => pid !== 13, () => "Thu Oct 8 17:01:23 2026"))).toMatchObject({ complete: true, processes: [{ pid: 9 }] });
+    expect(await hostSnapshot("darwin", 501, deps(() => true, (pid) => (pid === 13 ? "Thu Oct 8 17:09:59 2026" : "Thu Oct 8 17:01:23 2026")))).toMatchObject({ complete: true, processes: [{ pid: 9 }] });
+    expect(await hostSnapshot("darwin", 501, deps(() => true, () => "Thu Oct 8 17:01:23 2026"))).toMatchObject({ complete: false, why: expect.stringMatching(/PID 13/) });
+  });
+});
+
+describe("Astra re-review of de4291e (4: crash stages)", () => {
+  const set = async (inventory: QuarantineInventory, original: string, stage: "moving" | "moved" | "removing", manifest = true) => {
+    const { mkdtempSync } = await import("node:fs");
+    const quarantine = mkdtempSync(join(join(original, ".."), ".hosts-quarantine-"));
+    const st = lstatSync(original);
+    await inventory.add({ quarantine, original, name: "node_modules", dev: st.dev, ino: st.ino, bytes: 3 * MB, at: Date.now() });
+    if (stage === "moving") return quarantine;
+    renameSync(original, join(quarantine, "node_modules"));
+    if (manifest) await inventory.moved(quarantine, (await measureIt(join(quarantine, "node_modules")))!);
+    if (stage === "removing") await inventory.removing(quarantine);
+    return quarantine;
+  };
+  const journal = () => new QuarantineInventory(join(places.stateDir, `q-${Math.random()}.json`));
+
+  it("moving, original still there, quarantine empty: nothing happened, the entry is dropped", async () => {
+    const inventory = journal();
+    const quarantine = await set(inventory, join(app, "node_modules"), "moving");
+    const outcome = await inventory.recover(measureIt);
+    expect(outcome.dropped).toHaveLength(1);
+    expect(await inventory.list()).toEqual([]);
+    expect(existsSync(quarantine)).toBe(false);
+    expect(existsSync(join(app, "node_modules", "react", "index.js"))).toBe(true);
+  });
+
+  it("moving, item already moved but never counted: unconfirmed, left set aside, not called restored", async () => {
+    const inventory = journal();
+    const quarantine = await set(inventory, join(app, "node_modules"), "moving");
+    renameSync(join(app, "node_modules"), join(quarantine, "node_modules"));
+    const outcome = await inventory.recover(measureIt);
+    expect(outcome.unconfirmed).toHaveLength(1);
+    expect(outcome.restored).toEqual([]);
+    expect((await inventory.status()).entries[0]).toMatchObject({ state: "unconfirmed" });
+  });
+
+  it("removing, contents exactly the manifest: rm never got going, so it goes back whole", async () => {
+    const inventory = journal();
+    await set(inventory, join(app, "node_modules"), "removing");
+    const outcome = await inventory.recover(measureIt);
+    expect(outcome.restored).toHaveLength(1);
+    expect(existsSync(join(app, "node_modules", "react", "index.js"))).toBe(true);
+  });
+
+  it("removing with anything missing is partly removed; moved with a change is unconfirmed; neither goes back", async () => {
+    const a = journal();
+    const qa = await set(a, join(app, "node_modules"), "removing");
+    rmSync(join(qa, "node_modules", "react", "index.js"));
+    expect((await a.recover(measureIt)).partial).toHaveLength(1);
+    expect(existsSync(join(app, "node_modules"))).toBe(false);
+    const b = journal();
+    const qb = await set(b, join(app, ".next"), "moved");
+    // (set() names it node_modules inside the quarantine; what matters is the count changed.)
+    writeFileSync(join(qb, "node_modules", "extra"), "x");
+    expect((await b.recover(measureIt)).unconfirmed).toHaveLength(1);
+    expect(existsSync(join(app, ".next"))).toBe(false);
+  });
+
+  it("an rm that stops part way in this session is reported as partly removed, never as restored", async () => {
+    const { chmodSync } = await import("node:fs");
+    const inventory = journal();
+    const st = lstatSync(join(app, "node_modules"));
+    let locked = "";
+    const result = await quarantineAndRemove(join(app, "node_modules"), { dev: st.dev, ino: st.ino, bytes: 1 }, {
+      group: new ChildGroup(), deadline: Date.now() + 120_000, inventory,
+      // A folder rm can't empty: everything else goes, this stays.
+      beforeRemove: (moved) => { mkdirSync(join(moved, "stuck", "inner"), { recursive: true }); writeFileSync(join(moved, "stuck", "inner", "f"), "x"); locked = join(moved, "stuck"); chmodSync(locked, 0o500); },
+    });
+    try {
+      expect(result).toMatchObject({ ok: false, partial: true, error: expect.stringMatching(/part of it is gone|can't say how much/) });
+      expect((await inventory.status()).entries[0]?.state).toMatch(/partial|unconfirmed/);
+      expect(existsSync(join(app, "node_modules"))).toBe(false);
+    } finally { if (locked) chmodSync(locked, 0o700); }
   });
 });

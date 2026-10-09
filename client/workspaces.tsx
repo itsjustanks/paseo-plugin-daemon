@@ -81,7 +81,7 @@ function Leftovers({ theme, report }: { theme: Theme; report: DiskReport }) {
           <Meta theme={theme}>{`${formatSize(leftover.bytes)} when it was set aside · ${ago(leftover.at)}`}</Meta>
           <Row>
             <AskAgentButton theme={theme} subject={{ kind: "folder", id: leftover.id }} />
-            {leftover.state === "partial" ? <Button theme={theme} label="Dismiss" accessibilityLabel={`Dismiss the note about ${leftover.where}`} onPress={() => void dismiss({ id: leftover.id }).then((result) => { if (!result.ok) toast.show("That note couldn't be dismissed. Check disk space again.", { variant: "warning" }); void client.invalidateQueries({ queryKey: ["daemon-link"] }); })} /> : null}
+            {leftover.state === "partial" || leftover.state === "unconfirmed" ? <Button theme={theme} label="Dismiss" accessibilityLabel={`Dismiss the note about ${leftover.where}`} onPress={() => void dismiss({ id: leftover.id }).then((result) => { if (!result.ok) toast.show("That note couldn't be dismissed. Check disk space again.", { variant: "warning" }); void client.invalidateQueries({ queryKey: ["daemon-link"] }); })} /> : null}
           </Row>
         </View>
       ))}

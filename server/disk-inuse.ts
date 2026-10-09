@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { normalize, resolve } from "node:path";
 import { readdir, readFile, readlink } from "node:fs/promises";
 import { mapLimit } from "./platform";
 
@@ -23,8 +24,22 @@ import { mapLimit } from "./platform";
  *    nothing").
  */
 
-/** `ppid`: its parent, so an "idle" shell with a child at work is seen as busy (0.16.0 review fix). */
-export interface SnapshotProcess { pid: number; ppid: number | null; argv: string[]; cwd: string | null }
+/**
+ * `ppid`: its parent, so an "idle" shell with a child at work is seen as busy.
+ * `stdin`: what fd 0 is: a terminal ("tty"), a file or a pipe (a shell reading
+ * a script: `bash < build.sh`), nothing, or something else; null when unknown.
+ */
+export type StdinKind = "tty" | "file" | "pipe" | "none" | "other";
+export interface SnapshotProcess { pid: number; ppid: number | null; argv: string[]; cwd: string | null; stdin?: StdinKind | null }
+
+/** Linux: what /proc/<pid>/fd/0 points at. */
+export function stdinFromLink(target: string | null): StdinKind {
+  if (target === null) return "none";
+  if (/^\/dev\/(pts\/|tty)/.test(target)) return "tty";
+  if (target.startsWith("pipe:")) return "pipe";
+  if (target.startsWith("/")) return "file";
+  return "other";
+}
 export interface HostSnapshot { processes: SnapshotProcess[]; open: string[]; complete: boolean; why: string | null }
 
 export interface SnapshotDeps {
@@ -34,6 +49,8 @@ export interface SnapshotDeps {
   run(file: string, args: string[]): Promise<{ code: number | null; stdout: string }>;
   /** Is this PID still running? (kill 0; ESRCH = gone.) */
   alive?(pid: number): boolean;
+  /** macOS: this PID's start time now ("ps -o lstart= -p"), or null when it's gone. */
+  startOf?(pid: number): Promise<string | null>;
 }
 
 const isAlive = (pid: number) => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; } };
@@ -57,27 +74,39 @@ export function statusUids(text: string): number[] | null {
 }
 
 /** `lsof -Fpfn`: per process, its cwd (`fcwd`) and every absolute path it has open. */
-export function parseLsof(text: string): { cwd: Map<number, string>; open: string[] } {
+export function parseLsof(text: string): { cwd: Map<number, string>; open: string[]; stdin: Map<number, StdinKind> } {
   const cwd = new Map<number, string>();
   const open: string[] = [];
-  let pid: number | null = null, fd = "";
+  const stdin = new Map<number, StdinKind>();
+  let pid: number | null = null, fd = "", type = "";
   for (const line of text.split("\n")) {
-    if (line.startsWith("p")) { pid = Number(line.slice(1)); fd = ""; }
-    else if (line.startsWith("f")) fd = line.slice(1);
-    else if (line.startsWith("n/")) {
-      const path = line.slice(1).replace(/ \((deleted|stat: .*)\)$/, "");
+    if (line.startsWith("p")) { pid = Number(line.slice(1)); fd = ""; type = ""; }
+    else if (line.startsWith("f")) { fd = line.slice(1); type = ""; }
+    else if (line.startsWith("t")) {
+      type = line.slice(1);
+      // fd 0: a terminal (CHR on a tty device, settled by its name below), a pipe, a file, or something else.
+      if (fd === "0" && pid !== null) stdin.set(pid, type === "PIPE" || type === "FIFO" ? "pipe" : type === "REG" ? "file" : type === "CHR" ? "other" : "other");
+    } else if (line.startsWith("n")) {
+      const name = line.slice(1);
+      if (fd === "0" && pid !== null && type === "CHR") stdin.set(pid, /^\/dev\/(ttys?\d|pts\/|tty)/.test(name) ? "tty" : "other");
+      if (!name.startsWith("/")) continue;
+      const path = name.replace(/ \((deleted|stat: .*)\)$/, "");
       open.push(path);
       if (fd === "cwd" && pid !== null) cwd.set(pid, path);
     }
   }
-  return { cwd, open };
+  return { cwd, open, stdin };
 }
 
-/** `ps -axo pid=,ppid=,uid=,stat=,command=` rows for one user. Lossy argv (space-split), which is enough to spot a build or an install. */
-export function parsePs(text: string, uid: number): Array<{ pid: number; ppid: number; argv: string[]; zombie: boolean }> {
+/**
+ * `ps -axo pid=,ppid=,uid=,stat=,lstart=,command=` rows for one user. Lossy
+ * argv (space-split), which is enough to spot a build or an install; `start`
+ * is ps's start time ("Thu Oct  8 17:01:23 2026"), so a reused PID is told apart.
+ */
+export function parsePs(text: string, uid: number): Array<{ pid: number; ppid: number; argv: string[]; zombie: boolean; start: string }> {
   return text.split("\n").flatMap((line) => {
-    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(line);
-    return match && Number(match[3]) === uid ? [{ pid: Number(match[1]), ppid: Number(match[2]), argv: match[5]!.trim().split(/\s+/), zombie: match[4]!.startsWith("Z") }] : [];
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\w{3}\s+\w{3}\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+(.*)$/.exec(line);
+    return match && Number(match[3]) === uid ? [{ pid: Number(match[1]), ppid: Number(match[2]), argv: match[6]!.trim().split(/\s+/), zombie: match[4]!.startsWith("Z"), start: match[5]!.replace(/\s+/g, " ") }] : [];
   });
 }
 
@@ -101,8 +130,8 @@ export async function hostSnapshot(platform: "linux" | "darwin", uid: number, de
   const incomplete = (why: string): HostSnapshot => ({ processes: [], open: [], complete: false, why });
   if (platform === "darwin") {
     const [ps, lsof] = await Promise.all([
-      deps.run("ps", ["-axo", "pid=,ppid=,uid=,stat=,command="]).catch(() => ({ code: null, stdout: "" })),
-      deps.run("lsof", ["-nP", "-w", "-Fpfn", "-u", String(uid)]).catch(() => ({ code: null, stdout: "" })),
+      deps.run("ps", ["-axo", "pid=,ppid=,uid=,stat=,lstart=,command="]).catch(() => ({ code: null, stdout: "" })),
+      deps.run("lsof", ["-nP", "-w", "-Fpftn", "-u", String(uid)]).catch(() => ({ code: null, stdout: "" })),
     ]);
     if (ps.code !== 0) return incomplete("The process list (ps) couldn't be read completely.");
     if (lsof.code !== 0) return incomplete("What's open (lsof) couldn't be read completely.");
@@ -110,15 +139,23 @@ export async function hostSnapshot(platform: "linux" | "darwin", uid: number, de
     const seen = lsofPids(lsof.stdout);
     const rows = parsePs(ps.stdout, uid);
     const alive = deps.alive ?? isAlive;
-    // Both ways (0.16.0 review fix). A live process of this user that lsof said nothing about: Hosts can't
-    // tell what it has open. A live process lsof saw that ps didn't list: Hosts can't tell what it is.
-    // Only a process that has verifiably gone since may be missing from one of them.
-    const unseen = rows.find((row) => !row.zombie && !seen.has(row.pid) && alive(row.pid));
-    if (unseen) return incomplete(`What one of your processes (PID ${unseen.pid}) has open couldn't be read.`);
+    // Both ways. A ps row lsof said nothing about: if that process has exited, or its PID now belongs to a
+    // process that started later, it's dropped; a live one with the same start time is unexplained, so the
+    // picture is incomplete. A live process lsof saw that ps didn't list is unexplained too.
+    const startOf = deps.startOf ?? (async (pid: number) => { const out = await deps.run("ps", ["-o", "lstart=", "-p", String(pid)]).catch(() => ({ code: null, stdout: "" })); return out.code === 0 && out.stdout.trim() ? out.stdout.trim().replace(/\s+/g, " ") : null; });
+    const kept: typeof rows = [];
+    for (const row of rows) {
+      if (row.zombie) continue;
+      if (seen.has(row.pid)) { kept.push(row); continue; }
+      if (!alive(row.pid)) continue;
+      const now = await startOf(row.pid);
+      if (now === null || now !== row.start) continue;
+      return incomplete(`What one of your processes (PID ${row.pid}) has open couldn't be read.`);
+    }
     const listed = new Set(rows.map((row) => row.pid));
     const unlisted = [...seen].find((pid) => !listed.has(pid) && alive(pid));
     if (unlisted !== undefined) return incomplete(`One of your processes (PID ${unlisted}) started while Hosts was looking, so the picture isn't complete.`);
-    return { processes: rows.filter((row) => !row.zombie).map((row) => ({ pid: row.pid, ppid: row.ppid, argv: row.argv, cwd: files.cwd.get(row.pid) ?? null })), open: files.open, complete: true, why: null };
+    return { processes: kept.map((row) => ({ pid: row.pid, ppid: row.ppid, argv: row.argv, cwd: files.cwd.get(row.pid) ?? null, stdin: files.stdin.get(row.pid) ?? "none" })), open: files.open, complete: true, why: null };
   }
   let pids: string[];
   try { pids = (await deps.readdir("/proc")).filter((entry) => /^\d+$/.test(entry)); } catch { return incomplete("/proc couldn't be read."); }
@@ -138,12 +175,16 @@ export async function hostSnapshot(platform: "linux" | "darwin", uid: number, de
       cwd = clean(await deps.readlink(`/proc/${pid}/cwd`));
       fds = await deps.readdir(`/proc/${pid}/fd`);
     } catch (error) { if (!gone(error)) fail(); return; }
-    processes.push({ pid: Number(pid), ppid: statusPpid(status), argv: cmdline.split("\0").filter(Boolean), cwd });
+    let stdin: StdinKind = "none";
     open.push(cwd);
     for (const fd of fds) {
-      try { const target = await deps.readlink(`/proc/${pid}/fd/${fd}`); if (target.startsWith("/")) open.push(clean(target)); }
-      catch (error) { if (!gone(error)) fail(); }
+      try {
+        const target = await deps.readlink(`/proc/${pid}/fd/${fd}`);
+        if (fd === "0") stdin = stdinFromLink(target);
+        if (target.startsWith("/")) open.push(clean(target));
+      } catch (error) { if (!gone(error)) fail(); }
     }
+    processes.push({ pid: Number(pid), ppid: statusPpid(status), argv: cmdline.split("\0").filter(Boolean), cwd, stdin });
   });
   return why ? incomplete(why) : { processes, open, complete: true, why: null };
 }
@@ -188,15 +229,38 @@ export function busyInWorkspace(argv: readonly string[], classify: (argv: string
 }
 
 /**
- * Everything running in or beneath `root` that uses it, from one snapshot: a
- * process there that isn't an idle shell, an idle shell with a child, and a
- * process whose folder can't be told (unless it's an idle shell itself).
+ * Paths a process names on its command line (second review): every argv
+ * token, also split at "=", resolved against its folder. `python3 -m
+ * http.server --directory /app/dist` names /app/dist wherever it runs.
+ */
+export function argvPaths(proc: Pick<SnapshotProcess, "argv" | "cwd">): string[] {
+  const out: string[] = [];
+  for (const token of titleArgv(proc.argv)) {
+    for (const part of token.split("=")) {
+      if (!part || part.startsWith("-") && !part.includes("/")) continue;
+      if (part.startsWith("/")) out.push(normalize(part));
+      else if (proc.cwd && (part.includes("/") || part === "." || part === "..")) out.push(resolve(proc.cwd, part));
+    }
+  }
+  return out;
+}
+
+/**
+ * Everything that uses `root`, from one snapshot: a process whose folder is
+ * there, or whose command line names a path there, unless it's an idle
+ * shell (bare argv, no child, stdin a terminal); an idle-looking shell with
+ * a child or reading a script; and a process whose folder can't be told.
  */
 export function workspaceUsers(snap: Pick<HostSnapshot, "processes">, root: string, classify: (argv: string[]) => string | null): { why: string; unknownFolder: boolean } | null {
   const parents = new Set(snap.processes.map((proc) => proc.ppid).filter((ppid): ppid is number => ppid !== null));
-  const inside = (cwd: string) => cwd === root || cwd.startsWith(`${root.replace(/\/+$/, "")}/`);
+  const base = root.replace(/\/+$/, "");
+  const inside = (path: string) => path === base || path.startsWith(`${base}/`);
   for (const proc of snap.processes) {
-    const why = busyInWorkspace(proc.argv, classify) ?? (parents.has(proc.pid) ? "a shell with something running in it" : null);
+    const why = busyInWorkspace(proc.argv, classify)
+      ?? (parents.has(proc.pid) ? "a shell with something running in it" : null)
+      ?? (proc.stdin !== "tty" ? "a shell reading a script, or not attached to a terminal" : null);
+    const named = argvPaths(proc).some(inside);
+    if (named) return { why: why ?? "a program working on files here", unknownFolder: false };
     if (proc.cwd === null) { if (why) return { why, unknownFolder: true }; continue; }
     if (inside(proc.cwd) && why) return { why, unknownFolder: false };
   }

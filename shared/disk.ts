@@ -102,10 +102,18 @@ export const IGNORED_ONLY_MAX_DEPTH = 4;
  * Every name check compares folded names: Unicode NFC, then lower case.
  */
 export const foldName = (name: string) => String(name).normalize("NFC").toLowerCase();
-const has = (table: Readonly<Record<string, unknown>>, name: string) => Object.prototype.hasOwnProperty.call(table, foldName(name));
+/**
+ * ELIGIBILITY is exact (second review): only the allow-listed spelling, byte
+ * for byte, so a hand-made "Build" is never taken for "build" on a
+ * case-sensitive disk. On a case-insensitive disk the name checked is the
+ * one readdir returns (as stored), and the cleaner checks again that the
+ * parent folder lists exactly that spelling. PROTECTIVE checks (.env, .git,
+ * protected places) fold, everywhere.
+ */
+const has = (table: Readonly<Record<string, unknown>>, name: string) => Object.prototype.hasOwnProperty.call(table, name);
 export const isClearableName = (name: string) => has(CLEARABLE_NAMES, name);
 export const isIgnoredOnlyName = (name: string) => has(IGNORED_ONLY_NAMES, name);
-export const describeName = (name: string) => CLEARABLE_NAMES[foldName(name)] ?? IGNORED_ONLY_NAMES[foldName(name)] ?? null;
+export const describeName = (name: string) => (has(CLEARABLE_NAMES, name) ? CLEARABLE_NAMES[name]! : has(IGNORED_ONLY_NAMES, name) ? IGNORED_ONLY_NAMES[name]! : null);
 
 /** A name that is never part of anything cleared: a whole item is blocked if one sits inside it. */
 export const isEnvFile = (name: string) => { const folded = foldName(name); return folded === ".env" || folded.startsWith(".env."); };
@@ -273,7 +281,7 @@ export const DiskReportSchema = z.object({
   leftovers: z.array(z.object({
     id: z.string(), name: z.string(), where: z.string(), bytes: z.number().min(0), at: z.number(),
     /** "left": set aside, couldn't go back; "partial": an interrupted delete removed part of it; "unchecked": Hosts couldn't look at it. */
-    state: z.enum(["left", "partial", "unchecked"]).optional(),
+    state: z.enum(["left", "partial", "unconfirmed", "unchecked"]).optional(),
     /** One plain sentence for the person. */
     message: z.string().optional(),
   })).optional(),

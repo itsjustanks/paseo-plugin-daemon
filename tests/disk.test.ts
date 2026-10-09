@@ -124,7 +124,7 @@ describe("0.16.0: exactly one delete path, for build folders inside a workspace"
     expect(scan).toMatch(/blocked: null, askId: cache\.kind === "tmp" \? cache\.key : null,/);
     expect(source("shared/disk.ts").match(/name: "daemon-link\.disk\.[\w-]+"/g)).toEqual(['name: "daemon-link.disk.report"', 'name: "daemon-link.disk.preview"', 'name: "daemon-link.disk.clear"', 'name: "daemon-link.disk.clear-status"', 'name: "daemon-link.disk.leftover-dismiss"']);
     // Dismissing only forgets a "removed part of…" record; it never touches the disk.
-    expect(code("server/disk-quarantine.ts").match(/async dismiss[\s\S]*?\n  \}/)?.[0]).not.toMatch(/rm|rename|rmdir|unlink|moveNoReplace/);
+    expect(code("server/disk-quarantine.ts").match(/async dismiss[\s\S]*?\n  \}/)?.[0]).not.toMatch(/\b(rm|rename|rmdir|unlink|moveNoReplace)\s*\(/);
   });
 });
 
