@@ -9,6 +9,7 @@ import { DiskCleaner, DiskTokens } from "../server/disk-clear";
 import { busyInWorkspace, hostSnapshot, lsofPids, parseLsof, parsePs, statusUids, titleArgv, usedBeneath, type HostSnapshot, type SnapshotDeps } from "../server/disk-inuse";
 import { JOURNAL_PROBLEM, QuarantineInventory, moveNoReplace } from "../server/disk-quarantine";
 import { quarantineAndRemove, rmArgs } from "../server/disk-remove";
+import { removalChecks } from "../server/disk-nodemodules";
 import { DiskScanner, type DiskPlaces, type WorkspaceInfo } from "../server/disk-scan";
 import { classifyJob } from "../server/jobs";
 import { DiskReportSchema, isBigDelete } from "../shared/disk";
@@ -27,6 +28,8 @@ const big = (path: string, bytes = MB) => { mkdirSync(join(path, ".."), { recurs
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.invalid" } });
 const UID = process.getuid!();
 const bare = (path: string) => { mkdirSync(join(path, "objects"), { recursive: true }); mkdirSync(join(path, "refs", "heads"), { recursive: true }); writeFileSync(join(path, "HEAD"), "ref: refs/heads/main\n"); };
+/** A real-shaped npm lockfile (v3) for the fixture's node_modules. */
+const LOCK = JSON.stringify({ name: "app", lockfileVersion: 3, requires: true, packages: { "": { name: "app" }, "node_modules/react": { version: "19.0.0" }, "node_modules/some-pkg": { version: "1.0.0" }, "node_modules/other": { version: "1.0.0" }, "node_modules/sub": { version: "1.0.0" } } });
 /** A recorded manifest; recovery never trusts it to prove a deletion (final gate). */
 const MANIFEST = { entries: 3, bytes: 3 * MB };
 const hasQuarantine = (dir: string) => readdirSync(dir).some((name) => name.startsWith(".hosts-quarantine-"));
@@ -48,7 +51,7 @@ function world() {
   writeFileSync(join(app, ".env"), "SECRET=1\n");
   // A node_modules goes only with a lockfile beside its package.json (final gate).
   writeFileSync(join(app, "package.json"), "{}\n");
-  writeFileSync(join(app, "package-lock.json"), "{}\n");
+  writeFileSync(join(app, "package-lock.json"), LOCK);
   git(app, "add", ".gitignore", "src", "package.json", "package-lock.json");
   git(app, "commit", "-qm", "init");
   big(join(app, "node_modules", "react", "index.js"), 3 * MB);
@@ -170,9 +173,10 @@ describe("one complete snapshot, or nothing", () => {
 });
 
 describe("deleting: quarantine, physical probe, system rm, one deadline", () => {
-  const remove = (path: string, extra: Partial<Parameters<typeof quarantineAndRemove>[2]> = {}) => {
+  const remove = async (path: string, extra: Partial<Parameters<typeof quarantineAndRemove>[2]> = {}) => {
     const st = lstatSync(path);
-    return quarantineAndRemove(path, { dev: st.dev, ino: st.ino, bytes: 1 }, { group: new ChildGroup(), deadline: Date.now() + 120_000, ...extra });
+    const checks = await removalChecks(path, app);
+    return quarantineAndRemove(path, { dev: st.dev, ino: st.ino, bytes: 1 }, { group: new ChildGroup(), deadline: Date.now() + 120_000, ...(typeof checks === "string" ? {} : { checks }), ...extra });
   };
 
   it("rm is the system rm with stay-on-one-disk, as argv", () => {
@@ -708,8 +712,9 @@ describe("Astra re-review of de4291e (4: crash stages)", () => {
     const { chmodSync } = await import("node:fs");
     const inventory = journal();
     const st = lstatSync(join(app, "node_modules"));
+    const checks = await removalChecks(join(app, "node_modules"), app);
     const result = await quarantineAndRemove(join(app, "node_modules"), { dev: st.dev, ino: st.ino, bytes: 1 }, {
-      group: new ChildGroup(), deadline: Date.now() + 120_000, inventory,
+      group: new ChildGroup(), deadline: Date.now() + 120_000, inventory, checks: checks as never,
       // A folder rm can't empty: everything else goes, this stays.
       beforeRemove: (moved) => { mkdirSync(join(moved, "stuck", "inner"), { recursive: true }); writeFileSync(join(moved, "stuck", "inner", "f"), "x"); chmodSync(join(moved, "stuck"), 0o500); },
     });
@@ -934,7 +939,11 @@ describe("final Astra gate on 279d2cf: by structure, not by extension", () => {
       else big(join(app, kind, name), 100);
     }
   };
-  const ignoreAll = () => writeFileSync(join(app, ".gitignore"), `node_modules\n.env\ndist/\n${KINDS.join("\n")}\n`);
+  const ignoreAll = () => {
+    writeFileSync(join(app, ".gitignore"), `node_modules\n.env\ndist/\n${KINDS.join("\n")}\n`);
+    // .turbo's log names a script in the package.json beside it.
+    writeFileSync(join(app, "package.json"), JSON.stringify({ scripts: { build: "x" } }));
+  };
 
   it("a real-shaped folder of every kind passes the check and the look inside, and is deleted", async () => {
     rmSync(join(app, ".next"), { recursive: true });
@@ -1020,5 +1029,141 @@ describe("final Astra gate on 279d2cf: by structure, not by extension", () => {
     const { itemBlocked } = await import("../server/disk-scan");
     const guard = { folded: new Set<string>(), workspaceRoots: [], worktreeRoots: [], byRoot: new Map() } as never;
     expect(itemBlocked({ name: ".next", hasEnv: false, hasGit: false, ignoredOnly: false, partial: false, hasCredential: false, hasTopSource: false }, { ignored: true, tracked: false, untracked: false } as never, join(app, ".next"), guard)).toMatch(/couldn't confirm what's at its top level/);
+  });
+});
+
+describe("final Astra gate on a43692f: exact names, node_modules by its lockfile, nested files accepted", () => {
+  const ignore = (...names: string[]) => writeFileSync(join(app, ".gitignore"), `node_modules\n.next\n.env\ndist/\n${names.join("\n")}\n`);
+  const nextReal = () => { for (const name of ["BUILD_ID", "build-manifest.json", "routes-manifest.json", "trace"]) big(join(app, ".next", name), 10); big(join(app, ".next", "server", "app", "page.js"), 10); };
+  const turboReal = (scripts: Record<string, string> = { build: "x" }) => { writeFileSync(join(app, "package.json"), JSON.stringify({ scripts })); big(join(app, ".turbo", "cache", "abc.tar.zst"), 100); };
+  const scannedItem = async (where: string) => item((await scanned()).report, where);
+
+  it("repro 2: a hand-made .next/my-notes-manifest.js is refused (exact names, no *-manifest.js glob)", async () => {
+    nextReal();
+    big(join(app, ".next", "my-notes-manifest.js"), 10);
+    expect(await scannedItem(".next")).toMatchObject({ safe: false, token: null, blocked: ".next holds something its tool didn't create: my-notes-manifest.js. Hosts leaves it." });
+    rmSync(join(app, ".next", "my-notes-manifest.js"));
+    for (const real of ["prerender-manifest.js", "server-reference-manifest.json", "middleware-manifest.json", "required-server-files.js", "app-build-manifest.json"]) big(join(app, ".next", real), 10);
+    expect(await scannedItem(".next")).toMatchObject({ safe: true });
+  });
+
+  it("repro 2: a hand-made .turbo/handwritten.log is refused; only turbo-<script>.log for a script beside it passes", async () => {
+    ignore(".turbo");
+    turboReal({ build: "x", "build:prod": "y" });
+    big(join(app, ".turbo", "turbo-build.log"), 10);
+    big(join(app, ".turbo", "turbo-build$colon$prod.log"), 10);
+    expect(await scannedItem(".turbo")).toMatchObject({ safe: true });
+    for (const stray of ["handwritten.log", "turbo-deploy.log", "turbo-build:prod.log"]) {
+      big(join(app, ".turbo", stray), 10);
+      expect(await scannedItem(".turbo"), stray).toMatchObject({ safe: false, token: null, blocked: `.turbo holds something its tool didn't create: ${stray}. Hosts leaves it.` });
+      rmSync(join(app, ".turbo", stray));
+    }
+    // A log that appears after the check is refused by the look inside too.
+    utimesSync(join(app, ".turbo"), 1_700_000_000, 1_700_000_000);
+    const { scanner, tokens, report } = await scanned();
+    const token = item(report, ".turbo")!.token!;
+    big(join(app, ".turbo", "handwritten.log"), 10);
+    utimesSync(join(app, ".turbo"), 1_700_000_000, 1_700_000_000);
+    const job = await run(cleaner(tokens, scanner, { beforeRemove: () => { throw new Error("rm must not run"); } }).instance, [token]);
+    expect(job.results[0]).toMatchObject({ ok: false, message: ".turbo holds something its tool didn't create: handwritten.log, so it was put back." });
+    expect(existsSync(join(app, ".turbo", "handwritten.log"))).toBe(true);
+  });
+
+  it("repro 3: node_modules/local-only (not in the npm lockfile) is refused at the check and by the look inside", async () => {
+    big(join(app, "node_modules", "local-only", "index.js"), 10);
+    expect(await scannedItem("node_modules")).toMatchObject({ safe: false, token: null, blocked: "node_modules has a package the lockfile can't restore: local-only. Hosts leaves it." });
+    rmSync(join(app, "node_modules", "local-only"), { recursive: true });
+    utimesSync(join(app, "node_modules"), 1_700_000_000, 1_700_000_000);
+    const { scanner, tokens, report } = await scanned();
+    const token = item(report, "node_modules")!.token!;
+    big(join(app, "node_modules", "local-only", "index.js"), 10);
+    utimesSync(join(app, "node_modules"), 1_700_000_000, 1_700_000_000);
+    const job = await run(cleaner(tokens, scanner, { beforeRemove: () => { throw new Error("rm must not run"); } }).instance, [token]);
+    expect(job.results[0]).toMatchObject({ ok: false, message: "node_modules has a package the lockfile can't restore: local-only, so it was put back." });
+    expect(existsSync(join(app, "node_modules", "local-only", "index.js"))).toBe(true);
+  });
+
+  it("repro 3: a loose node_modules/private.pem is refused; so is any loose file, unknown dotfile or credential one level into a scope", async () => {
+    const cases: Array<[string, () => void, RegExp]> = [
+      ["private.pem", () => big(join(app, "node_modules", "private.pem"), 10), /looks like a key or credentials at its top level: private\.pem/],
+      ["notes.txt", () => big(join(app, "node_modules", "notes.txt"), 10), /its tool didn't create: notes\.txt/],
+      [".secret-stash", () => big(join(app, "node_modules", ".secret-stash", "a"), 10), /its tool didn't create: \.secret-stash/],
+      ["@acme/.npmrc", () => big(join(app, "node_modules", "@acme", ".npmrc"), 10), /looks like a key or credentials at its top level: @acme\/\.npmrc/],
+      ["@acme/private", () => big(join(app, "node_modules", "@acme", "private", "index.js"), 10), /lockfile can't restore: @acme\/private/],
+      [".bin as a file", () => big(join(app, "node_modules", ".bin"), 10), /its tool didn't create: \.bin/],
+    ];
+    for (const [label, add, reason] of cases) {
+      add();
+      expect(await scannedItem("node_modules"), label).toMatchObject({ safe: false, token: null, blocked: expect.stringMatching(reason) });
+      for (const name of ["private.pem", "notes.txt", ".secret-stash", "@acme", ".bin"]) rmSync(join(app, "node_modules", name), { recursive: true, force: true });
+    }
+    // The package managers' own entries and a scoped package the lockfile knows are fine.
+    writeFileSync(join(app, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/react": {}, "node_modules/@acme/ui": {} } }));
+    big(join(app, "node_modules", "@acme", "ui", "index.js"), 10);
+    big(join(app, "node_modules", ".bin", "x"), 10);
+    big(join(app, "node_modules", ".package-lock.json"), 10);
+    expect(await scannedItem("node_modules")).toMatchObject({ safe: true });
+  });
+
+  it("repro 1 (accepted, documented): hand-placed files nested inside a tool folder go with it; credentials at any depth still refuse", async () => {
+    ignore(".turbo");
+    nextReal();
+    turboReal();
+    big(join(app, ".next", "server", "my-notes.ts"), 10);
+    big(join(app, ".turbo", "cache", "handmade.mjs"), 10);
+    const { scanner, tokens, report } = await scanned();
+    expect(item(report, ".next")).toMatchObject({ safe: true });
+    expect(item(report, ".turbo")).toMatchObject({ safe: true });
+    const job = await run(cleaner(tokens, scanner).instance, [item(report, ".next")!.token!, item(report, ".turbo")!.token!]);
+    expect(job.results.map((result) => result.ok)).toEqual([true, true]);
+    // The same depth with a credential-shaped name is refused, for every kind but node_modules' package internals.
+    nextReal();
+    turboReal();
+    big(join(app, ".next", "server", "app", "service-account.json"), 10);
+    big(join(app, ".turbo", "cache", "deep", "id_rsa"), 10);
+    big(join(app, "node_modules", "react", "test", "fixture.pem"), 10);
+    const again = await scanned();
+    expect(item(again.report, ".next")).toMatchObject({ safe: false, blocked: expect.stringMatching(/key or credentials/) });
+    expect(item(again.report, ".turbo")).toMatchObject({ safe: false, blocked: expect.stringMatching(/key or credentials/) });
+    expect(item(again.report, "node_modules")).toMatchObject({ safe: true });
+  });
+
+  it("pnpm: real pnpm 10 lockfile names (importers and packages, scoped and linked) are what node_modules may hold", async () => {
+    const { pnpmNames } = await import("../server/disk-nodemodules");
+    const real = "lockfileVersion: '9.0'\n\nsettings:\n  autoInstallPeers: true\n\nimporters:\n\n  .:\n    dependencies:\n      '@types/node':\n        specifier: 22.0.0\n        version: 22.0.0\n      react:\n        specifier: 19.0.0\n        version: 19.0.0\n      ui:\n        specifier: workspace:*\n        version: link:packages/ui\n    devDependencies:\n      eslint:\n        specifier: '9'\n        version: 9.39.5\n\n  packages/ui: {}\n\npackages:\n\n  '@eslint-community/eslint-utils@4.10.1':\n    resolution: {integrity: sha512-x}\n    peerDependencies:\n      eslint: ^6.0.0\n\nsnapshots:\n\n  '@eslint-community/eslint-utils@4.10.1(eslint@9.39.5)':\n    dependencies:\n      eslint: 9.39.5\n";
+    expect(new Set(pnpmNames(real))).toEqual(new Set(["@types/node", "react", "ui", "eslint", "@eslint-community/eslint-utils"]));
+    // Older formats (v5 "/name/version", v6 "/name@version") and a file that isn't a pnpm lockfile.
+    expect(pnpmNames("lockfileVersion: 5.4\n\ndependencies:\n  react: 18.2.0\n\npackages:\n\n  /loose-envify/1.4.0:\n    resolution: {}\n  /@babel/core/7.0.0:\n    resolution: {}\n")).toEqual(expect.arrayContaining(["react", "loose-envify", "@babel/core"]));
+    expect(pnpmNames("lockfileVersion: '6.0'\n\npackages:\n\n  /react@18.2.0:\n    resolution: {}\n")).toEqual(["react"]);
+    expect(pnpmNames("not: a lockfile\n")).toBeNull();
+  });
+
+  it("npm: names under packages for this node_modules only (a workspace's own node_modules uses its prefix); unreadable refuses", async () => {
+    const { npmNames } = await import("../server/disk-nodemodules");
+    const lock = JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/react": {}, "node_modules/ui": { resolved: "packages/ui", link: true }, "node_modules/a/node_modules/b": {}, "apps/web/node_modules/next": {} } });
+    expect(npmNames(lock, "")).toEqual(["react", "ui"]);
+    expect(npmNames(lock, "apps/web")).toEqual(["next"]);
+    expect(npmNames("{}", "")).toBeNull();
+    expect(npmNames("{not json", "")).toBeNull();
+    writeFileSync(join(app, "package-lock.json"), "{}");
+    expect(await scannedItem("node_modules")).toMatchObject({ safe: false, blocked: expect.stringMatching(/couldn't read package-lock\.json/) });
+  });
+
+  it("yarn and bun: the lockfile's presence is the rule; links must point into its own store or a workspace folder", async () => {
+    rmSync(join(app, "package-lock.json"));
+    writeFileSync(join(app, "yarn.lock"), "# yarn lockfile v1\n");
+    big(join(app, "packages", "ui", "package.json"), 10);
+    symlinkSync("../packages/ui", join(app, "node_modules", "ui"));
+    big(join(app, "node_modules", "unlisted-but-yarn", "index.js"), 10);
+    expect(await scannedItem("node_modules")).toMatchObject({ safe: true });
+    symlinkSync(join(root, "elsewhere"), join(app, "node_modules", "outside"));
+    expect(await scannedItem("node_modules")).toMatchObject({ safe: false, blocked: "node_modules has a link Hosts doesn't recognise: outside. Hosts leaves it." });
+    rmSync(join(app, "node_modules", "outside"));
+    rmSync(join(app, "yarn.lock"));
+    writeFileSync(join(app, "bun.lock"), "{}\n");
+    mkdirSync(join(app, "node_modules", ".bun", "react@19.0.0", "node_modules", "react"), { recursive: true });
+    rmSync(join(app, "node_modules", "react"), { recursive: true });
+    symlinkSync(".bun/react@19.0.0/node_modules/react", join(app, "node_modules", "react"));
+    expect(await scannedItem("node_modules")).toMatchObject({ safe: true });
   });
 });

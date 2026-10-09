@@ -5,6 +5,7 @@ import { ChildGroup } from "./disk-children";
 import { basename, dirname, join } from "node:path";
 import { runWorker, type WalkResult } from "./disk-worker";
 import { CREDENTIAL_PATTERN, TOP_SOURCE_PATTERN, probeChecksFor, strayWords, type ProbeChecks } from "../shared/disk";
+import { nodeModulesVerdict, strayLog } from "./disk-nodemodules";
 
 /**
  * How Hosts deletes (0.14.0, reviewed): no hand-written recursive walk.
@@ -49,13 +50,20 @@ export interface Manifest { entries: number; bytes: number }
 export async function probeInside(path: string, group: ChildGroup, deadline: number, checks: ProbeChecks = { credentials: true, topSource: true, layout: null }): Promise<{ ok: boolean; why: string | null; manifest?: Manifest }> {
   const left = deadline - Date.now();
   if (left < 2000) return { ok: false, why: "There wasn't enough time left to look inside it, so it was put back." };
-  const run = await runWorker<WalkResult>({ op: "scan", roots: [{ id: "probe", path, mode: "whole" }], deadline: deadline - 1000, clearable: [], ignoredOnly: [], ignoredMaxDepth: 0, maxItemsPerRoot: 0, credential: CREDENTIAL_PATTERN, topSource: TOP_SOURCE_PATTERN, ...(checks.layout ? { rootLayout: checks.layout } : {}) }, left, undefined, group);
+  const run = await runWorker<WalkResult>({ op: "scan", roots: [{ id: "probe", path, mode: "whole" }], deadline: deadline - 1000, clearable: [], ignoredOnly: [], ignoredMaxDepth: 0, maxItemsPerRoot: 0, credential: CREDENTIAL_PATTERN, topSource: TOP_SOURCE_PATTERN, ...(checks.layout ? { rootLayout: checks.layout } : {}), rootNodeModules: basename(path) === "node_modules" }, left, undefined, group);
   const result = run.results[0];
   if (!result || !result.ok || run.timedOut || run.error) return { ok: false, why: "Hosts couldn't look inside it to be sure, so it was put back." };
   if (result.partial || result.skipped) return { ok: false, why: "Hosts couldn't read all of it to be sure, so it was put back." };
   if (result.hasEnv || result.hasGit) return { ok: false, why: "It has a .env file or a git repository inside, so it was put back." };
   // Fail-closed: a walk that didn't say "none" counts as "found". Structure first: only what its tool puts at the top level.
   if (checks.layout && result.topUnexpected !== null) return { ok: false, why: result.topUnexpected ? `${strayWords(basename(path), result.topUnexpected)}, so it was put back.` : "Hosts couldn't confirm what's at its top level, so it was put back." };
+  const stray = strayLog(result.conditional, checks.turboLogs);
+  if (stray) return { ok: false, why: `${strayWords(basename(path), stray)}, so it was put back.` };
+  if (basename(path) === "node_modules") {
+    if (!checks.nodeModules) return { ok: false, why: "Hosts couldn't check it against its lockfile, so it was put back." };
+    const why = await nodeModulesVerdict(result.top, result.topOverflow, checks.nodeModules, path).catch(() => "Hosts couldn't check its top level");
+    if (why) return { ok: false, why: `${why}, so it was put back.` };
+  }
   if (checks.credentials && result.hasCredential !== false) return { ok: false, why: "It has a file inside that looks like a key or credentials, so it was put back." };
   if (checks.topSource && result.hasTopSource !== false) return { ok: false, why: "It has a source file at its top level that someone may have put there, so it was put back." };
   return { ok: true, why: null, manifest: { entries: result.entries, bytes: result.totalBytes } };
@@ -73,6 +81,8 @@ export const rmArgs = (kind: Exclude<RmFlavour, null>, path: string) => (kind ==
 
 export interface RemoveDeps {
   group: ChildGroup;
+  /** What the look inside checks (default: the kind's own checks; a .turbo's logs and a node_modules then refuse). */
+  checks?: ProbeChecks;
   flavour?: () => Promise<RmFlavour>;
   /** Records the quarantine before the rename; `done` forgets it once it's resolved (gone, or put back). */
   inventory?: {
@@ -123,7 +133,7 @@ export async function quarantineAndRemove(target: string, expected: { dev: numbe
   };
   const st = await lstat(moved).catch(() => null);
   if (!st || st.isSymbolicLink() || !st.isDirectory() || st.ino !== expected.ino || st.dev !== expected.dev) return putBack("It changed just before it was cleared, so it was put back.");
-  const inside = await (deps.probe ?? probeInside)(moved, deps.group, deps.deadline, probeChecksFor(basename(target)));
+  const inside = await (deps.probe ?? probeInside)(moved, deps.group, deps.deadline, deps.checks ?? probeChecksFor(basename(target)));
   if (!inside.ok) return putBack(inside.why ?? "Hosts couldn't be sure what's inside, so it was put back.");
   // "moved": rm hasn't run, so a crash from here on puts it back whole.
   const manifest = inside.manifest ?? null;

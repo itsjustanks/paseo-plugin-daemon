@@ -106,6 +106,22 @@ belongs to. `requirements.paseo` stays `>=0.9.0`; no settings change, so no migr
     are refused (Ask an agent), by design. The source-file check stays as a second layer, now also
     `.mjs`, `.cjs`, `.mts`, `.cts`, `.jsx`, `.vue`, `.svelte`, `.astro`, `.rb`, `.php`, `.java`, `.kt`,
     `.swift`, `.c`, `.cpp`, `.h`, `.cs` and `.sh`.
+  - Exact names, and node_modules by its lockfile (third gate): `.next` allows only the file names
+    Next 15.5 and 16.4 can write there (from Next's own constants), so a hand-made
+    `my-notes-manifest.js` is refused; a `.turbo` log must be `turbo-<script>.log` for a script in the
+    `package.json` beside it (Turbo writes `:` as `$colon$`), so `handwritten.log` is refused. The
+    patterns left (content hashes in `.parcel-cache` and `.vite`, module names in `__pycache__`) say
+    why in a comment. `node_modules`' top level may hold only package and `@scope` folders and the
+    package managers' own entries (from real npm 11, pnpm 10, yarn 1 and 4, and bun 1 installs); a
+    loose file or an unknown link refuses, and key- or credential-shaped names refuse at its top level
+    and one level into a scope. With npm or pnpm, every package there must be in the lockfile
+    ("node_modules has a package the lockfile can't restore: local-only"); yarn.lock and bun.lock
+    can't be read reliably, so for them the lockfile being there is the rule, and a link must point
+    into its own store or a workspace folder.
+  - **Accepted limit:** files you put by hand deep inside these tool folders aren't protected; their
+    own tools delete them too (`npm ci` empties node_modules, `next build` empties .next). Keys and
+    credentials are still looked for at every depth, except inside node_modules' packages, which
+    often ship test keys.
 - **Where processes belong.** Processes groups rows under their project and workspace ("project-hub ·
   feature-x", "Not in a workspace", "Paseo itself") and each row shows its project chip. What needs
   attention on Overview and in the sidebar popover says which project it's in.

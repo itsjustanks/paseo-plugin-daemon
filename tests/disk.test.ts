@@ -50,7 +50,8 @@ function world() {
   writeFileSync(join(app, ".env"), "SECRET=1\n");
   // node_modules goes only with a lockfile (final gate); packages/ui shares the root's, as in a monorepo.
   writeFileSync(join(app, "package.json"), "{}\n");
-  writeFileSync(join(app, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+  // Real-shaped (pnpm 10): importers' dependency blocks name what node_modules may hold.
+  writeFileSync(join(app, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies:\n      react:\n        specifier: 19.0.0\n        version: 19.0.0\n      y:\n        specifier: 1.0.0\n        version: 1.0.0\n\n  packages/ui:\n    dependencies:\n      x:\n        specifier: 1.0.0\n        version: 1.0.0\n\npackages:\n\n  react@19.0.0:\n    resolution: {integrity: sha512-x}\n");
   big(join(app, "packages", "ui", "package.json"), 10);
   git(app, "add", ".gitignore", "src", "package.json", "pnpm-lock.yaml", "packages/ui/package.json");
   git(app, "commit", "-qm", "init");
@@ -58,11 +59,11 @@ function world() {
   big(join(app, ".next", "cache", "a.bin"), 2 * MB);
   big(join(app, "dist", "main.js"), MB);
   big(join(app, "build", "keep.js"), MB);
-  big(join(app, "packages", "ui", "node_modules", "x.js"), MB);
+  big(join(app, "packages", "ui", "node_modules", "x", "index.js"), MB);
   worktree = join(paseoHome, "worktrees", "proj1", "feature-x");
   mkdirSync(join(paseoHome, "worktrees", "proj1"), { recursive: true });
   git(app, "worktree", "add", "-q", "-b", "feature-x", worktree);
-  big(join(worktree, "node_modules", "y.js"), MB);
+  big(join(worktree, "node_modules", "y", "index.js"), MB);
   big(join(paseoHome, "config.json"), 1000);
   big(join(home, ".claude", "projects", "history.jsonl"), MB);
   big(join(home, ".codex", "sessions", "s.jsonl"), MB);
@@ -100,8 +101,8 @@ describe("0.16.0: exactly one delete path, for build folders inside a workspace"
   const diskFiles = readdirSync(join(__dirname, "..", "server")).filter((name) => name.startsWith("disk-")).map((name) => `server/${name}`);
 
   it("only disk-remove deletes (quarantine + rm with stay-on-one-disk); the scan, git, worker and children never do", () => {
-    expect(diskFiles.sort()).toEqual(["server/disk-children.ts", "server/disk-clear.ts", "server/disk-git.ts", "server/disk-inuse.ts", "server/disk-quarantine.ts", "server/disk-remove.ts", "server/disk-scan.ts", "server/disk-worker.ts"]);
-    for (const file of ["server/disk-children.ts", "server/disk-git.ts", "server/disk-scan.ts", "server/disk-worker.ts", "server/disk-inuse.ts", "server/disk-clear.ts"]) {
+    expect(diskFiles.sort()).toEqual(["server/disk-children.ts", "server/disk-clear.ts", "server/disk-git.ts", "server/disk-inuse.ts", "server/disk-nodemodules.ts", "server/disk-quarantine.ts", "server/disk-remove.ts", "server/disk-scan.ts", "server/disk-worker.ts"]);
+    for (const file of ["server/disk-children.ts", "server/disk-git.ts", "server/disk-scan.ts", "server/disk-worker.ts", "server/disk-inuse.ts", "server/disk-clear.ts", "server/disk-nodemodules.ts"]) {
       expect(code(file), file).not.toMatch(/\b(unlink|rmdir|rm|rename|truncate|mkdtemp)(Sync)?\s*\(/);
       expect(code(file), file).not.toMatch(/["'](rm|rmdir|unlink)["']/);
     }

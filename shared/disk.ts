@@ -108,34 +108,40 @@ export const isOnePressName = (name: string) => ONE_PRESS_NAMES.includes(name);
  * What each tool itself puts at the TOP LEVEL of its folder (final gate: by
  * structure, not by extension). Anything else at the top level (another
  * file, another folder, a symlink, anything unreadable) refuses the folder.
- * From real layouts: Next 15 and 16.4 (build, standalone, dev), Nuxt 4
+ * From real layouts: Next 15.5 and 16.4 (build, standalone, dev), Nuxt 4
  * (build, and a real dev .nuxt), SvelteKit 2 and 3 plus the cloudflare,
  * netlify and vercel adapters, Turbo 2.11, Vite 8 and Vitest 5, Parcel 2.16,
  * pytest 8 and CPython 3.14. Whole-name regex sources (the walk runs in a
- * child process); "f" a regular file, "d" a folder. Finder's .DS_Store is
- * allowed in every kind. node_modules has no layout: its lockfile stands in.
+ * child process). "f" a regular file, "d" a folder, "c" a file allowed only
+ * after a check outside the walk (a .turbo log must name a script in the
+ * package.json beside it). Exact names wherever the tool uses fixed names;
+ * each remaining pattern says why. Finder's .DS_Store is allowed in every
+ * kind. node_modules has its own check (disk-nodemodules.ts).
  */
-export type LayoutRule = readonly [pattern: string, type: "f" | "d"];
+export type LayoutRule = readonly [pattern: string, type: "f" | "d" | "c"];
 export const TOOL_LAYOUT: Readonly<Record<string, readonly LayoutRule[]>> = {
+  // Every name Next 15.5/16.4 can write here (next/dist/shared/lib/constants.js, .json and .js where both exist), plus what their builds wrote.
   ".next": [
     ["cache|server|static|types|standalone|diagnostics|dev", "d"],
-    ["BUILD_ID|trace|trace-build|turbopack|package\\.json|export-marker\\.json|required-server-files\\.json|required-server-files\\.js|next-server\\.js\\.nft\\.json|next-minimal-server\\.js\\.nft\\.json|[a-z0-9-]+-manifest\\.json|[a-z0-9-]+-manifest\\.js", "f"],
+    ["BUILD_ID|trace|trace-build|turbopack|package\\.json|app-build-manifest\\.json|app-paths-manifest\\.json|app-path-routes-manifest\\.json|build-manifest\\.json|client-build-manifest\\.json|dynamic-css-manifest\\.json|dynamic-css-manifest\\.js|export-detail\\.json|export-marker\\.json|fallback-build-manifest\\.json|functions-config-manifest\\.json|images-manifest\\.json|interception-route-rewrite-manifest\\.js|middleware-build-manifest\\.js|middleware-manifest\\.json|middleware-react-loadable-manifest\\.js|next-font-manifest\\.json|next-font-manifest\\.js|pages-manifest\\.json|prerender-manifest\\.json|prerender-manifest\\.js|preview-props\\.json|react-loadable-manifest\\.json|routes-manifest\\.json|required-server-files\\.json|required-server-files\\.js|server-reference-manifest\\.json|server-reference-manifest\\.js|subresource-integrity-manifest\\.json|subresource-integrity-manifest\\.js|next-server\\.js\\.nft\\.json|next-minimal-server\\.js\\.nft\\.json", "f"],
   ],
   ".nuxt": [
     ["dev|dist|manifest|schema|types", "d"],
-    ["app\\.config\\.mjs|components\\.d\\.ts|imports\\.d\\.ts|fetch\\.d\\.ts|nuxt\\.d\\.ts|nuxt\\.node\\.d\\.ts|nuxt\\.shared\\.d\\.ts|nitro\\.json|nuxt\\.json|tsconfig(\\.(app|node|server|shared))?\\.json|tsconfig\\.(app|node|server|shared)\\.tsbuildinfo", "f"],
+    ["app\\.config\\.mjs|components\\.d\\.ts|imports\\.d\\.ts|fetch\\.d\\.ts|nuxt\\.d\\.ts|nuxt\\.node\\.d\\.ts|nuxt\\.shared\\.d\\.ts|nitro\\.json|nuxt\\.json|tsconfig\\.json|tsconfig\\.(app|node|server|shared)\\.json|tsconfig\\.(app|node|server|shared)\\.tsbuildinfo", "f"],
   ],
   ".svelte-kit": [
     ["generated|output|types|cloudflare|cloudflare-tmp|netlify-tmp|vercel-tmp", "d"],
     ["ambient\\.d\\.ts|non-ambient\\.d\\.ts|env\\.d\\.ts|tsconfig\\.json", "f"],
   ],
-  ".turbo": [["cache|cookies|daemon|runs|logs|preferences", "d"], ["[^/]+\\.log", "f"]],
-  // deps (client), deps_<environment>, and the temporary deps…_temp_<hash> while optimising; vitest/<hash>/results.json.
-  ".vite": [["deps(_[A-Za-z0-9]+)?(_temp_[0-9a-f]+)?|vitest", "d"]],
-  // LMDB, the watcher snapshot, large blobs (<hash>-RequestGraph, <hash>-large…) and FSCache's two-hex-digit folders.
-  ".parcel-cache": [["data\\.mdb|lock\\.mdb|snapshot-[0-9a-f]+\\.txt|[0-9a-f]{16,}(-[A-Za-z0-9]+)*", "f"], ["[0-9a-f]{2}", "d"]],
+  // Logs are turbo-<task>.log (":" written as "$colon$"); the task must be a script in the package.json beside the folder ("c").
+  ".turbo": [["cache|cookies|daemon|runs|logs|preferences", "d"], ["turbo-.+\\.log", "c"]],
+  // deps (the client), deps_ssr, and deps…_temp_<8 hex> while optimising (Vite's getHash); vitest/<hash>/results.json.
+  ".vite": [["deps|deps_ssr|deps(_ssr)?_temp_[0-9a-f]{8}|vitest", "d"]],
+  // LMDB, and Parcel's 16-hex content hashes: graphs, the watcher snapshot; FSCache's two-hex-digit folders.
+  ".parcel-cache": [["data\\.mdb|lock\\.mdb|[0-9a-f]{16}-(RequestGraph|AssetGraph|BundleGraph)|snapshot-[0-9a-f]{16}\\.txt", "f"], ["[0-9a-f]{2}", "d"]],
   ".pytest_cache": [["README\\.md|CACHEDIR\\.TAG|\\.gitignore", "f"], ["v", "d"]],
-  __pycache__: [["[^/]+\\.pyc", "f"]],
+  // <module>.<implementation tag>[.opt-N].pyc (PEP 3147/488); the module part is the project's own name (scripts like cache-trim.py too), so it can't be exact.
+  __pycache__: [["[A-Za-z0-9_][A-Za-z0-9_.-]*\\.(cpython-[0-9]+|pypy[0-9]+)(-pytest-[0-9.]+)?(\\.opt-[12])?\\.pyc", "f"]],
 };
 /** A kind's layout plus what every kind may hold (Finder's .DS_Store); null for node_modules. */
 export const layoutFor = (name: string): LayoutRule[] | null => (has(TOOL_LAYOUT, name) ? [...TOOL_LAYOUT[name]!, ["\\.DS_Store", "f"]] : null);
@@ -147,7 +153,28 @@ export const TOP_SOURCE_PATTERN = "\\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|vue|svelte|
 /** A node_modules goes only when one of these sits beside the package.json that owns it (or the workspace root's). */
 export const LOCKFILES: readonly string[] = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock"];
 /** What the inside-look refuses on, by kind. node_modules is exempt from the credential check (packages ship test keys and .npmrc); its lockfile stands in. */
-export interface ProbeChecks { credentials: boolean; topSource: boolean; layout: LayoutRule[] | null }
+export interface ProbeChecks {
+  credentials: boolean; topSource: boolean; layout: LayoutRule[] | null;
+  /** .turbo: the exact log names its package.json allows (turbo-<script>.log); absent, every log refuses. */
+  turboLogs?: readonly string[];
+  /** node_modules: its lockfile's verdict context, worked out before the move; absent, it refuses. */
+  nodeModules?: NodeModulesContext;
+}
+/** What the node_modules check needs: the lockfile kind, its package names (null when it can't be read reliably: yarn, bun), and where things are. */
+export interface NodeModulesContext { lock: "npm" | "pnpm" | "yarn" | "bun"; names: readonly string[] | null; original: string; root: string }
+/**
+ * node_modules' top level (final gate): package folders, @scope folders
+ * (one level of packages inside), and the package managers' own entries,
+ * from real npm 11, pnpm 10, yarn 1, yarn 4 (node-modules linker) and bun 1
+ * installs. Anything else (a loose file, an unknown link) refuses.
+ */
+export const NODE_MODULES_OWN: Readonly<Record<string, "f" | "d">> = {
+  ".bin": "d", ".package-lock.json": "f", ".modules.yaml": "f", ".pnpm": "d", ".pnpm-workspace-state.json": "f",
+  ".yarn-integrity": "f", ".yarn-state.yml": "f", ".package-map.json": "f", ".bun": "d",
+  ".cache": "d", ".vite": "d", ".vite-temp": "d", ".store": "d", ".DS_Store": "f",
+};
+/** An npm package name's last part (npm allows legacy capitals); a @scope folder is "@" plus the same. */
+export const PACKAGE_NAME = /^[A-Za-z0-9][A-Za-z0-9._~-]*$/;
 export const probeChecksFor = (name: string): ProbeChecks => ({ credentials: name !== "node_modules", topSource: TOP_SOURCE_CHECKED.includes(name), layout: layoutFor(name) });
 /** The refusal for a top-level entry outside its tool's layout; the name is redacted and cut short. */
 export const strayWords = (kind: string, name: string) => `${kind} holds something its tool didn't create: ${redactSecrets(name).slice(0, 80)}`;

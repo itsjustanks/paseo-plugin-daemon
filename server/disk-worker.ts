@@ -31,10 +31,17 @@ export interface ScanRequest {
   credential?: string;
   topSource?: string;
   /** Final gate: what each tool puts at the top level of its folder, by item name (scan) or for the root (the look inside). */
-  layouts?: Record<string, ReadonlyArray<readonly [string, "f" | "d"]>>;
-  rootLayout?: ReadonlyArray<readonly [string, "f" | "d"]>;
+  layouts?: Record<string, ReadonlyArray<readonly [string, "f" | "d" | "c"]>>;
+  rootLayout?: ReadonlyArray<readonly [string, "f" | "d" | "c"]>;
+  /** node_modules: list its top level and one level into @scope folders (scan items / the root), for the check outside the walk. */
+  nodeModules?: boolean;
+  rootNodeModules?: boolean;
 }
-export interface WalkItem { rel: string; name: string; dev: number; ino: number; mtimeMs: number; bytes: number; sharedBytes: number; partial: boolean; hasEnv: boolean; hasGit: boolean; depth: number; ignoredOnly: boolean; hasCredential?: boolean; hasTopSource?: boolean; topUnexpected?: string | null }
+/** A top-level entry: name ("@scope/pkg" one level into a scope) and type: "d" folder, "f" file, "l" link, "o" other or unreadable. */
+export type TopEntry = [name: string, type: "d" | "f" | "l" | "o"];
+/** node_modules listings stop here and say so (overflow), which refuses. */
+export const TOP_ENTRIES_MAX = 50_000;
+export interface WalkItem { rel: string; name: string; dev: number; ino: number; mtimeMs: number; bytes: number; sharedBytes: number; partial: boolean; hasEnv: boolean; hasGit: boolean; depth: number; ignoredOnly: boolean; hasCredential?: boolean; hasTopSource?: boolean; topUnexpected?: string | null; conditional?: string[]; top?: TopEntry[]; topOverflow?: boolean }
 export interface WalkResult {
   id: string;
   ok: boolean;
@@ -55,6 +62,11 @@ export interface WalkResult {
   hasTopSource?: boolean;
   /** The first top-level entry outside rootLayout (null: none; absent: not checked). */
   topUnexpected?: string | null;
+  /** Top-level files allowed only after a check outside the walk ("c" rules). */
+  conditional?: string[];
+  /** node_modules (rootNodeModules): its top-level listing. */
+  top?: TopEntry[];
+  topOverflow?: boolean;
   items: WalkItem[];
 }
 
@@ -80,15 +92,34 @@ export function diskWorker(fs: FsLike, request: ScanRequest, emit: (result: unkn
   var isCredential = function (name: string) { return !!credential && credential.test(fold(name)); };
   var isTopSource = function (name: string) { return !!topSource && topSource.test(fold(name)); };
   // Layout rules match the exact name, as the tool writes it; anything else (or a link, or anything not a plain file/folder) is a stray.
-  var compile = function (rules: ReadonlyArray<readonly [string, "f" | "d"]>) { return rules.map(function (rule) { return { rx: new RegExp("^(?:" + rule[0] + ")$"), type: rule[1] }; }); };
+  var compile = function (rules: ReadonlyArray<readonly [string, "f" | "d" | "c"]>) { return rules.map(function (rule) { return { rx: new RegExp("^(?:" + rule[0] + ")$"), type: rule[1] }; }); };
   var layouts: Record<string, Array<{ rx: RegExp; type: string }>> = {};
   if (request.layouts) Object.keys(request.layouts).forEach(function (name) { layouts[name] = compile(request.layouts![name]!); });
   var rootLayout = request.rootLayout ? compile(request.rootLayout) : null;
+  var typeOf = function (st: ReturnType<FsLike["lstatSync"]> | null) { return !st ? "o" : st.isSymbolicLink() ? "l" : st.isDirectory() ? "d" : st.isFile() ? "f" : "o"; };
+  // 0: doesn't fit; 1: fits; 2: a file that fits only after a check outside the walk ("c").
   var fits = function (rules: Array<{ rx: RegExp; type: string }>, name: string, st: ReturnType<FsLike["lstatSync"]> | null) {
-    if (!st || st.isSymbolicLink()) return false;
-    var type = st.isDirectory() ? "d" : st.isFile() ? "f" : "";
-    for (var i = 0; i < rules.length; i += 1) if (rules[i]!.type === type && rules[i]!.rx.test(name)) return true;
-    return false;
+    var type = typeOf(st);
+    if (type === "l" || type === "o") return 0;
+    for (var i = 0; i < rules.length; i += 1) {
+      if (!rules[i]!.rx.test(name)) continue;
+      if (rules[i]!.type === type) return 1;
+      if (rules[i]!.type === "c" && type === "f") return 2;
+    }
+    return 0;
+  };
+  var judge = function (holder: { topUnexpected?: string | null; conditional?: string[] }, rules: Array<{ rx: RegExp; type: string }>, name: string, st: ReturnType<FsLike["lstatSync"]> | null) {
+    if (holder.topUnexpected !== null) return;
+    var fit = fits(rules, name, st);
+    if (fit === 0) holder.topUnexpected = name;
+    else if (fit === 2) (holder.conditional = holder.conditional || []).push(name);
+  };
+  var list = function (holder: { top?: TopEntry[]; topOverflow?: boolean }, inside: string, st: ReturnType<FsLike["lstatSync"]> | null) {
+    var parts = inside.split("/");
+    if (parts.length > 2 || (parts.length === 2 && parts[0]!.charAt(0) !== "@")) return;
+    var top = holder.top = holder.top || [];
+    if (top.length >= 50000) { holder.topOverflow = true; return; } // TOP_ENTRIES_MAX (the worker can't import it)
+    top.push([inside, typeOf(st) as TopEntry[1]]);
   };
   // A direct child of a laid-out item (or of the root) that doesn't fit: the first one is kept. Unreadable counts as a stray.
   var checkTop = function (entry: { rel: string; depth: number; item: number }, st: ReturnType<FsLike["lstatSync"]> | null) {
@@ -96,8 +127,12 @@ export function diskWorker(fs: FsLike, request: ScanRequest, emit: (result: unkn
     if (entry.item >= 0) {
       var owner = result.items[entry.item]!;
       var rules = Object.prototype.hasOwnProperty.call(layouts, owner.name) ? layouts[owner.name]! : null;
-      if (rules && entry.depth === owner.depth + 1 && owner.topUnexpected === null && !fits(rules, name, st)) owner.topUnexpected = name;
-    } else if (rootLayout && entry.depth === 1 && result.topUnexpected === null && !fits(rootLayout, name, st)) result.topUnexpected = name;
+      if (rules && entry.depth === owner.depth + 1) judge(owner, rules, name, st);
+      if (request.nodeModules && owner.name === "node_modules" && entry.depth <= owner.depth + 2) list(owner, entry.rel.slice(owner.rel.length + 1), st);
+    } else {
+      if (rootLayout && entry.depth === 1) judge(result, rootLayout, name, st);
+      if (request.rootNodeModules && entry.depth >= 1 && entry.depth <= 2) list(result, entry.rel, st);
+    }
   };
 
   for (var r = 0; r < request.roots.length; r += 1) {
@@ -107,7 +142,7 @@ export function diskWorker(fs: FsLike, request: ScanRequest, emit: (result: unkn
     if (now >= request.deadline) { emit({ id: spec.id, ok: false, skipped: true, dev: 0, ino: 0, totalBytes: 0, newestMtimeMs: 0, partial: true, entries: 0, hasEnv: false, hasGit: false, items: [] }); continue; }
     // A fair share of what's left, so one huge folder can't starve the rest.
     var rootDeadline = Math.min(request.deadline, now + Math.max(10000, (request.deadline - now) / left));
-    var result: WalkResult = { id: spec.id, ok: true, dev: 0, ino: 0, totalBytes: 0, newestMtimeMs: 0, partial: false, entries: 0, hasEnv: false, hasGit: false, hasCredential: credential ? false : undefined, hasTopSource: topSource ? false : undefined, topUnexpected: rootLayout ? null : undefined, items: [] };
+    var result: WalkResult = { id: spec.id, ok: true, dev: 0, ino: 0, totalBytes: 0, newestMtimeMs: 0, partial: false, entries: 0, hasEnv: false, hasGit: false, hasCredential: credential ? false : undefined, hasTopSource: topSource ? false : undefined, topUnexpected: rootLayout ? null : undefined, top: request.rootNodeModules ? [] : undefined, items: [] };
     var rootStat: ReturnType<FsLike["lstatSync"]>;
     try { rootStat = fs.lstatSync(spec.path); } catch (error) { result.ok = false; result.error = String(error && (error as { code?: string }).code || error); emit(result); continue; }
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) { result.ok = false; result.error = "not a folder"; emit(result); continue; }
@@ -158,7 +193,7 @@ export function diskWorker(fs: FsLike, request: ScanRequest, emit: (result: unkn
       if (spec.mode === "workspace" && item < 0 && !inGit && entry.depth > 0 && result.items.length < request.maxItemsPerRoot) {
         var only = Object.prototype.hasOwnProperty.call(ignoredOnly, name) && entry.depth <= request.ignoredMaxDepth;
         if (Object.prototype.hasOwnProperty.call(clearable, name) || only) {
-          result.items.push({ rel: entry.rel, name: name, dev: stat.dev, ino: stat.ino, mtimeMs: stat.mtimeMs, bytes: bytes, sharedBytes: 0, partial: false, hasEnv: false, hasGit: false, depth: entry.depth, ignoredOnly: !Object.prototype.hasOwnProperty.call(clearable, name), hasCredential: credential ? false : undefined, hasTopSource: topSource ? false : undefined, topUnexpected: Object.prototype.hasOwnProperty.call(layouts, name) ? null : undefined });
+          result.items.push({ rel: entry.rel, name: name, dev: stat.dev, ino: stat.ino, mtimeMs: stat.mtimeMs, bytes: bytes, sharedBytes: 0, partial: false, hasEnv: false, hasGit: false, depth: entry.depth, ignoredOnly: !Object.prototype.hasOwnProperty.call(clearable, name), hasCredential: credential ? false : undefined, hasTopSource: topSource ? false : undefined, topUnexpected: Object.prototype.hasOwnProperty.call(layouts, name) ? null : undefined, top: request.nodeModules && name === "node_modules" ? [] : undefined });
           item = result.items.length - 1;
         }
       }

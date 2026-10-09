@@ -11,7 +11,8 @@ import { gitAllows, gitVerdicts, groupGit, type GitRun } from "./disk-git";
 import { hostSnapshot, usedBeneath, workspaceUsers, type HostSnapshot } from "./disk-inuse";
 import { JOURNAL_PROBLEM, type QuarantineInventory } from "./disk-quarantine";
 import { quarantineAndRemove, type DeleteResult, type RmFlavour } from "./disk-remove";
-import { NO_LOCKFILE, busyReason, canonicalChain, hasLockfile, homeRelative, protectionFor, workspaceState, type DiskPlaces, type WorkspaceInfo } from "./disk-scan";
+import { nodeModulesContext, removalChecks } from "./disk-nodemodules";
+import { busyReason, canonicalChain, homeRelative, protectionFor, workspaceState, type DiskPlaces, type WorkspaceInfo } from "./disk-scan";
 import { classifyJob } from "./jobs";
 
 /**
@@ -213,8 +214,15 @@ export class DiskCleaner {
         continue;
       }
       const payload = checked.payload!;
+      // What the look inside checks against (a .turbo's scripts, a node_modules' lockfile), worked out before the move.
+      const checks = await removalChecks(payload.p, checked.root!).catch(() => "Hosts couldn't work out what to check inside it, so it left it.");
+      if (typeof checks === "string") {
+        this.job.results.push({ workspace: checked.workspace, where: checked.where, ok: false, bytes: 0, message: checks });
+        await this.record(checked, "denied", 0, `Not deleted: ${checks}`);
+        continue;
+      }
       const outcome: DeleteResult = await quarantineAndRemove(payload.p, { dev: payload.d, ino: payload.i, bytes: payload.b }, {
-        group: this.group, flavour: this.deps.flavour, beforeRemove: this.deps.beforeRemove, inventory: this.deps.inventory, probe: this.deps.probe, deadline,
+        group: this.group, flavour: this.deps.flavour, beforeRemove: this.deps.beforeRemove, inventory: this.deps.inventory, probe: this.deps.probe, deadline, checks,
         finalCheck: this.finalCheck(checked.root!),
       });
       this.job.freedBytes += outcome.removedBytes;
@@ -271,7 +279,7 @@ export class DiskCleaner {
     const root = roots.filter((folder) => isWithin(path, folder)).sort((a, b) => b.length - a.length)[0] ?? null;
     if (!root) return no("It isn't inside one of your Paseo workspaces any more.");
     if (this.tmpRoots.some((tmp) => root === tmp || isWithin(root, tmp))) return no("This workspace is in a temporary folder. Hosts doesn't delete anything there; ask an agent instead.");
-    if (name === "node_modules" && !await hasLockfile(path, root)) return no(NO_LOCKFILE);
+    if (name === "node_modules") { const context = await nodeModulesContext(path, root); if (typeof context === "string") return no(context); }
     const owners = workspaces.filter((workspace) => guard.byRoot.get(root)?.includes(workspace.id));
     const busy = owners.map((workspace) => busyReason(workspaceState(workspace.status), workspace.devServers)).find(Boolean);
     if (busy) return no(busy);

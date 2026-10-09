@@ -3,12 +3,13 @@ import { lstat, open, readdir, readFile, realpath, statfs, stat, writeFile, mkdi
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
-  CLEARABLE_NAMES, CREDENTIAL_PATTERN, IGNORED_ONLY_MAX_DEPTH, IGNORED_ONLY_NAMES, LOCKFILES, PROTECTED_NAME, TMP_NEVER, TOP_SOURCE_PATTERN,
+  CLEARABLE_NAMES, CREDENTIAL_PATTERN, IGNORED_ONLY_MAX_DEPTH, IGNORED_ONLY_NAMES, PROTECTED_NAME, TMP_NEVER, TOP_SOURCE_PATTERN,
   ago, describeName, isOnePressName, isWithin, layoutFor, leftoverMessage, probeChecksFor, strayWords, TOOL_LAYOUT, diskSpace, formatSize, protectedReason, protectedSet, toolCacheName, type ProtectedSet,
   type CacheGroup, type ClearItem, type DiskReport, type DiskSpace, type LeftoverState, type WorkspaceState, type WorkspaceUsage,
 } from "../shared/disk";
 import { stateDirectory } from "./binaries";
 import type { JournalStatus } from "./disk-quarantine";
+import { findLock, outsideWalkReason } from "./disk-nodemodules";
 import { ChildGroup } from "./disk-children";
 import { friendlyPath } from "../shared/paths";
 import { gitAllows, gitVerdicts, groupGit, type GitRun, type GitVerdict } from "./disk-git";
@@ -347,7 +348,7 @@ export class DiskScanner {
     const walkUntil = this.now() + left() * WALK_SHARE;
     const run = await (this.deps.walk ?? runWorker)<WalkResult>({
       op: "scan", roots, deadline: walkUntil,
-      clearable: Object.keys(CLEARABLE_NAMES), ignoredOnly: Object.keys(IGNORED_ONLY_NAMES), ignoredMaxDepth: IGNORED_ONLY_MAX_DEPTH, maxItemsPerRoot: 200, credential: CREDENTIAL_PATTERN, topSource: TOP_SOURCE_PATTERN, layouts: TOOL_LAYOUTS,
+      clearable: Object.keys(CLEARABLE_NAMES), ignoredOnly: Object.keys(IGNORED_ONLY_NAMES), ignoredMaxDepth: IGNORED_ONLY_MAX_DEPTH, maxItemsPerRoot: 200, credential: CREDENTIAL_PATTERN, topSource: TOP_SOURCE_PATTERN, layouts: TOOL_LAYOUTS, nodeModules: true,
     }, Math.max(1000, walkUntil - this.now() + 10_000), (result) => {
       byId.set(result.id, result);
       this.progress.done += 1;
@@ -480,7 +481,7 @@ export class DiskScanner {
         const blocked = itemBlocked(item, data?.git[path] ?? null, path, guard);
         if (blocked === "hide") continue;
         const words = describeName(item.name)!;
-        const why = blocked ?? (item.name === "node_modules" && !await hasLockfile(path, folder.path) ? NO_LOCKFILE : null) ?? busy;
+        const why = blocked ?? await outsideWalkReason(item.name, path, folder.path, item) ?? busy;
         const workspace = owners[0]?.name ?? friendlyPath(folder.path, { home, paseoHome: this.deps.places.paseoHome }).label;
         const token = !why && mint ? mint({ path, root: folder.path, dev: item.dev, ino: item.ino, mtimeMs: item.mtimeMs, workspace, bytes: item.bytes - item.sharedBytes, what: words.what, cost: words.cost }) : null;
         found.push({ safe: !why, name: item.name, what: words.what, cost: words.cost, where: item.rel, path, bytes: item.bytes, sharedBytes: item.sharedBytes, partial: item.partial, blocked: why, token, ...(blocked === ASK_ONLY ? { askOnly: true } : {}) });
@@ -632,23 +633,10 @@ const TOOL_LAYOUTS = Object.fromEntries(Object.keys(TOOL_LAYOUT).map((name) => [
 
 /** Shown on a git-ignored folder Hosts won't delete itself (dist, build, coverage, …). */
 export const ASK_ONLY = "Hosts doesn't delete this kind of folder itself: it can hold hand-made files. Ask an agent to check it.";
-export const NO_LOCKFILE = "There's no lockfile (package-lock.json, pnpm-lock.yaml, yarn.lock or bun.lock) beside its package.json, so an install might not bring it back. Hosts leaves it.";
+export { NO_LOCKFILE } from "./disk-nodemodules";
 
-/**
- * A node_modules is reinstallable only with a package.json right beside it
- * and a lockfile next to that package.json or next to the package.json of a
- * folder above it, up to the workspace root (a monorepo's one lockfile).
- * Regular files only; anything unreadable says no.
- */
-export async function hasLockfile(nodeModules: string, root: string): Promise<boolean> {
-  const isFile = async (path: string) => { const st = await lstat(path).catch(() => null); return !!st && st.isFile(); };
-  const owner = dirname(nodeModules);
-  if (!await isFile(join(owner, "package.json"))) return false;
-  for (let dir = owner; ; dir = dirname(dir)) {
-    if (await isFile(join(dir, "package.json"))) for (const name of LOCKFILES) if (await isFile(join(dir, name))) return true;
-    if (dir === root || !isWithin(dir, root)) return false;
-  }
-}
+/** True when a lockfile restores this node_modules (see findLock). */
+export const hasLockfile = async (nodeModules: string, root: string) => !!await findLock(nodeModules, root);
 
 /** The disks the given folders live on, fullest first, one entry per device (statfs and stat only: instant). */
 export async function disksFor(paths: readonly string[], fs: { stat: typeof stat; statfs: typeof statfs } = { stat, statfs }): Promise<DiskSpace[]> {
