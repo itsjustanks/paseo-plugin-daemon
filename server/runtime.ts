@@ -20,17 +20,15 @@ import { listPluginHosts, startClock } from "./plugin-procs";
 import { PluginRestarter } from "./plugin-restart";
 import { RESTART_WAIT_MS, type RestartOutcome } from "../shared/guard";
 import { safeGitArgs, safeGitEnv } from "./disk-git";
-import { DiskScanner, cleanupAskText, defaultPlaces, disksFor, folderAskText, readWorkspace, type WorkspaceInfo } from "./disk-scan";
+import { DiskScanner, cleanupAskText, defaultPlaces, disksFor, folderAskText, leftoverView, readWorkspace, type WorkspaceInfo } from "./disk-scan";
 import { formatSize } from "../shared/disk";
 import { friendlyPath } from "../shared/paths";
 import { homeRelative } from "../shared/redaction";
 import type { AskContext } from "../shared/ask";
 import { join } from "node:path";
-import { isWithin, type DiskJob, type DiskPlan, type DiskReport } from "../shared/disk";
+import { isWithin, type ClearItem, type DiskJob, type DiskPlan, type DiskReport, type WorkspaceUsage } from "../shared/disk";
 import { DiskCleaner, DiskTokens, defaultTmpRoots } from "./disk-clear";
 import { JOURNAL_PROBLEM, QuarantineInventory } from "./disk-quarantine";
-import { measure } from "./disk-remove";
-import { ChildGroup } from "./disk-children";
 
 /** A disk report or ask waits this long for the registry or a process snapshot, then uses what it has. */
 export const REPORT_READ_MS = 5000;
@@ -99,8 +97,7 @@ export function createRuntime(options: RuntimeOptions = {}) {
     // 0.16.0: one-press Clear, for build folders inside a workspace or worktree only (disk-clear.ts).
     const tokens = new DiskTokens();
     const inventory = new QuarantineInventory(join(places.stateDir, "quarantine.json"));
-    const recoveryGroup = new ChildGroup();
-    void inventory.recover((path) => measure(path, recoveryGroup, Date.now() + 5 * 60_000)).then((outcome) => {
+    void inventory.recover().then((outcome) => {
       if (outcome.restored.length) console.log(`daemon-link: put back ${outcome.restored.length} folder(s) an interrupted clear had set aside`);
     }).catch(() => undefined);
     const tmpRoots = defaultTmpRoots();
@@ -167,13 +164,9 @@ export function createRuntime(options: RuntimeOptions = {}) {
       const report = await disk.scanner.report(workspaces, disks, (item) => (tmpRoots.some((tmp) => item.root === tmp || isWithin(item.root, tmp)) ? null : tokens.mint(item)));
       const journal = await disk.inventory.status().catch(() => ({ problem: JOURNAL_PROBLEM, entries: [] }));
       const leftovers = disk.cleaner.isRunning ? [] : journal.entries.map((entry) => {
-        const where = friendlyPath(entry.original, { home: disk!.places.home, paseoHome: disk!.places.paseoHome }).label;
-        // Only what's known (second review).
-        const message = entry.state === "partial" ? `An interrupted delete removed part of ${where}. Run the project's install to rebuild it. What's left of it is set aside in a hidden folder beside it; ask an agent to remove it.`
-          : entry.state === "unchecked" ? `Couldn't check a leftover from an interrupted delete (${where}). Nothing is deleted until Hosts can look at it.`
-          : entry.state === "unconfirmed" ? `An interrupted delete set ${where} aside, and Hosts can't confirm how complete it is. If the project needs it, run its install to rebuild it. It's set aside in a hidden folder beside it; ask an agent to check it.`
-          : `Left over from an interrupted delete: ${where} is set aside, whole and untouched, because it couldn't be put back without replacing something.`;
-        return { id: `leftover:${entry.quarantine}`, name: entry.name, where, bytes: entry.bytes, at: entry.at, state: entry.state, message };
+        // Only what's known: a count can't prove a deletion (final gate).
+        const { where, message } = leftoverView(entry, disk!.places);
+        return { id: `leftover:${entry.quarantine}`, name: entry.name, where, bytes: entry.bytes, at: entry.at, state: entry.state, setAside: entry.setAside, message };
       });
       return { ...report, leftovers, journalProblem: journal.problem };
     },
@@ -189,7 +182,7 @@ export function createRuntime(options: RuntimeOptions = {}) {
       return disk.cleaner.start(tokenList);
     },
     status(): DiskJob { return disk ? disk.cleaner.status() : { state: "idle", freedBytes: 0, results: [], message: null, finishedAt: null }; },
-    /** Drops a "removed part of…" record the person dismissed; nothing on disk changes. */
+    /** Drops a "may be incomplete" note the person dismissed; nothing on disk changes. */
     async dismissLeftover(id: string): Promise<{ ok: boolean }> {
       if (!disk || !id.startsWith("leftover:")) return { ok: false };
       return { ok: await disk.inventory.dismiss(id.slice("leftover:".length)).catch(() => false) };
@@ -202,9 +195,10 @@ export function createRuntime(options: RuntimeOptions = {}) {
       const home = disk.places.home;
       const ask = (title: string, text: string): AskContext => ({ title, text, workspaceId: null, workspaceName: null, outputFrom: null });
       if (id.startsWith("leftover:")) {
-        const entry = (await disk.inventory.inspect().catch(() => ({ entries: [] as Array<{ quarantine: string; name: string; original: string; bytes: number; at: number }> }))).entries.find((item) => `leftover:${item.quarantine}` === id);
+        const entry = (await disk.inventory.status().catch(() => ({ entries: [] }))).entries.find((item) => `leftover:${item.quarantine}` === id);
         if (!entry) return null;
-        return ask(`A folder an interrupted clear set aside (${formatSize(entry.bytes)})`, folderAskText({ path: join(entry.quarantine, entry.name), bytes: entry.bytes, branch: null, changedAt: entry.at, kind: "leftover", original: entry.original, partial: (entry as { stage?: string }).stage !== "moved" }, home));
+        const view = leftoverView(entry, disk.places);
+        return ask(view.title, view.text);
       }
       if (id.startsWith("tmp:")) {
         const cache = disk.scanner.last()?.caches.find((item) => item.key === id && item.kind === "tmp");
@@ -235,8 +229,11 @@ export function createRuntime(options: RuntimeOptions = {}) {
         if (!items.length) return null;
         return ask(`Clean up shared caches (${formatSize(items.reduce((sum, item) => sum + item.bytes, 0))})`, cleanupAskText({ kind: "caches", checkedAt, items }));
       }
-      const chosen = id === "idle" ? report.workspaces.filter((workspace) => !workspace.busy && workspace.clearableBytes > 0) : report.workspaces.filter((workspace) => workspace.id === id && workspace.clearableBytes > 0);
-      const items = chosen.flatMap((workspace) => workspace.items.filter((item) => item.safe).map((item) => ({ label: `${workspace.names[0] ?? friendlyPath(workspace.folder, { paseoHome: homeRelative(disk!.places.paseoHome, disk!.places.home) }).label} · ${item.where}`, where: join(workspace.folder, item.where), bytes: item.bytes - item.sharedBytes, what: item.what, cost: item.cost, partial: item.partial })));
+      // Safe items, plus git-ignored build output Hosts won't delete itself (it may hold hand-made files: the agent looks first).
+      const askable = (item: ClearItem) => item.safe || !!item.askOnly;
+      const hasAskable = (workspace: WorkspaceUsage) => workspace.items.some((item) => askable(item) && item.bytes > 0);
+      const chosen = id === "idle" ? report.workspaces.filter((workspace) => !workspace.busy && hasAskable(workspace)) : report.workspaces.filter((workspace) => workspace.id === id && hasAskable(workspace));
+      const items = chosen.flatMap((workspace) => workspace.items.filter(askable).map((item) => ({ label: `${workspace.names[0] ?? friendlyPath(workspace.folder, { paseoHome: homeRelative(disk!.places.paseoHome, disk!.places.home) }).label} · ${item.where}`, where: join(workspace.folder, item.where), bytes: item.bytes - item.sharedBytes, what: item.what, cost: item.askOnly ? `${item.cost} It may hold files someone made by hand: look inside before deleting.` : item.cost, partial: item.partial })));
       if (!items.length) return null;
       const single = chosen.length === 1 ? chosen[0]! : null;
       const title = single ? (single.names[0] ?? single.folder) : `${chosen.length} idle workspaces`;

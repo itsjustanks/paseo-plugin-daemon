@@ -3,7 +3,7 @@ import { realpathSync } from "node:fs";
 import { lstat, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname } from "node:path";
-import { describeName, formatSize, isClearableName, isIgnoredOnlyName, isWithin, protectedReason, type DiskJob, type DiskPlan } from "../shared/disk";
+import { describeName, formatSize, isOnePressName, isWithin, protectedReason, type DiskJob, type DiskPlan, type ProbeChecks } from "../shared/disk";
 import { friendlyPath } from "../shared/paths";
 import type { ActionLogEntry } from "../shared/processes";
 import { ChildGroup } from "./disk-children";
@@ -11,7 +11,7 @@ import { gitAllows, gitVerdicts, groupGit, type GitRun } from "./disk-git";
 import { hostSnapshot, usedBeneath, workspaceUsers, type HostSnapshot } from "./disk-inuse";
 import { JOURNAL_PROBLEM, type QuarantineInventory } from "./disk-quarantine";
 import { quarantineAndRemove, type DeleteResult, type RmFlavour } from "./disk-remove";
-import { busyReason, canonicalChain, homeRelative, protectionFor, workspaceState, type DiskPlaces, type WorkspaceInfo } from "./disk-scan";
+import { NO_LOCKFILE, busyReason, canonicalChain, hasLockfile, homeRelative, protectionFor, workspaceState, type DiskPlaces, type WorkspaceInfo } from "./disk-scan";
 import { classifyJob } from "./jobs";
 
 /**
@@ -106,7 +106,7 @@ export interface CleanerDeps {
   cleared?(path: string, bytes: number): void;
   git?: GitRun;
   flavour?(): Promise<RmFlavour>;
-  probe?: (path: string, group: ChildGroup, deadline: number) => Promise<{ ok: boolean; why: string | null }>;
+  probe?: (path: string, group: ChildGroup, deadline: number, checks?: ProbeChecks) => Promise<{ ok: boolean; why: string | null }>;
   /** Tests only: runs after quarantine and checks, just before rm. */
   beforeRemove?(quarantined: string): Promise<void> | void;
   /** Temporary folders (default: the system's); tests pass their own. */
@@ -263,7 +263,7 @@ export class DiskCleaner {
     const protectedWhy = protectedReason(path, guard);
     if (protectedWhy) return no(protectedWhy);
     const name = basename(path);
-    if (!isClearableName(name) && !isIgnoredOnlyName(name)) return no("It isn't on the list of build folders Hosts may delete.");
+    if (!isOnePressName(name)) return no("Hosts only deletes folders a tool makes and manages itself; ask an agent about this one.");
     // Exactly that spelling on disk (a case-insensitive disk would also answer to "NODE_MODULES" or "Build").
     const siblings = await readdir(dirname(path)).catch(() => null);
     if (!siblings || !siblings.includes(name)) return no("Its name on disk isn't exactly one Hosts may delete, so it leaves it.");
@@ -271,6 +271,7 @@ export class DiskCleaner {
     const root = roots.filter((folder) => isWithin(path, folder)).sort((a, b) => b.length - a.length)[0] ?? null;
     if (!root) return no("It isn't inside one of your Paseo workspaces any more.");
     if (this.tmpRoots.some((tmp) => root === tmp || isWithin(root, tmp))) return no("This workspace is in a temporary folder. Hosts doesn't delete anything there; ask an agent instead.");
+    if (name === "node_modules" && !await hasLockfile(path, root)) return no(NO_LOCKFILE);
     const owners = workspaces.filter((workspace) => guard.byRoot.get(root)?.includes(workspace.id));
     const busy = owners.map((workspace) => busyReason(workspaceState(workspace.status), workspace.devServers)).find(Boolean);
     if (busy) return no(busy);

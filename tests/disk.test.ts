@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import { ChildGroup } from "../server/disk-children";
 import { gitAllows, gitVerdicts, groupGit, type GitRun } from "../server/disk-git";
-import { CLEANUP_RULES, DiskScanner, busyReason, canonicalChain, cleanupAskText, disksFor, folderAskText, itemBlocked, readWorkspace, workspaceState, type DiskPlaces, type WorkspaceInfo } from "../server/disk-scan";
+import { ASK_ONLY, CLEANUP_RULES, DiskScanner, busyReason, canonicalChain, cleanupAskText, disksFor, folderAskText, itemBlocked, readWorkspace, workspaceState, type DiskPlaces, type WorkspaceInfo } from "../server/disk-scan";
 import { diskWorker, runWorker } from "../server/disk-worker";
 import { GuardLoop } from "../server/guard-loop";
 import { DaemonLogTail } from "../server/daemon-log";
@@ -48,7 +48,11 @@ function world() {
   big(join(app, "src", "index.ts"), 1000);
   big(join(app, "src", "api", "coverage", "route.ts"), 1000);
   writeFileSync(join(app, ".env"), "SECRET=1\n");
-  git(app, "add", ".gitignore", "src");
+  // node_modules goes only with a lockfile (final gate); packages/ui shares the root's, as in a monorepo.
+  writeFileSync(join(app, "package.json"), "{}\n");
+  writeFileSync(join(app, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+  big(join(app, "packages", "ui", "package.json"), 10);
+  git(app, "add", ".gitignore", "src", "package.json", "pnpm-lock.yaml", "packages/ui/package.json");
   git(app, "commit", "-qm", "init");
   big(join(app, "node_modules", "react", "index.js"), 3 * MB);
   big(join(app, ".next", "cache", "a.bin"), 2 * MB);
@@ -268,8 +272,10 @@ describe("the scan (read-only)", () => {
     const { report } = await scanned();
     const workspace = appRow(report);
     expect(workspace.items.map((i) => i.where).sort()).toEqual([".next", "dist", "node_modules", "packages/ui/node_modules"]);
-    expect(workspace.items.every((i) => i.safe && !i.blocked)).toBe(true);
-    expect(workspace.clearableBytes).toBeGreaterThanOrEqual(7 * MB);
+    // dist is git-ignored but not tool-managed: shown with its size and Ask an agent, never one-press.
+    expect(workspace.items.filter((i) => i.where !== "dist").every((i) => i.safe && !i.blocked)).toBe(true);
+    expect(item(report, "dist")).toMatchObject({ safe: false, blocked: ASK_ONLY });
+    expect(workspace.clearableBytes).toBeGreaterThanOrEqual(6 * MB);
     expect(report.workspaces.find((w) => w.state === "unlinked")!.items.map((i) => [i.where, i.safe])).toEqual([["node_modules", true]]);
     for (const name of ["npm cache", "npx downloads", "pnpm store", "Playwright browsers", "agent-browser browsers", "pip", "build-old"]) expect(cache(report, name), name).toMatchObject({ safe: false });
     expect(cache(report, "build-old")!.askId).toBe(`tmp:${join(root, "tmp", "build-old")}`);

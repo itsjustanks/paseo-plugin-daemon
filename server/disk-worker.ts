@@ -27,8 +27,11 @@ export interface ScanRequest {
   ignoredOnly: string[];
   ignoredMaxDepth: number;
   maxItemsPerRoot: number;
+  /** Final gate: credential-shaped names anywhere inside, and source files directly inside (regex sources, folded names). */
+  credential?: string;
+  topSource?: string;
 }
-export interface WalkItem { rel: string; name: string; dev: number; ino: number; mtimeMs: number; bytes: number; sharedBytes: number; partial: boolean; hasEnv: boolean; hasGit: boolean; depth: number; ignoredOnly: boolean }
+export interface WalkItem { rel: string; name: string; dev: number; ino: number; mtimeMs: number; bytes: number; sharedBytes: number; partial: boolean; hasEnv: boolean; hasGit: boolean; depth: number; ignoredOnly: boolean; hasCredential?: boolean; hasTopSource?: boolean }
 export interface WalkResult {
   id: string;
   ok: boolean;
@@ -44,6 +47,9 @@ export interface WalkResult {
   hasEnv: boolean;
   /** A .git file or folder, or a bare repository (HEAD + objects/ + refs/), anywhere inside or at the root itself. */
   hasGit: boolean;
+  /** A credential-shaped name anywhere inside / a source file directly inside the root. */
+  hasCredential?: boolean;
+  hasTopSource?: boolean;
   items: WalkItem[];
 }
 
@@ -64,6 +70,10 @@ export function diskWorker(fs: FsLike, request: ScanRequest, emit: (result: unkn
   request.ignoredOnly.forEach(function (name) { ignoredOnly[name] = true; });
   var isEnv = function (name: string) { var folded = fold(name); return folded === ".env" || folded.indexOf(".env.") === 0; };
   var isGit = function (name: string) { return fold(name) === ".git"; };
+  var credential = request.credential ? new RegExp(request.credential) : null;
+  var topSource = request.topSource ? new RegExp(request.topSource) : null;
+  var isCredential = function (name: string) { return !!credential && credential.test(fold(name)); };
+  var isTopSource = function (name: string) { return !!topSource && topSource.test(fold(name)); };
 
   for (var r = 0; r < request.roots.length; r += 1) {
     var spec = request.roots[r]!;
@@ -72,7 +82,7 @@ export function diskWorker(fs: FsLike, request: ScanRequest, emit: (result: unkn
     if (now >= request.deadline) { emit({ id: spec.id, ok: false, skipped: true, dev: 0, ino: 0, totalBytes: 0, newestMtimeMs: 0, partial: true, entries: 0, hasEnv: false, hasGit: false, items: [] }); continue; }
     // A fair share of what's left, so one huge folder can't starve the rest.
     var rootDeadline = Math.min(request.deadline, now + Math.max(10000, (request.deadline - now) / left));
-    var result: WalkResult = { id: spec.id, ok: true, dev: 0, ino: 0, totalBytes: 0, newestMtimeMs: 0, partial: false, entries: 0, hasEnv: false, hasGit: false, items: [] };
+    var result: WalkResult = { id: spec.id, ok: true, dev: 0, ino: 0, totalBytes: 0, newestMtimeMs: 0, partial: false, entries: 0, hasEnv: false, hasGit: false, hasCredential: credential ? false : undefined, hasTopSource: topSource ? false : undefined, items: [] };
     var rootStat: ReturnType<FsLike["lstatSync"]>;
     try { rootStat = fs.lstatSync(spec.path); } catch (error) { result.ok = false; result.error = String(error && (error as { code?: string }).code || error); emit(result); continue; }
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) { result.ok = false; result.error = "not a folder"; emit(result); continue; }
@@ -104,10 +114,17 @@ export function diskWorker(fs: FsLike, request: ScanRequest, emit: (result: unkn
         var owner = result.items[entry.item]!;
         owner.bytes += bytes;
         if (stat.nlink > 1 && !stat.isDirectory()) owner.sharedBytes += bytes;
-        if (entry.rel !== owner.rel) { if (isEnv(name)) owner.hasEnv = true; if (isGit(name)) owner.hasGit = true; }
+        if (entry.rel !== owner.rel) {
+          if (isEnv(name)) owner.hasEnv = true;
+          if (isGit(name)) owner.hasGit = true;
+          if (isCredential(name)) owner.hasCredential = true;
+          if (entry.depth === owner.depth + 1 && isTopSource(name)) owner.hasTopSource = true;
+        }
       } else if (entry.depth > 0) {
         if (isEnv(name)) result.hasEnv = true;
         if (isGit(name)) result.hasGit = true;
+        if (isCredential(name)) result.hasCredential = true;
+        if (entry.depth === 1 && isTopSource(name)) result.hasTopSource = true;
       }
       if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
       var item = entry.item;
@@ -115,7 +132,7 @@ export function diskWorker(fs: FsLike, request: ScanRequest, emit: (result: unkn
       if (spec.mode === "workspace" && item < 0 && !inGit && entry.depth > 0 && result.items.length < request.maxItemsPerRoot) {
         var only = Object.prototype.hasOwnProperty.call(ignoredOnly, name) && entry.depth <= request.ignoredMaxDepth;
         if (Object.prototype.hasOwnProperty.call(clearable, name) || only) {
-          result.items.push({ rel: entry.rel, name: name, dev: stat.dev, ino: stat.ino, mtimeMs: stat.mtimeMs, bytes: bytes, sharedBytes: 0, partial: false, hasEnv: false, hasGit: false, depth: entry.depth, ignoredOnly: !Object.prototype.hasOwnProperty.call(clearable, name) });
+          result.items.push({ rel: entry.rel, name: name, dev: stat.dev, ino: stat.ino, mtimeMs: stat.mtimeMs, bytes: bytes, sharedBytes: 0, partial: false, hasEnv: false, hasGit: false, depth: entry.depth, ignoredOnly: !Object.prototype.hasOwnProperty.call(clearable, name), hasCredential: credential ? false : undefined, hasTopSource: topSource ? false : undefined });
           item = result.items.length - 1;
         }
       }

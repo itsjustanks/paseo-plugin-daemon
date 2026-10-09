@@ -3,11 +3,12 @@ import { lstat, open, readdir, readFile, realpath, statfs, stat, writeFile, mkdi
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
-  CLEARABLE_NAMES, IGNORED_ONLY_MAX_DEPTH, IGNORED_ONLY_NAMES, PROTECTED_NAME, TMP_NEVER,
-  ago, describeName, diskSpace, formatSize, protectedReason, protectedSet, toolCacheName, type ProtectedSet,
-  type CacheGroup, type ClearItem, type DiskReport, type DiskSpace, type WorkspaceState, type WorkspaceUsage,
+  CLEARABLE_NAMES, CREDENTIAL_PATTERN, IGNORED_ONLY_MAX_DEPTH, IGNORED_ONLY_NAMES, LOCKFILES, PROTECTED_NAME, TMP_NEVER, TOP_SOURCE_PATTERN,
+  ago, describeName, isOnePressName, isWithin, leftoverMessage, probeChecksFor, diskSpace, formatSize, protectedReason, protectedSet, toolCacheName, type ProtectedSet,
+  type CacheGroup, type ClearItem, type DiskReport, type DiskSpace, type LeftoverState, type WorkspaceState, type WorkspaceUsage,
 } from "../shared/disk";
 import { stateDirectory } from "./binaries";
+import type { JournalStatus } from "./disk-quarantine";
 import { ChildGroup } from "./disk-children";
 import { friendlyPath } from "../shared/paths";
 import { gitAllows, gitVerdicts, groupGit, type GitRun, type GitVerdict } from "./disk-git";
@@ -346,7 +347,7 @@ export class DiskScanner {
     const walkUntil = this.now() + left() * WALK_SHARE;
     const run = await (this.deps.walk ?? runWorker)<WalkResult>({
       op: "scan", roots, deadline: walkUntil,
-      clearable: Object.keys(CLEARABLE_NAMES), ignoredOnly: Object.keys(IGNORED_ONLY_NAMES), ignoredMaxDepth: IGNORED_ONLY_MAX_DEPTH, maxItemsPerRoot: 200,
+      clearable: Object.keys(CLEARABLE_NAMES), ignoredOnly: Object.keys(IGNORED_ONLY_NAMES), ignoredMaxDepth: IGNORED_ONLY_MAX_DEPTH, maxItemsPerRoot: 200, credential: CREDENTIAL_PATTERN, topSource: TOP_SOURCE_PATTERN,
     }, Math.max(1000, walkUntil - this.now() + 10_000), (result) => {
       byId.set(result.id, result);
       this.progress.done += 1;
@@ -473,16 +474,18 @@ export class DiskScanner {
       const state: WorkspaceState = owners.length ? owners.map((owner) => workspaceState(owner.status)).sort((a, b) => STATE_RANK[a] - STATE_RANK[b])[0]! : "unlinked";
       const devServers = [...new Set([...owners.flatMap((owner) => owner.devServers), ...(this.deps.devServersIn?.(folder.path) ?? [])])];
       const busy = busyReason(state, devServers);
-      const items: ClearItem[] = (folder.result?.items ?? []).flatMap((item) => {
+      const found: ClearItem[] = [];
+      for (const item of folder.result?.items ?? []) {
         const path = join(folder.path, item.rel);
         const blocked = itemBlocked(item, data?.git[path] ?? null, path, guard);
-        if (blocked === "hide") return [];
+        if (blocked === "hide") continue;
         const words = describeName(item.name)!;
-        const why = blocked ?? busy;
+        const why = blocked ?? (item.name === "node_modules" && !await hasLockfile(path, folder.path) ? NO_LOCKFILE : null) ?? busy;
         const workspace = owners[0]?.name ?? friendlyPath(folder.path, { home, paseoHome: this.deps.places.paseoHome }).label;
         const token = !why && mint ? mint({ path, root: folder.path, dev: item.dev, ino: item.ino, mtimeMs: item.mtimeMs, workspace, bytes: item.bytes - item.sharedBytes, what: words.what, cost: words.cost }) : null;
-        return [{ safe: !why, name: item.name, what: words.what, cost: words.cost, where: item.rel, path, bytes: item.bytes, sharedBytes: item.sharedBytes, partial: item.partial, blocked: why, token }];
-      }).sort(bySafeThenSize).slice(0, 60);
+        found.push({ safe: !why, name: item.name, what: words.what, cost: words.cost, where: item.rel, path, bytes: item.bytes, sharedBytes: item.sharedBytes, partial: item.partial, blocked: why, token, ...(blocked === ASK_ONLY ? { askOnly: true } : {}) });
+      }
+      const items = found.sort(bySafeThenSize).slice(0, 60);
       const activeAt = owners.map((owner) => owner.activityAt ?? 0).reduce((a, b) => Math.max(a, b), 0) || null;
       workspaces.push({
         id: folder.key, names: owners.map((owner) => owner.name), project: owners[0]?.project ?? null, folder: homeRelative(folder.path, home), path: folder.path,
@@ -519,15 +522,38 @@ export class DiskScanner {
   }
 }
 
+/**
+ * One journal entry as the person and an agent see it (final gate): the
+ * Workspaces note and the "Ask an agent" handoff come from the same state, so
+ * they can't tell different stories. The runtime uses this for both.
+ */
+export function leftoverView(entry: JournalStatus["entries"][number], places: { home: string; paseoHome: string }, now = Date.now()) {
+  const where = friendlyPath(entry.original, places).label;
+  return {
+    where,
+    message: leftoverMessage(entry.state, where, entry.setAside),
+    title: `A folder an interrupted delete left (${formatSize(entry.bytes)})`,
+    text: folderAskText({ path: entry.setAside ? join(entry.quarantine, entry.name) : entry.original, bytes: entry.bytes, branch: null, changedAt: entry.at, kind: "leftover", original: entry.original, state: entry.state, setAside: entry.setAside }, places.home, now),
+  };
+}
+
+/** The handoff's first line for each leftover state; same facts as leftoverMessage, never more. */
+export function leftoverLead(state: LeftoverState, where: string, size: string, setAside: boolean): string {
+  if (state === "aside") return `A delete in Hosts stopped before it removed anything. ${where} (${size}) is set aside, not deleted: Hosts couldn't put it back without replacing something, so it left it alone.`;
+  if (state === "incomplete") return `A delete in Hosts was interrupted; ${where} may be incomplete. Run the project's install or build to be sure.${setAside ? ` What's there (about ${size} before) is set aside, untouched.` : ""}`;
+  return `Hosts couldn't check a folder an interrupted delete set aside (${where}, about ${size} before). Nothing has been deleted since.`;
+}
+
 /** "Ask an agent" about a folder Hosts won't remove itself: an unlinked worktree, a /tmp leftover, or what an interrupted clear left. */
-export function folderAskText(folder: { path: string; bytes: number; branch: string | null; changedAt: number | null; kind?: "worktree" | "tmp" | "leftover"; original?: string; partial?: boolean }, home: string, now = Date.now()): string {
+export function folderAskText(folder: { path: string; bytes: number; branch: string | null; changedAt: number | null; kind?: "worktree" | "tmp" | "leftover"; original?: string; state?: LeftoverState; setAside?: boolean }, home: string, now = Date.now()): string {
   const kind = folder.kind ?? "worktree";
   const lead = kind === "worktree" ? `Hosts found a Paseo worktree that no workspace uses any more. It takes up ${formatSize(folder.bytes)}.`
-    : kind === "leftover" && folder.partial ? `A delete in Hosts was interrupted after it had started removing a build folder${folder.original ? ` (${homeRelative(folder.original, home)})` : ""}. Part of it is gone; what's left (about ${formatSize(folder.bytes)} before) is set aside, untouched.`
-    : kind === "leftover" ? `A delete in Hosts was interrupted and left a build folder set aside (${formatSize(folder.bytes)}). Hosts couldn't put it back${folder.original ? ` at ${homeRelative(folder.original, home)}` : ""} without replacing something, so it left it alone.`
+    : kind === "leftover" ? leftoverLead(folder.state ?? "unchecked", folder.original ? homeRelative(folder.original, home) : "a build folder", formatSize(folder.bytes), folder.setAside ?? true)
     : `Hosts found a folder in the temporary folder that takes up ${formatSize(folder.bytes)}. Hosts doesn't delete anything itself.`;
   const check = kind === "worktree"
     ? ["Please check whether anything in it still matters: uncommitted changes (git status) and commits that aren't pushed anywhere (git log --branches --not --remotes).", "Tell me what you find. If nothing is needed, suggest removing it properly with \"git worktree remove\" from its main repository, then \"git worktree prune\"."]
+    : kind === "leftover" && folder.setAside === false
+      ? ["Please run the project's install or build so the folder is complete again, and tell me what you find."]
     : kind === "leftover"
       ? ["Please check what's in it and whether the original place now has something new in it.", "If it's only build output (installed packages, build files), it can be deleted; otherwise it may need moving back. Tell me what you find."]
       : ["Please check what it is and whether anything is still using it or needs it.", "Tell me what you find, and whether it's safe to delete."];
@@ -583,15 +609,40 @@ export function cleanupAskText(scope: { kind: "workspaces"; title: string; check
  * answers (disk-git.ts); no answer, a cut-off check, a .env, .git or bare
  * repository inside, or a protected path all say no.
  */
-export function itemBlocked(item: Pick<WalkItem, "name" | "hasEnv" | "hasGit" | "ignoredOnly" | "partial">, git: GitVerdict | null, path: string, guard: ProtectedSet): string | null | "hide" {
+export function itemBlocked(item: Pick<WalkItem, "name" | "hasEnv" | "hasGit" | "ignoredOnly" | "partial" | "hasCredential" | "hasTopSource">, git: GitVerdict | null, path: string, guard: ProtectedSet): string | null | "hide" {
   if (git && (git.ignored === false || git.tracked === true || git.untracked === true)) return "hide";
   // dist/build/out are only build output when git says so; otherwise they're just part of the project.
   if (item.ignoredOnly && !gitAllows(git)) return "hide";
+  // Final gate: ignored isn't rebuildable. Only tool-managed folders get one-press Delete; the rest: sizes and Ask an agent.
+  if (!isOnePressName(item.name)) return ASK_ONLY;
   if (item.partial) return "Not fully checked before the time ran out. Check again to clear it.";
   if (!gitAllows(git)) return "Git couldn't confirm it's ignored build output (no repository, or no answer in time), so Hosts leaves it.";
   if (item.hasEnv) return "It has a .env file inside, so Hosts leaves it.";
   if (item.hasGit) return "It has a git repository inside, so Hosts leaves it.";
+  const checks = probeChecksFor(item.name);
+  if (checks.credentials && item.hasCredential !== false) return item.hasCredential ? "It has a file inside that looks like a key or credentials, so Hosts leaves it." : "Hosts couldn't confirm there are no keys or credentials inside. Check again to clear it.";
+  if (checks.topSource && item.hasTopSource !== false) return item.hasTopSource ? "It has a source file at its top level that someone may have put there, so Hosts leaves it." : "Hosts couldn't confirm what's at its top level. Check again to clear it.";
   return protectedReason(path, guard);
+}
+
+/** Shown on a git-ignored folder Hosts won't delete itself (dist, build, coverage, …). */
+export const ASK_ONLY = "Hosts doesn't delete this kind of folder itself: it can hold hand-made files. Ask an agent to check it.";
+export const NO_LOCKFILE = "There's no lockfile (package-lock.json, pnpm-lock.yaml, yarn.lock or bun.lock) beside its package.json, so an install might not bring it back. Hosts leaves it.";
+
+/**
+ * A node_modules is reinstallable only with a package.json right beside it
+ * and a lockfile next to that package.json or next to the package.json of a
+ * folder above it, up to the workspace root (a monorepo's one lockfile).
+ * Regular files only; anything unreadable says no.
+ */
+export async function hasLockfile(nodeModules: string, root: string): Promise<boolean> {
+  const isFile = async (path: string) => { const st = await lstat(path).catch(() => null); return !!st && st.isFile(); };
+  const owner = dirname(nodeModules);
+  if (!await isFile(join(owner, "package.json"))) return false;
+  for (let dir = owner; ; dir = dirname(dir)) {
+    if (await isFile(join(dir, "package.json"))) for (const name of LOCKFILES) if (await isFile(join(dir, name))) return true;
+    if (dir === root || !isWithin(dir, root)) return false;
+  }
 }
 
 /** The disks the given folders live on, fullest first, one entry per device (statfs and stat only: instant). */

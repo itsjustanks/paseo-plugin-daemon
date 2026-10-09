@@ -68,13 +68,13 @@ export function diskSentence(percent: number, freeBytes: number, level: DiskLeve
 
 // ------------------------------------------------- what may be cleared
 
-/** Regenerable folders inside a workspace, by exact name, with what clearing one costs. */
+/** Build folders inside a workspace, by exact name, with what clearing one costs. Only ONE_PRESS_NAMES get a Delete button. */
 export const CLEARABLE_NAMES: Readonly<Record<string, { what: string; cost: string }>> = {
   node_modules: { what: "Installed packages", cost: "Comes back on the next install (a few minutes)." },
   ".next": { what: "Next.js build files", cost: "Rebuilt the next time the app builds or starts." },
   ".nuxt": { what: "Nuxt build files", cost: "Rebuilt the next time the app builds or starts." },
   ".svelte-kit": { what: "SvelteKit build files", cost: "Rebuilt the next time the app builds or starts." },
-  ".turbo": { what: "Turborepo cache", cost: "Builds run a little slower once while it refills." },
+  ".turbo": { what: "Turborepo cache", cost: "Refilled by the next build; it runs a little slower once." },
   ".vite": { what: "Vite cache", cost: "Rebuilt the next time the dev server starts." },
   ".parcel-cache": { what: "Parcel cache", cost: "Rebuilt on the next build." },
   ".cache": { what: "Build tool cache", cost: "Builds run a little slower once while it refills." },
@@ -94,6 +94,25 @@ export const IGNORED_ONLY_NAMES: Readonly<Record<string, { what: string; cost: s
 };
 /** dist/build/out deeper than this inside a workspace aren't considered (they're usually a package's own). */
 export const IGNORED_ONLY_MAX_DEPTH = 4;
+
+/**
+ * One-press Delete (final gate): only folders a tool makes and manages by
+ * itself. Git-ignored isn't the same as rebuildable: dist, build, out,
+ * coverage, test reports, storybook-static and .cache can hold hand-made
+ * files, so they're shown with their sizes and "Ask an agent" only.
+ */
+export const ONE_PRESS_NAMES: readonly string[] = ["node_modules", ".next", ".nuxt", ".svelte-kit", ".turbo", ".vite", ".parcel-cache", "__pycache__", ".pytest_cache"];
+export const isOnePressName = (name: string) => ONE_PRESS_NAMES.includes(name);
+/** Where a top-level source file (depth 1) means someone put it there by hand. */
+export const TOP_SOURCE_CHECKED: readonly string[] = [".turbo", ".vite", ".parcel-cache", ".pytest_cache"];
+/** Credential-shaped names, matched on the folded name anywhere inside (regex source: the walk runs in a child process). */
+export const CREDENTIAL_PATTERN = "\\.(pem|key|p12|pfx|keystore)$|^id_rsa|^id_ed25519|service-account.*\\.json$|^credentials|^\\.npmrc$|^\\.netrc$|\\.env";
+export const TOP_SOURCE_PATTERN = "\\.(ts|tsx|js|py|go|rs)$";
+/** A node_modules goes only when one of these sits beside the package.json that owns it (or the workspace root's). */
+export const LOCKFILES: readonly string[] = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock"];
+/** What the inside-look refuses on, by kind. node_modules is exempt from the credential check (packages ship test keys and .npmrc); its lockfile stands in. */
+export interface ProbeChecks { credentials: boolean; topSource: boolean }
+export const probeChecksFor = (name: string): ProbeChecks => ({ credentials: name !== "node_modules", topSource: TOP_SOURCE_CHECKED.includes(name) });
 
 /**
  * A name as the disk may treat it (0.16.0 review fix): macOS's APFS is
@@ -221,6 +240,8 @@ export const ClearItemSchema = z.object({
   path: z.string().optional(),
   /** 0.16.0: signed handle for one-press Clear (a build folder inside a workspace only); null when Hosts won't clear it. */
   token: z.string().nullable().optional(),
+  /** Final gate: git-ignored build output Hosts won't delete itself (dist, coverage, …); shown by size, for Ask an agent. */
+  askOnly: z.boolean().optional(),
 });
 export type ClearItem = z.infer<typeof ClearItemSchema>;
 
@@ -280,8 +301,10 @@ export const DiskReportSchema = z.object({
   /** 0.16.0: what an interrupted clear set aside and couldn't put back; shown, never deleted by Hosts. */
   leftovers: z.array(z.object({
     id: z.string(), name: z.string(), where: z.string(), bytes: z.number().min(0), at: z.number(),
-    /** "left": set aside, couldn't go back; "partial": an interrupted delete removed part of it; "unchecked": Hosts couldn't look at it. */
-    state: z.enum(["left", "partial", "unconfirmed", "unchecked"]).optional(),
+    /** "aside": rm never ran, set aside whole; "incomplete": rm may have run; "unchecked": Hosts couldn't look at it. */
+    state: z.enum(["aside", "incomplete", "unchecked"]).optional(),
+    /** Whether something is still in the hidden folder beside the original. */
+    setAside: z.boolean().optional(),
     /** One plain sentence for the person. */
     message: z.string().optional(),
   })).optional(),
@@ -289,6 +312,19 @@ export const DiskReportSchema = z.object({
   journalProblem: z.string().nullable().optional(),
 });
 export type DiskReport = z.infer<typeof DiskReportSchema>;
+
+export type LeftoverState = "aside" | "incomplete" | "unchecked";
+
+/**
+ * What an interrupted delete left, said only as far as it's known. A count
+ * can't prove a deletion, so a delete that may have started says "may be
+ * incomplete", never "removed part of".
+ */
+export function leftoverMessage(state: LeftoverState, where: string, setAside = true): string {
+  if (state === "unchecked") return `Couldn't check a leftover from an interrupted delete (${where}). Nothing is deleted until Hosts can look at it.`;
+  if (state === "aside") return `Set aside, not deleted: ${where}. The delete stopped before anything was removed, and it couldn't be put back without replacing something. It's in a hidden folder beside it; ask an agent to move it back.`;
+  return `A delete was interrupted; ${where} may be incomplete. Run the project's install or build to be sure.${setAside ? " What's there is set aside in a hidden folder beside it; ask an agent to check it." : ""}`;
+}
 
 /** The cached report; `scan: true` starts a fresh scan in the background (one at a time) and answers at once. */
 export const diskReport = defineRpc({ name: "daemon-link.disk.report", input: z.object({ scan: z.boolean().optional() }), output: DiskReportSchema });
@@ -343,7 +379,7 @@ export const diskPreview = defineRpc({ name: "daemon-link.disk.preview", input: 
 /** Starts deleting in the background, each item checked again just before it goes; poll `diskClearStatus`. */
 export const diskClear = defineRpc({ name: "daemon-link.disk.clear", input: Tokens, output: DiskJobSchema });
 export const diskClearStatus = defineRpc({ name: "daemon-link.disk.clear-status", input: z.object({}), output: DiskJobSchema });
-/** 0.16.0 review fix: drop the record of an interrupted delete that removed part of a folder, once the person has read it. */
+/** 0.16.0: drop the "may be incomplete" note of an interrupted delete, once the person has read it. */
 export const diskLeftoverDismiss = defineRpc({ name: "daemon-link.disk.leftover-dismiss", input: z.object({ id: z.string().min(1).max(4096) }), output: z.object({ ok: z.boolean() }) });
 
 /** "Idle 3 days", "Agent working now". */

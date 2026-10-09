@@ -8,7 +8,7 @@ import { ChildGroup } from "../server/disk-children";
 import { DiskCleaner, DiskTokens } from "../server/disk-clear";
 import { busyInWorkspace, hostSnapshot, lsofPids, parseLsof, parsePs, statusUids, titleArgv, usedBeneath, type HostSnapshot, type SnapshotDeps } from "../server/disk-inuse";
 import { JOURNAL_PROBLEM, QuarantineInventory, moveNoReplace } from "../server/disk-quarantine";
-import { measure, quarantineAndRemove, rmArgs } from "../server/disk-remove";
+import { quarantineAndRemove, rmArgs } from "../server/disk-remove";
 import { DiskScanner, type DiskPlaces, type WorkspaceInfo } from "../server/disk-scan";
 import { classifyJob } from "../server/jobs";
 import { DiskReportSchema, isBigDelete } from "../shared/disk";
@@ -27,8 +27,8 @@ const big = (path: string, bytes = MB) => { mkdirSync(join(path, ".."), { recurs
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "ignore", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.invalid" } });
 const UID = process.getuid!();
 const bare = (path: string) => { mkdirSync(join(path, "objects"), { recursive: true }); mkdirSync(join(path, "refs", "heads"), { recursive: true }); writeFileSync(join(path, "HEAD"), "ref: refs/heads/main\n"); };
-/** The real count the probe and recovery use. */
-const measureIt = (path: string) => measure(path, new ChildGroup(), Date.now() + 60_000);
+/** A recorded manifest; recovery never trusts it to prove a deletion (final gate). */
+const MANIFEST = { entries: 3, bytes: 3 * MB };
 const hasQuarantine = (dir: string) => readdirSync(dir).some((name) => name.startsWith(".hosts-quarantine-"));
 
 let root = "";
@@ -46,7 +46,10 @@ function world() {
   writeFileSync(join(app, ".gitignore"), "node_modules\n.next\ndist/\n.env\n");
   big(join(app, "src", "index.ts"), 1000);
   writeFileSync(join(app, ".env"), "SECRET=1\n");
-  git(app, "add", ".gitignore", "src");
+  // A node_modules goes only with a lockfile beside its package.json (final gate).
+  writeFileSync(join(app, "package.json"), "{}\n");
+  writeFileSync(join(app, "package-lock.json"), "{}\n");
+  git(app, "add", ".gitignore", "src", "package.json", "package-lock.json");
   git(app, "commit", "-qm", "init");
   big(join(app, "node_modules", "react", "index.js"), 3 * MB);
   big(join(app, ".next", "cache", "a.bin"), 2 * MB);
@@ -226,14 +229,14 @@ describe("the quarantine journal and putting things back", () => {
     await inventory.add({ quarantine, original, name: "node_modules", dev: st.dev, ino: st.ino, bytes: 3 * MB, at: Date.now() });
     renameSync(original, join(quarantine, "node_modules"));
     // A crash after the look inside: "moved", with what was in it.
-    await inventory.moved(quarantine, (await measureIt(join(quarantine, "node_modules")))!);
+    await inventory.moved(quarantine, MANIFEST);
     return quarantine;
   }
 
   it("puts an interrupted clear back where its place is still free", async () => {
     const inventory = new QuarantineInventory(join(places.stateDir, "quarantine.json"));
     await interrupted(inventory, join(app, "node_modules"));
-    const outcome = await inventory.recover(measureIt);
+    const outcome = await inventory.recover();
     expect(outcome.restored).toHaveLength(1);
     expect(existsSync(join(app, "node_modules", "react", "index.js"))).toBe(true);
     expect(hasQuarantine(app)).toBe(false);
@@ -246,8 +249,9 @@ describe("the quarantine journal and putting things back", () => {
       const quarantine = await interrupted(inventory, join(app, "node_modules"));
       mkdirSync(join(app, "node_modules"));
       if (fill) big(join(app, "node_modules", "fresh-install.js"), 10);
-      const outcome = await inventory.recover(measureIt);
-      expect(outcome.left).toHaveLength(1);
+      const outcome = await inventory.recover();
+      expect(outcome.aside).toHaveLength(1);
+      expect((await inventory.status()).entries[0]).toMatchObject({ state: "aside", setAside: true });
       expect(existsSync(join(quarantine, "node_modules", "react", "index.js"))).toBe(true);
       if (fill) expect(existsSync(join(app, "node_modules", "fresh-install.js"))).toBe(true);
       expect(await inventory.list()).toHaveLength(1);
@@ -273,7 +277,7 @@ describe("the quarantine journal and putting things back", () => {
       writeFileSync(file, content);
       const inventory = new QuarantineInventory(file);
       expect((await inventory.inspect()).problem).toBe(JOURNAL_PROBLEM);
-      expect((await inventory.recover(measureIt)).problem).toBe(JOURNAL_PROBLEM);
+      expect((await inventory.recover()).problem).toBe(JOURNAL_PROBLEM);
       await expect(inventory.add({ quarantine: "/q", original: "/o", name: "n", dev: 1, ino: 1, bytes: 1, at: 1 })).rejects.toThrow();
       expect((await import("node:fs")).readFileSync(file, "utf8")).toBe(content);
       const { scanner, tokens, report } = await scanned();
@@ -368,10 +372,10 @@ describe("clearing", () => {
   it("the snapshot is taken after git, and fresh before each item: a build that starts mid-clear is seen", async () => {
     const { scanner, tokens, report } = await scanned();
     const order: string[] = [];
-    const gitSpy = (async (cwd: string, args: readonly string[]) => { order.push("git"); return { code: args[0] === "rev-parse" ? 0 : args[0] === "check-ignore" ? 0 : 0, stdout: args[0] === "rev-parse" ? `${app}\n` : args[0] === "check-ignore" ? ".next/\0dist/\0" : "", stderr: "" }; }) as never;
+    const gitSpy = (async (cwd: string, args: readonly string[]) => { order.push("git"); return { code: args[0] === "rev-parse" ? 0 : args[0] === "check-ignore" ? 0 : 0, stdout: args[0] === "rev-parse" ? `${app}\n` : args[0] === "check-ignore" ? ".next/\0node_modules/\0" : "", stderr: "" }; }) as never;
     let calls = 0;
     // Item 1: the check's snapshot and the final one before rm are calm; then a build starts.
-    const job = await run(cleaner(tokens, scanner, { git: gitSpy, snapshot: async () => { order.push("snapshot"); return calls++ < 2 ? calm() : calm([proc(["npm", "run", "build"])]); } }).instance, [item(report, ".next")!.token!, item(report, "dist")!.token!]);
+    const job = await run(cleaner(tokens, scanner, { git: gitSpy, snapshot: async () => { order.push("snapshot"); return calls++ < 2 ? calm() : calm([proc(["npm", "run", "build"])]); } }).instance, [item(report, ".next")!.token!, item(report, "node_modules")!.token!]);
     expect(job.results.map((r) => r.ok)).toEqual([true, false]);
     expect(order.indexOf("snapshot")).toBeGreaterThan(order.indexOf("git"));
     expect(order.filter((step) => step === "snapshot")).toHaveLength(3);
@@ -395,8 +399,8 @@ describe("clearing", () => {
     const expired = new DiskTokens(Buffer.alloc(32, 7), () => Date.now() - 3_600_000).mint({ path: join(app, "node_modules"), root: app, dev: 1, ino: 1, mtimeMs: 1, workspace: "App", bytes: 1, what: "x", cost: "y" });
     expect((await run(cleaner(tokens, scanner).instance, [`${forged}.${sig}`, expired])).results.map((r) => r.ok)).toEqual([false, false]);
     const before = Date.now();
-    const plan = await cleaner(tokens, scanner, { snapshot: async () => calm([], [join(app, "dist", "main.js")]) }).instance.preview([item(report, "node_modules")!.token!, item(report, "dist")!.token!]);
-    expect(plan.items.map((entry) => [entry.workspace, entry.where, entry.ok])).toEqual([["App", "node_modules", true], ["App", "dist", false]]);
+    const plan = await cleaner(tokens, scanner, { snapshot: async () => calm([], [join(app, ".next", "cache", "a.bin")]) }).instance.preview([item(report, "node_modules")!.token!, item(report, ".next")!.token!]);
+    expect(plan.items.map((entry) => [entry.workspace, entry.where, entry.ok])).toEqual([["App", "node_modules", true], ["App", ".next", false]]);
     expect(plan.items[1]!.reason).toMatch(/open right now/);
     expect(plan.count).toBe(1);
     expect(plan.checkedAt).toBeGreaterThanOrEqual(before);
@@ -504,7 +508,7 @@ describe("Astra review of 09b0955", () => {
     await inventory.add({ quarantine, original: join(app, "build"), name: "build", dev: 1, ino: 1, bytes: 10, at: Date.now() });
     chmodSync(locked, 0o000);
     try {
-      const outcome = await inventory.recover(measureIt);
+      const outcome = await inventory.recover();
       expect(outcome.unchecked).toHaveLength(1);
       expect(outcome.problem).toBe(UNCHECKED_PROBLEM);
       expect(await inventory.list()).toHaveLength(1);
@@ -531,18 +535,18 @@ describe("Astra review of 09b0955", () => {
     renameSync(join(app, "node_modules"), join(quarantine, "node_modules"));
     await inventory.removing(quarantine);
     rmSync(join(quarantine, "node_modules", "react"), { recursive: true });
-    const outcome = await inventory.recover(measureIt);
+    const outcome = await inventory.recover();
+    // Put back (no-replace) but never called restored: it may be incomplete.
     expect(outcome.restored).toEqual([]);
-    expect(outcome.partial).toHaveLength(1);
-    expect(existsSync(join(app, "node_modules"))).toBe(false);
-    expect((await inventory.status()).entries).toEqual([expect.objectContaining({ state: "partial", quarantine })]);
+    expect(outcome.incomplete).toHaveLength(1);
+    expect(existsSync(join(app, "node_modules"))).toBe(true);
+    expect((await inventory.status()).entries).toEqual([expect.objectContaining({ state: "incomplete", setAside: false, quarantine })]);
     expect(await inventory.blocker()).toBeNull();
     // A second load changes nothing; only dismissing drops the record.
-    await inventory.recover(measureIt);
+    await inventory.recover();
     expect(await inventory.list()).toHaveLength(1);
     expect(await inventory.dismiss(quarantine)).toBe(true);
     expect(await inventory.list()).toEqual([]);
-    expect(existsSync(quarantine)).toBe(true);
   });
 });
 
@@ -589,9 +593,9 @@ describe("Astra re-review of de4291e (2, 3, 5)", () => {
     const { scanner, tokens, report } = await scanned();
     let calls = 0;
     // Started between the check and the final look: the final look sees it by its argv and puts the folder back.
-    const job = await run(cleaner(tokens, scanner, { snapshot: async () => (calls++ === 0 ? calm() : calm([proc(["python3", "-m", "http.server", "--directory", join(app, "dist")], "/elsewhere", 70)])) }).instance, [item(report, "dist")!.token!]);
+    const job = await run(cleaner(tokens, scanner, { snapshot: async () => (calls++ === 0 ? calm() : calm([proc(["python3", "-m", "http.server", "--directory", join(app, ".next")], "/elsewhere", 70)])) }).instance, [item(report, ".next")!.token!]);
     expect(job.results[0]).toMatchObject({ ok: false, message: expect.stringMatching(/put back/) });
-    expect(existsSync(join(app, "dist", "main.js"))).toBe(true);
+    expect(existsSync(join(app, ".next", "cache", "a.bin"))).toBe(true);
   });
 
   it("5: a bare shell reading a script (bash < build.sh) or not on a terminal is busy; only a terminal shell is idle", async () => {
@@ -628,7 +632,7 @@ describe("Astra re-review of de4291e (4: crash stages)", () => {
     await inventory.add({ quarantine, original, name: "node_modules", dev: st.dev, ino: st.ino, bytes: 3 * MB, at: Date.now() });
     if (stage === "moving") return quarantine;
     renameSync(original, join(quarantine, "node_modules"));
-    if (manifest) await inventory.moved(quarantine, (await measureIt(join(quarantine, "node_modules")))!);
+    if (manifest) await inventory.moved(quarantine, MANIFEST);
     if (stage === "removing") await inventory.removing(quarantine);
     return quarantine;
   };
@@ -637,59 +641,271 @@ describe("Astra re-review of de4291e (4: crash stages)", () => {
   it("moving, original still there, quarantine empty: nothing happened, the entry is dropped", async () => {
     const inventory = journal();
     const quarantine = await set(inventory, join(app, "node_modules"), "moving");
-    const outcome = await inventory.recover(measureIt);
+    const outcome = await inventory.recover();
     expect(outcome.dropped).toHaveLength(1);
     expect(await inventory.list()).toEqual([]);
     expect(existsSync(quarantine)).toBe(false);
     expect(existsSync(join(app, "node_modules", "react", "index.js"))).toBe(true);
   });
 
-  it("moving, item already moved but never counted: unconfirmed, left set aside, not called restored", async () => {
+  it("moving, item already moved: rm never ran, so it goes back whole, whatever the count", async () => {
     const inventory = journal();
     const quarantine = await set(inventory, join(app, "node_modules"), "moving");
     renameSync(join(app, "node_modules"), join(quarantine, "node_modules"));
-    const outcome = await inventory.recover(measureIt);
-    expect(outcome.unconfirmed).toHaveLength(1);
-    expect(outcome.restored).toEqual([]);
-    expect((await inventory.status()).entries[0]).toMatchObject({ state: "unconfirmed" });
-  });
-
-  it("removing, contents exactly the manifest: rm never got going, so it goes back whole", async () => {
-    const inventory = journal();
-    await set(inventory, join(app, "node_modules"), "removing");
-    const outcome = await inventory.recover(measureIt);
+    writeFileSync(join(quarantine, "node_modules", "extra"), "x");
+    const outcome = await inventory.recover();
     expect(outcome.restored).toHaveLength(1);
     expect(existsSync(join(app, "node_modules", "react", "index.js"))).toBe(true);
+    expect(await inventory.list()).toEqual([]);
   });
 
-  it("removing with anything missing is partly removed; moved with a change is unconfirmed; neither goes back", async () => {
-    const a = journal();
-    const qa = await set(a, join(app, "node_modules"), "removing");
-    rmSync(join(qa, "node_modules", "react", "index.js"));
-    expect((await a.recover(measureIt)).partial).toHaveLength(1);
-    expect(existsSync(join(app, "node_modules"))).toBe(false);
-    const b = journal();
-    const qb = await set(b, join(app, ".next"), "moved");
-    // (set() names it node_modules inside the quarantine; what matters is the count changed.)
-    writeFileSync(join(qb, "node_modules", "extra"), "x");
-    expect((await b.recover(measureIt)).unconfirmed).toHaveLength(1);
-    expect(existsSync(join(app, ".next"))).toBe(false);
+  it("moved with a changed count still goes back whole: a count proves nothing either way", async () => {
+    const inventory = journal();
+    const quarantine = await set(inventory, join(app, "node_modules"), "moved");
+    rmSync(join(quarantine, "node_modules", "react", "index.js"));
+    const outcome = await inventory.recover();
+    expect(outcome.restored).toHaveLength(1);
+    expect(existsSync(join(app, "node_modules", "react"))).toBe(true);
   });
 
-  it("an rm that stops part way in this session is reported as partly removed, never as restored", async () => {
+  it("moving or moved with its place taken: set aside, not deleted, and said so", async () => {
+    for (const stage of ["moving", "moved"] as const) {
+      const inventory = journal();
+      if (!existsSync(join(app, "node_modules"))) big(join(app, "node_modules", "react", "index.js"));
+      const quarantine = await set(inventory, join(app, "node_modules"), stage);
+      if (stage === "moving") renameSync(join(app, "node_modules"), join(quarantine, "node_modules"));
+      mkdirSync(join(app, "node_modules"));
+      const outcome = await inventory.recover();
+      expect(outcome.aside).toHaveLength(1);
+      expect((await inventory.status()).entries[0]).toMatchObject({ state: "aside", setAside: true });
+      expect(await inventory.dismiss(quarantine)).toBe(false);
+      rmSync(join(app, "node_modules"), { recursive: true });
+      renameSync(join(quarantine, "node_modules"), join(app, "node_modules"));
+      rmSync(quarantine, { recursive: true });
+    }
+  });
+
+  it("removing, even with contents exactly the manifest: put back but only ever 'may be incomplete'", async () => {
+    const inventory = journal();
+    await set(inventory, join(app, "node_modules"), "removing");
+    const outcome = await inventory.recover();
+    expect(outcome.restored).toEqual([]);
+    expect(outcome.incomplete).toHaveLength(1);
+    expect(existsSync(join(app, "node_modules", "react", "index.js"))).toBe(true);
+    expect((await inventory.status()).entries[0]).toMatchObject({ state: "incomplete", setAside: false });
+  });
+
+  it("removing with its place taken: stays set aside and 'may be incomplete'", async () => {
+    const inventory = journal();
+    const quarantine = await set(inventory, join(app, "node_modules"), "removing");
+    mkdirSync(join(app, "node_modules"));
+    expect((await inventory.recover()).incomplete).toHaveLength(1);
+    expect((await inventory.status()).entries[0]).toMatchObject({ state: "incomplete", setAside: true });
+    expect(existsSync(join(quarantine, "node_modules", "react", "index.js"))).toBe(true);
+  });
+
+  it("an rm that stops part way in this session: put back, 'may be incomplete', never restored", async () => {
     const { chmodSync } = await import("node:fs");
     const inventory = journal();
     const st = lstatSync(join(app, "node_modules"));
-    let locked = "";
     const result = await quarantineAndRemove(join(app, "node_modules"), { dev: st.dev, ino: st.ino, bytes: 1 }, {
       group: new ChildGroup(), deadline: Date.now() + 120_000, inventory,
       // A folder rm can't empty: everything else goes, this stays.
-      beforeRemove: (moved) => { mkdirSync(join(moved, "stuck", "inner"), { recursive: true }); writeFileSync(join(moved, "stuck", "inner", "f"), "x"); locked = join(moved, "stuck"); chmodSync(locked, 0o500); },
+      beforeRemove: (moved) => { mkdirSync(join(moved, "stuck", "inner"), { recursive: true }); writeFileSync(join(moved, "stuck", "inner", "f"), "x"); chmodSync(join(moved, "stuck"), 0o500); },
     });
+    const locked = join(app, "node_modules", "stuck");
     try {
-      expect(result).toMatchObject({ ok: false, partial: true, error: expect.stringMatching(/part of it is gone|can't say how much/) });
-      expect((await inventory.status()).entries[0]?.state).toMatch(/partial|unconfirmed/);
-      expect(existsSync(join(app, "node_modules"))).toBe(false);
-    } finally { if (locked) chmodSync(locked, 0o700); }
+      expect(result).toMatchObject({ ok: false, partial: true, error: expect.stringContaining("A delete was interrupted; this folder may be incomplete. Run the project's install or build to be sure.") });
+      expect(result.error).not.toMatch(/part of it is gone|removed part/);
+      expect((await inventory.status()).entries[0]).toMatchObject({ state: "incomplete", setAside: false });
+      expect(existsSync(locked)).toBe(true);
+    } finally { if (existsSync(locked)) chmodSync(locked, 0o700); }
+  });
+
+});
+
+describe("final Astra gate on 3ac1b6e", () => {
+  const ASK = /only deletes folders a tool makes/;
+
+  it("1: a git-ignored dist with hand-made files and credentials is never offered, and a token for it is refused", async () => {
+    big(join(app, "dist", "service-account.json"), 100);
+    big(join(app, "dist", "notes.md"), 100);
+    const { scanner, tokens, report } = await scanned();
+    const { ASK_ONLY } = await import("../server/disk-scan");
+    expect(item(report, "dist")).toMatchObject({ safe: false, token: null, blocked: ASK_ONLY });
+    const job = await run(cleaner(tokens, scanner).instance, [mintFor(tokens, join(app, "dist"))]);
+    expect(job.results[0]).toMatchObject({ ok: false, message: expect.stringMatching(ASK) });
+    expect(existsSync(join(app, "dist", "service-account.json"))).toBe(true);
+    expect(existsSync(join(app, "dist", "notes.md"))).toBe(true);
+  });
+
+  it("1: build, out, coverage, test reports, storybook-static and .cache are Ask-an-agent only, even with a valid token", async () => {
+    const names = ["build", "out", "coverage", "test-results", "playwright-report", "storybook-static", ".cache"];
+    writeFileSync(join(app, ".gitignore"), `node_modules\n.next\ndist/\n.env\n${names.join("\n")}\n`);
+    for (const name of names) big(join(app, name, "a.bin"), 100);
+    const { scanner, tokens, report } = await scanned();
+    for (const name of names) expect(item(report, name), name).toMatchObject({ safe: false, token: null });
+    const job = await run(cleaner(tokens, scanner).instance, names.map((name) => mintFor(tokens, join(app, name))));
+    expect(job.results.every((r) => !r.ok && ASK.test(r.message ?? ""))).toBe(true);
+    for (const name of names) expect(existsSync(join(app, name, "a.bin")), name).toBe(true);
+  });
+
+  it("1: credential-shaped files inside .next are refused at the check, and at the look inside if they appear later", async () => {
+    for (const file of ["server.pem", "tls.key", "store.p12", "a.pfx", "release.keystore", "id_rsa", "id_ed25519.pub", "my-service-account-prod.json", "credentials", "credentials.json", ".npmrc", ".netrc", "prod.env", ".env.local"]) {
+      big(join(app, ".next", "standalone", file), 10);
+      const { report } = await scanned();
+      expect(item(report, ".next"), file).toMatchObject({ safe: false, token: null, blocked: expect.stringMatching(/\.env file|key or credentials/) });
+      rmSync(join(app, ".next", "standalone"), { recursive: true });
+    }
+    const { scanner, tokens, report } = await scanned();
+    const token = item(report, ".next")!.token!;
+    // Inside an existing folder, so .next itself looks unchanged and only the look inside can catch it.
+    big(join(app, ".next", "cache", "Credentials.JSON"), 10);
+    const job = await run(cleaner(tokens, scanner, { beforeRemove: () => { throw new Error("rm must not run"); } }).instance, [token]);
+    expect(job.results[0]).toMatchObject({ ok: false, message: expect.stringMatching(/key or credentials.*put back/) });
+    expect(existsSync(join(app, ".next", "cache", "Credentials.JSON"))).toBe(true);
+  });
+
+  it("1: a top-level source file in .vite, .turbo, .parcel-cache or .pytest_cache is refused; deeper ones are the tool's own", async () => {
+    writeFileSync(join(app, ".gitignore"), "node_modules\n.next\ndist/\n.env\n.vite\n.turbo\n.parcel-cache\n.pytest_cache\n");
+    big(join(app, ".vite", "deps", "react.js"), 100);
+    big(join(app, ".turbo", "cookies", "1.cookie"), 100);
+    const first = await scanned();
+    expect(item(first.report, ".vite")).toMatchObject({ safe: true });
+    expect(item(first.report, ".turbo")).toMatchObject({ safe: true });
+    for (const [folder, file] of [[".vite", "config.ts"], [".turbo", "run.js"], [".parcel-cache", "main.py"], [".pytest_cache", "helper.go"], [".vite", "lib.RS"], [".turbo", "view.tsx"]] as const) {
+      big(join(app, folder, file), 10);
+      expect(item((await scanned()).report, folder), `${folder}/${file}`).toMatchObject({ safe: false, blocked: expect.stringMatching(/source file at its top level/) });
+      rmSync(join(app, folder, file));
+    }
+    // Appears after the check: the look inside refuses it and puts the folder back. A whole-second mtime,
+    // set again after the write, so .vite looks unchanged and only the look inside can catch it.
+    utimesSync(join(app, ".vite"), 1_700_000_000, 1_700_000_000);
+    const { scanner, tokens, report } = await scanned();
+    const token = item(report, ".vite")!.token!;
+    big(join(app, ".vite", "plugin.ts"), 10);
+    utimesSync(join(app, ".vite"), 1_700_000_000, 1_700_000_000);
+    const job = await run(cleaner(tokens, scanner, { beforeRemove: () => { throw new Error("rm must not run"); } }).instance, [token]);
+    expect(job.results[0], JSON.stringify(job.results[0])).toMatchObject({ ok: false, message: expect.stringMatching(/source file at its top level.*put back/) });
+    expect(existsSync(join(app, ".vite", "plugin.ts"))).toBe(true);
+  });
+
+  it("1: node_modules is exempt from the credential check (packages ship test keys and .npmrc); its lockfile stands in", async () => {
+    big(join(app, "node_modules", "some-pkg", "test", "fixture.pem"), 10);
+    big(join(app, "node_modules", "other", ".npmrc"), 10);
+    const { scanner, tokens, report } = await scanned();
+    expect(item(report, "node_modules")).toMatchObject({ safe: true });
+    const job = await run(cleaner(tokens, scanner).instance, [item(report, "node_modules")!.token!]);
+    expect(job.results[0]).toMatchObject({ ok: true });
+    expect(existsSync(join(app, "node_modules"))).toBe(false);
+  });
+
+  it("1: node_modules without a lockfile beside its package.json is refused at the check and by the cleaner", async () => {
+    const { scanner, tokens } = await scanned();
+    const token = mintFor(tokens, join(app, "node_modules"));
+    rmSync(join(app, "package-lock.json"));
+    const { NO_LOCKFILE } = await import("../server/disk-scan");
+    expect(item((await scanned()).report, "node_modules")).toMatchObject({ safe: false, token: null, blocked: NO_LOCKFILE });
+    const job = await run(cleaner(tokens, scanner).instance, [token]);
+    expect(job.results[0]).toMatchObject({ ok: false, message: NO_LOCKFILE });
+    expect(existsSync(join(app, "node_modules", "react", "index.js"))).toBe(true);
+  });
+
+  it("1: hasLockfile: needs package.json beside it; a lockfile there or at a package.json above it, never above the workspace root", async () => {
+    const { hasLockfile } = await import("../server/disk-scan");
+    const nested = join(app, "packages", "ui");
+    mkdirSync(join(nested, "node_modules"), { recursive: true });
+    expect(await hasLockfile(join(nested, "node_modules"), app)).toBe(false);
+    writeFileSync(join(nested, "package.json"), "{}");
+    expect(await hasLockfile(join(nested, "node_modules"), app)).toBe(true);
+    for (const lock of ["pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock"]) {
+      rmSync(join(app, "package-lock.json"), { force: true });
+      for (const other of ["pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock"]) rmSync(join(app, other), { force: true });
+      writeFileSync(join(app, lock), "");
+      expect(await hasLockfile(join(app, "node_modules"), app), lock).toBe(true);
+    }
+    for (const other of ["pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock"]) rmSync(join(app, other), { force: true });
+    // A lockfile above the workspace root doesn't count, and neither does a folder named like one.
+    writeFileSync(join(app, "..", "package.json"), "{}");
+    writeFileSync(join(app, "..", "package-lock.json"), "{}");
+    mkdirSync(join(app, "yarn.lock"));
+    expect(await hasLockfile(join(app, "node_modules"), app)).toBe(false);
+  });
+
+  it("real delete of node_modules WITH a lockfile; refusal WITHOUT one (real rm, temp workspace)", async () => {
+    const { scanner, tokens, report } = await scanned();
+    const job = await run(cleaner(tokens, scanner).instance, [item(report, "node_modules")!.token!]);
+    expect(job.results[0]).toMatchObject({ ok: true });
+    expect(existsSync(join(app, "node_modules"))).toBe(false);
+    expect(hasQuarantine(app)).toBe(false);
+    big(join(worktree, "node_modules", "y.js"), 100);
+    rmSync(join(worktree, "package-lock.json"));
+    const again = await scanned([idleWorkspace(), { ...idleWorkspace("done", worktree), id: "wks_2", worktree: true }]);
+    expect(again.report.workspaces.find((w) => w.path === app)!.items.find((i) => i.where === "node_modules")).toBeUndefined();
+    const wt = again.report.workspaces.find((w) => w.path === worktree)!.items.find((i) => i.where === "node_modules");
+    expect(wt).toMatchObject({ safe: false, token: null });
+    expect(existsSync(join(worktree, "node_modules", "y.js"))).toBe(true);
+  });
+});
+
+describe("final Astra gate on 3ac1b6e (2, 3: every stage → its words, in the note and the handoff)", () => {
+  const stages = async (stage: "moving" | "moved" | "removing", taken: boolean) => {
+    const { mkdtempSync } = await import("node:fs");
+    const original = join(app, "node_modules");
+    if (!existsSync(original)) big(join(original, "react", "index.js"));
+    const quarantine = mkdtempSync(join(app, ".hosts-quarantine-"));
+    const inventory = new QuarantineInventory(join(places.stateDir, `q-${stage}-${taken}.json`));
+    const st = lstatSync(original);
+    await inventory.add({ quarantine, original, name: "node_modules", dev: st.dev, ino: st.ino, bytes: 3 * MB, at: Date.now() });
+    renameSync(original, join(quarantine, "node_modules"));
+    if (stage !== "moving") await inventory.moved(quarantine, MANIFEST);
+    if (stage === "removing") await inventory.removing(quarantine);
+    if (taken) mkdirSync(original);
+    return { inventory, quarantine };
+  };
+  const NOTE = {
+    aside: "Set aside, not deleted: ~/code/app/node_modules. The delete stopped before anything was removed, and it couldn't be put back without replacing something. It's in a hidden folder beside it; ask an agent to move it back.",
+    incompleteAside: "A delete was interrupted; ~/code/app/node_modules may be incomplete. Run the project's install or build to be sure. What's there is set aside in a hidden folder beside it; ask an agent to check it.",
+    incompleteBack: "A delete was interrupted; ~/code/app/node_modules may be incomplete. Run the project's install or build to be sure.",
+  };
+  const cases = [
+    { stage: "moving", taken: false, state: null, note: null },
+    { stage: "moved", taken: false, state: null, note: null },
+    { stage: "moving", taken: true, state: "aside", note: NOTE.aside },
+    { stage: "moved", taken: true, state: "aside", note: NOTE.aside },
+    { stage: "removing", taken: false, state: "incomplete", note: NOTE.incompleteBack },
+    { stage: "removing", taken: true, state: "incomplete", note: NOTE.incompleteAside },
+  ] as const;
+
+  for (const c of cases) {
+    it(`${c.stage}${c.taken ? ", its place taken" : ""} → ${c.state ?? "put back whole, no note"}`, async () => {
+      const { leftoverView } = await import("../server/disk-scan");
+      const { inventory } = await stages(c.stage, c.taken);
+      const outcome = await inventory.recover();
+      const entries = (await inventory.status()).entries;
+      if (!c.state) {
+        expect(outcome.restored).toHaveLength(1);
+        expect(entries).toEqual([]);
+        expect(existsSync(join(app, "node_modules", "react", "index.js"))).toBe(true);
+        return;
+      }
+      expect(outcome.restored).toEqual([]);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]!.state).toBe(c.state);
+      const view = leftoverView(entries[0]!, { home: places.home, paseoHome: places.paseoHome });
+      expect(view.message).toBe(c.note);
+      // The handoff says the same, and never more.
+      if (c.state === "aside") expect(view.text).toMatch(/stopped before it removed anything[\s\S]*set aside, not deleted/);
+      else expect(view.text).toContain("may be incomplete. Run the project's install or build to be sure.");
+      for (const words of [view.message, view.text, view.title]) expect(words).not.toMatch(/Part of it is gone|removed part|partly removed|untouched\.$/);
+      if (c.stage !== "removing") expect(view.text).not.toMatch(/incomplete/);
+    });
+  }
+
+  it("couldn't check → its own words, nothing claimed", async () => {
+    const { leftoverMessage } = await import("../shared/disk");
+    const { leftoverLead } = await import("../server/disk-scan");
+    expect(leftoverMessage("unchecked", "~/x")).toBe("Couldn't check a leftover from an interrupted delete (~/x). Nothing is deleted until Hosts can look at it.");
+    expect(leftoverLead("unchecked", "~/x", "1 MB", true)).not.toMatch(/gone|removed|incomplete/);
   });
 });

@@ -4,6 +4,7 @@ import { moveNoReplace, type QuarantineEntry } from "./disk-quarantine";
 import { ChildGroup } from "./disk-children";
 import { basename, dirname, join } from "node:path";
 import { runWorker, type WalkResult } from "./disk-worker";
+import { CREDENTIAL_PATTERN, TOP_SOURCE_PATTERN, probeChecksFor, type ProbeChecks } from "../shared/disk";
 
 /**
  * How Hosts deletes (0.14.0, reviewed): no hand-written recursive walk.
@@ -43,27 +44,20 @@ export interface Manifest { entries: number; bytes: number }
 /**
  * Is there anything inside that must never go? Hosts' physical walk, whole
  * folder, until `deadline`. Also what's in it (its manifest: entries and
- * bytes), so a crash later can tell "untouched" from "partly removed".
+ * bytes), kept as a record only; a count never proves a deletion.
  */
-export async function probeInside(path: string, group: ChildGroup, deadline: number): Promise<{ ok: boolean; why: string | null; manifest?: Manifest }> {
+export async function probeInside(path: string, group: ChildGroup, deadline: number, checks: ProbeChecks = { credentials: true, topSource: true }): Promise<{ ok: boolean; why: string | null; manifest?: Manifest }> {
   const left = deadline - Date.now();
   if (left < 2000) return { ok: false, why: "There wasn't enough time left to look inside it, so it was put back." };
-  const run = await runWorker<WalkResult>({ op: "scan", roots: [{ id: "probe", path, mode: "whole" }], deadline: deadline - 1000, clearable: [], ignoredOnly: [], ignoredMaxDepth: 0, maxItemsPerRoot: 0 }, left, undefined, group);
+  const run = await runWorker<WalkResult>({ op: "scan", roots: [{ id: "probe", path, mode: "whole" }], deadline: deadline - 1000, clearable: [], ignoredOnly: [], ignoredMaxDepth: 0, maxItemsPerRoot: 0, credential: CREDENTIAL_PATTERN, topSource: TOP_SOURCE_PATTERN }, left, undefined, group);
   const result = run.results[0];
   if (!result || !result.ok || run.timedOut || run.error) return { ok: false, why: "Hosts couldn't look inside it to be sure, so it was put back." };
   if (result.partial || result.skipped) return { ok: false, why: "Hosts couldn't read all of it to be sure, so it was put back." };
   if (result.hasEnv || result.hasGit) return { ok: false, why: "It has a .env file or a git repository inside, so it was put back." };
+  // Fail-closed: a walk that didn't say "none" counts as "found".
+  if (checks.credentials && result.hasCredential !== false) return { ok: false, why: "It has a file inside that looks like a key or credentials, so it was put back." };
+  if (checks.topSource && result.hasTopSource !== false) return { ok: false, why: "It has a source file at its top level that someone may have put there, so it was put back." };
   return { ok: true, why: null, manifest: { entries: result.entries, bytes: result.totalBytes } };
-}
-
-/** What's in a folder now, the same way the probe counted it; null when it can't be read completely. */
-export async function measure(path: string, group: ChildGroup, deadline: number): Promise<Manifest | null> {
-  const left = deadline - Date.now();
-  if (left < 1000) return null;
-  const run = await runWorker<WalkResult>({ op: "scan", roots: [{ id: "measure", path, mode: "whole" }], deadline: deadline - 500, clearable: [], ignoredOnly: [], ignoredMaxDepth: 0, maxItemsPerRoot: 0 }, left, undefined, group);
-  const result = run.results[0];
-  if (!result || !result.ok || run.timedOut || run.error || result.partial || result.skipped) return null;
-  return { entries: result.entries, bytes: result.totalBytes };
 }
 
 export type RmFlavour = "gnu" | "bsd" | null;
@@ -83,12 +77,10 @@ export interface RemoveDeps {
   inventory?: {
     add(entry: QuarantineEntry): Promise<void>; done(quarantine: string): Promise<void>;
     moved?(quarantine: string, manifest: Manifest): Promise<void>; removing?(quarantine: string): Promise<void>;
-    outcome?(quarantine: string, outcome: "left" | "partial" | "unconfirmed"): Promise<void>;
+    outcome?(quarantine: string, outcome: "aside" | "incomplete", aside?: boolean): Promise<void>;
   };
   /** The physical inside-check; tests can swap it. Defaults to the scan worker. */
-  probe?: (path: string, group: ChildGroup, deadline: number) => Promise<{ ok: boolean; why: string | null; manifest?: Manifest }>;
-  /** What's in a folder now (the probe's count); tests can swap it. */
-  measure?: (path: string, group: ChildGroup, deadline: number) => Promise<Manifest | null>;
+  probe?: (path: string, group: ChildGroup, deadline: number, checks?: ProbeChecks) => Promise<{ ok: boolean; why: string | null; manifest?: Manifest }>;
   /** Tests only: runs after the item is quarantined and checked, just before rm. */
   beforeRemove?: (quarantined: string) => Promise<void> | void;
   /** The clear's one deadline (epoch ms): the inside-check and rm get only what's left. */
@@ -124,22 +116,22 @@ export async function quarantineAndRemove(target: string, expected: { dev: numbe
     const current = await lstat(moved).catch(() => null);
     const back = current && !current.isSymbolicLink() ? await moveNoReplace(moved, target, current.ino) : "failed";
     if (back === "moved") { await rmdir(quarantine).catch(() => undefined); await deps.inventory?.done(quarantine).catch(() => undefined); return refuse(error); }
-    // Nothing was removed (rm hadn't started): it's whole, set aside, and listed as such.
-    await deps.inventory?.outcome?.(quarantine, "left").catch(() => undefined);
-    return { ...refuse(`${error} It couldn't be put back${back === "conflict" ? " (something new is in its place)" : ""}, so it's set aside, whole and untouched; Hosts lists it under "Left over from an interrupted delete".`), leftovers: 1 };
+    // rm hadn't started: it's whole, set aside, not deleted, and listed as such.
+    await deps.inventory?.outcome?.(quarantine, "aside", true).catch(() => undefined);
+    return { ...refuse(`${error} It couldn't be put back${back === "conflict" ? " (something new is in its place)" : ""}, so it's set aside, not deleted; Hosts lists it under "Left over from an interrupted delete".`), leftovers: 1 };
   };
   const st = await lstat(moved).catch(() => null);
   if (!st || st.isSymbolicLink() || !st.isDirectory() || st.ino !== expected.ino || st.dev !== expected.dev) return putBack("It changed just before it was cleared, so it was put back.");
-  const inside = await (deps.probe ?? probeInside)(moved, deps.group, deps.deadline);
+  const inside = await (deps.probe ?? probeInside)(moved, deps.group, deps.deadline, probeChecksFor(basename(target)));
   if (!inside.ok) return putBack(inside.why ?? "Hosts couldn't be sure what's inside, so it was put back.");
-  // "moved", with what's in it: a later crash can tell untouched from partly removed by counting again.
+  // "moved": rm hasn't run, so a crash from here on puts it back whole.
   const manifest = inside.manifest ?? null;
   if (!manifest) return putBack("Hosts couldn't count what's inside, so it was put back.");
   try { await deps.inventory?.moved?.(quarantine, manifest); } catch { return putBack("Hosts couldn't record the move, so it was put back."); }
   // The inside-check can take a while: look again at what's running, now, before anything is removed.
   const blocked = deps.finalCheck ? await deps.finalCheck(quarantine).catch(() => "Hosts couldn't check again what's running, so it was put back.") : null;
   if (blocked) return putBack(blocked);
-  // Recorded before rm starts: if Hosts stops mid-delete, the next load says part of it was removed, never "restored".
+  // Recorded before rm starts: if Hosts stops mid-delete, the next load says "may be incomplete", never "restored".
   try { await deps.inventory?.removing?.(quarantine); } catch { return putBack("Hosts couldn't record the delete, so it was put back."); }
   await deps.beforeRemove?.(moved);
   const left = deps.deadline - Date.now();
@@ -147,18 +139,11 @@ export async function quarantineAndRemove(target: string, expected: { dev: numbe
   const removed = await deps.group.run("rm", rmArgs(kind, quarantine), { timeoutMs: left });
   const gone = !(await lstat(quarantine).catch(() => null));
   if (removed.code === 0 && gone) { await deps.inventory?.done(quarantine).catch(() => undefined); return { ok: true, removedBytes: expected.bytes, leftovers: 0, partial: false }; }
-  // rm stopped early. Count again: exactly what was there means nothing went, so it goes back whole; anything else is partly removed.
-  const now = await (deps.measure ?? measure)(moved, deps.group, Math.max(deps.deadline, Date.now() + 60_000)).catch(() => null);
-  if (now && now.entries === manifest.entries && now.bytes === manifest.bytes) {
-    const back = await moveNoReplace(moved, target, expected.ino);
-    if (back === "moved") { await rmdir(quarantine).catch(() => undefined); await deps.inventory?.done(quarantine).catch(() => undefined); return { ok: false, removedBytes: 0, leftovers: 0, partial: false, error: "rm stopped before removing anything, so it was put back, whole." }; }
-    await deps.inventory?.outcome?.(quarantine, "left").catch(() => undefined);
-    return { ok: false, removedBytes: 0, leftovers: 1, partial: false, error: "rm stopped before removing anything; it couldn't be put back without replacing something, so it's set aside, whole, under \"Left over from an interrupted delete\"." };
-  }
-  if (!now) {
-    await deps.inventory?.outcome?.(quarantine, "unconfirmed").catch(() => undefined);
-    return { ok: false, removedBytes: 0, leftovers: 1, partial: true, error: "rm stopped early and Hosts couldn't count what's left, so it can't say how much is gone. Run the project's install to rebuild it; what's left is listed under \"Left over from an interrupted delete\"." };
-  }
-  await deps.inventory?.outcome?.(quarantine, "partial").catch(() => undefined);
-  return { ok: false, removedBytes: 0, leftovers: 1, partial: true, error: removed.killed || removed.timedOut ? "Deleting was stopped part way: part of it is gone. Run the project's install to rebuild it; the rest is listed under \"Left over from an interrupted delete\"." : "rm couldn't remove all of it: part of it is gone. Run the project's install to rebuild it; the rest is listed under \"Left over from an interrupted delete\"." };
+  // rm stopped early: it may have removed some of it, and a count can't prove how much. Put back what's there
+  // (never replacing anything) and say only that it may be incomplete; the note stays until dismissed.
+  const current = await lstat(moved).catch(() => null);
+  const back = current && current.isDirectory() && !current.isSymbolicLink() ? await moveNoReplace(moved, target, current.ino) : "failed";
+  if (back === "moved") await rmdir(quarantine).catch(() => undefined);
+  await deps.inventory?.outcome?.(quarantine, "incomplete", back !== "moved").catch(() => undefined);
+  return { ok: false, removedBytes: 0, leftovers: 1, partial: true, error: `A delete was interrupted; this folder may be incomplete. Run the project's install or build to be sure.${back === "moved" ? "" : " What's there is set aside in a hidden folder beside it."}` };
 }

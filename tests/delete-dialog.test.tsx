@@ -36,7 +36,7 @@ const Dialog = ({ title, open, children }: { title: string; open: boolean; child
 
 const plan = (bytes: number, count: number, refused = 0) => ({
   items: [
-    ...Array.from({ length: count }, (_, index) => ({ workspace: "project-hub", where: `apps/a${index}/node_modules`, path: `/home/u/hub/apps/a${index}/node_modules`, what: "Installed packages", cost: "Comes back.", bytes: Math.round(bytes / count), ok: true, reason: null })),
+    ...Array.from({ length: count }, (_, index) => ({ workspace: "project-hub", where: index === 1 ? `apps/a${index}/.next` : `apps/a${index}/node_modules`, path: `/home/u/hub/apps/a${index}/node_modules`, what: "Installed packages", cost: index === 1 ? "Rebuilt the next time the app builds." : "Comes back.", bytes: Math.round(bytes / count), ok: true, reason: null })),
     ...Array.from({ length: refused }, (_, index) => ({ workspace: "site", where: `dist${index}`, path: `/home/u/site/dist${index}`, what: "Build output", cost: "Rebuilt.", bytes: 10, ok: false, reason: "Something has a file in it open right now." })),
   ],
   bytes, count, checkedAt: Date.now(),
@@ -72,7 +72,12 @@ describe("Delete dialog", () => {
     const words = text(renderer.toJSON());
     expect(renderer.root.findAll((node) => (node.type as unknown) === "Dialog")[0]!.props.title).toBe("Delete 3 folders (3 GB)?");
     expect(words).toContain("This permanently deletes these folders. They can't be restored from Paseo.");
-    expect(words).toContain("They come back the next time you install or build (a few minutes).");
+    expect(words).toContain("How they come back:");
+    // One line per kind, from that kind's own words; refused folders aren't listed.
+    expect(words).toContain("node_modules: Comes back.");
+    expect(words).toContain(".next: Rebuilt the next time the app builds.");
+    expect(words).not.toContain("dist0: Rebuilt.");
+    expect(words).not.toContain("They come back the next time you install or build");
     expect(words).toContain("project-hub");
     expect(words).toContain("apps/a0/node_modules · 1 GB · Installed packages");
     expect(words).toContain("Won't be deleted");

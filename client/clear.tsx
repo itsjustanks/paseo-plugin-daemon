@@ -19,6 +19,12 @@ import { ItemTitle, Meta, Note, SPACE, TYPE } from "./kit";
  */
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`;
+/** One line per kind that will go, with how that kind comes back (final gate: not one line for all). */
+export const comesBack = (items: DiskPlan["items"]) => {
+  const byKind = new Map<string, string>();
+  for (const item of items) if (item.ok) byKind.set(item.where.slice(item.where.lastIndexOf("/") + 1), item.cost);
+  return [...byKind].map(([kind, cost]) => `${kind}: ${cost}`);
+};
 const checkedWords = (at: number, now = Date.now()) => { const seconds = Math.max(0, Math.round((now - at) / 1000)); return seconds < 45 ? "Checked just now" : `Checked ${Math.round(seconds / 60)} min ago`; };
 
 export function DeleteDialog({ theme, tokens, open, onClose, onStarted }: {
@@ -72,7 +78,10 @@ export function DeleteDialog({ theme, tokens, open, onClose, onStarted }: {
         {plan && plan.count > 0 ? (
           <>
             <DangerLine theme={theme}>This permanently deletes these folders. They can't be restored from Paseo.</DangerLine>
-            <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>They come back the next time you install or build (a few minutes).</Text>
+            <View style={{ gap: SPACE.xs }}>
+              <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>How they come back:</Text>
+              {comesBack(plan.items).map((line) => <Meta key={line} theme={theme}>{line}</Meta>)}
+            </View>
             {[...groups].map(([workspace, items]) => (
               <View key={workspace} style={{ gap: SPACE.xs }}>
                 <ItemTitle theme={theme}>{redactSecrets(workspace)}</ItemTitle>

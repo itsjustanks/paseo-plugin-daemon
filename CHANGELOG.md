@@ -19,8 +19,12 @@ belongs to. `requirements.paseo` stays `>=0.9.0`; no settings change, so no migr
   first. It confirms once and starts fresh each time it opens. Afterwards, a toast ("Deleted 4.2 GB
   from 6 folders") and each row lists what was deleted or skipped and why. Every delete is logged.
   The Stop sheet in the hub follows the same rules.
-- **What Delete can remove:** only allow-listed build folders inside a workspace or worktree root
-  that git says right now are ignored, with nothing tracked and nothing new-and-unignored beneath.
+- **What Delete can remove:** only folders a tool makes and manages by itself (`node_modules`,
+  `.next`, `.nuxt`, `.svelte-kit`, `.turbo`, `.vite`, `.parcel-cache`, `__pycache__`,
+  `.pytest_cache`) inside a workspace or worktree root that git says right now are ignored, with
+  nothing tracked and nothing new-and-unignored beneath. `dist`, `build`, `out`, `coverage`,
+  `test-results`, `playwright-report`, `storybook-static` and `.cache` are shown by size with Ask an
+  agent only.
   Never caches, browser downloads, /tmp, a workspace in a temporary folder, a whole workspace or
   worktree, .git, .env, agents' history or Paseo's data (those stay Ask an agent). Ported from the
   reviewed 0.14 cleanup branch (quarantine beside the folder, an inode check, a look inside for
@@ -51,9 +55,8 @@ belongs to. `requirements.paseo` stays `>=0.9.0`; no settings change, so no migr
     in the workspace or opened a file in the folder meanwhile puts it back.
   - Only "no such file" counts as gone in the journal. Any other error keeps the entry ("Couldn't
     check a leftover from an interrupted delete") and stops every delete until it can be checked.
-  - A delete interrupted after rm started is never shown as restored: "An interrupted delete
-    removed part of <folder>. Run the project's install to rebuild it." stays until dismissed, with
-    Ask an agent for what's left.
+  - A delete interrupted after rm started is never shown as restored; its note stays until
+    dismissed (wording replaced by the final gate below).
 - **Second data-safety review fixes (before release):**
   - Deleting needs the exact allow-listed spelling: a hand-made `Build` is never taken for `build`
     (on a case-insensitive disk the parent folder must list exactly that spelling). The protective
@@ -64,13 +67,34 @@ belongs to. `requirements.paseo` stays `>=0.9.0`; no settings change, so no migr
     process) is dropped instead of blocking every workspace; only a live, unexplained one refuses.
     On this Mac, 20 snapshots in a row gave no false refusals.
   - A shell reading a script (`bash < build.sh`) or not attached to a terminal is busy.
-  - The journal records "moving" before the rename, "moved" with a count of what was inside after
-    the look inside, and "removing" just before rm. After a crash Hosts puts a folder back whole only
-    when its contents match that count exactly; otherwise it says only what it knows ("removed part
-    of…" only when rm had started, "can't confirm how complete it is" otherwise).
+  - The journal records "moving" before the rename, "moved" after the look inside, and "removing"
+    just before rm (recovery by stage: see the final gate below).
   - **Known limit:** a program that starts using a build folder in the split second after the last
     check can still lose it. The worst case is running the install or build again. (Source,
     hand-made files, credentials and git data are never in scope.)
+- **Final data-safety gate fixes (before release):**
+  - Git-ignored isn't the same as rebuildable. One-press Delete is narrowed to the tool-managed
+    folders above; `dist`, `build`, `out`, `coverage`, test reports, `storybook-static` and `.cache`
+    can hold hand-made files, so they're Ask an agent only (the agent's list says to look inside
+    first).
+  - The look inside (at the check and again just before rm) refuses any folder holding a
+    credential-shaped file: `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.keystore`, `id_rsa*`,
+    `id_ed25519*`, `*service-account*.json`, `credentials*`, `.npmrc`, `.netrc`, `*.env*` (any case).
+    `.turbo`, `.vite`, `.parcel-cache` and `.pytest_cache` are also refused with a source file
+    (`.ts`, `.tsx`, `.js`, `.py`, `.go`, `.rs`) at their top level. A walk that can't say "none" counts
+    as "found".
+  - `node_modules` is exempt from the credential check (packages ship test keys and `.npmrc`);
+    instead it's deleted only when a lockfile (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`,
+    `bun.lockb`, `bun.lock`) sits beside its `package.json`, or beside the `package.json` of a folder
+    above it inside the workspace (a monorepo's one lockfile).
+  - The warning says how each kind comes back ("node_modules: Comes back on the next install…"),
+    not one line for all.
+  - A count can't prove a deletion, so recovery uses only the journal's stage. "moving" or
+    "moved" (rm never ran): put back whole, never replacing anything; if its place is taken, "Set
+    aside, not deleted: <folder>". "removing" (rm may have run): put back where possible and "A
+    delete was interrupted; <folder> may be incomplete. Run the project's install or build to be
+    sure." Hosts never says "removed part of". The same wording reaches the agent handoff; every
+    stage is tested against its message.
 - **Where processes belong.** Processes groups rows under their project and workspace ("project-hub ·
   feature-x", "Not in a workspace", "Paseo itself") and each row shows its project chip. What needs
   attention on Overview and in the sidebar popover says which project it's in.

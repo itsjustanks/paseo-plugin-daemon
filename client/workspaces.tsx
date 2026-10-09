@@ -65,7 +65,7 @@ export function cacheBytes(report: DiskReport | undefined): number {
 
 /**
  * What interrupted deletes left (0.16.0 review fix): each with its plain
- * sentence and Ask an agent; a "removed part of…" record stays until the
+ * sentence and Ask an agent; a "may be incomplete" note stays until the
  * person dismisses it. Hosts deletes none of it by itself.
  */
 function Leftovers({ theme, report }: { theme: Theme; report: DiskReport }) {
@@ -77,11 +77,11 @@ function Leftovers({ theme, report }: { theme: Theme; report: DiskReport }) {
       <ItemTitle theme={theme}>Left over from an interrupted delete</ItemTitle>
       {(report.leftovers ?? []).map((leftover) => (
         <View key={leftover.id} style={{ gap: SPACE.sm }}>
-          <Note theme={theme} tone={leftover.state === "left" ? "warning" : "danger"}>{leftover.message ?? `Left over from an interrupted delete: ${leftover.where}`}</Note>
+          <Note theme={theme} tone={leftover.state === "incomplete" ? "danger" : "warning"}>{leftover.message ?? `Left over from an interrupted delete: ${leftover.where}`}</Note>
           <Meta theme={theme}>{`${formatSize(leftover.bytes)} when it was set aside · ${ago(leftover.at)}`}</Meta>
           <Row>
             <AskAgentButton theme={theme} subject={{ kind: "folder", id: leftover.id }} />
-            {leftover.state === "partial" || leftover.state === "unconfirmed" ? <Button theme={theme} label="Dismiss" accessibilityLabel={`Dismiss the note about ${leftover.where}`} onPress={() => void dismiss({ id: leftover.id }).then((result) => { if (!result.ok) toast.show("That note couldn't be dismissed. Check disk space again.", { variant: "warning" }); void client.invalidateQueries({ queryKey: ["daemon-link"] }); })} /> : null}
+            {leftover.state === "incomplete" ? <Button theme={theme} label="Dismiss" accessibilityLabel={`Dismiss the note about ${leftover.where}`} onPress={() => void dismiss({ id: leftover.id }).then((result) => { if (!result.ok) toast.show("That note couldn't be dismissed. Check disk space again.", { variant: "warning" }); void client.invalidateQueries({ queryKey: ["daemon-link"] }); })} /> : null}
           </Row>
         </View>
       ))}
@@ -262,9 +262,9 @@ export function WorkspaceRow({ theme, compact, workspace, checking, processes = 
               <Button theme={theme} label={`Delete ${tokens.length} folder${tokens.length === 1 ? "" : "s"} (${formatSize(deletable)})…`} icon="Trash2" danger accessibilityLabel={`Delete ${tokens.length} build folder${tokens.length === 1 ? "" : "s"} in ${label}. Shows a warning first.`} onPress={() => onDelete(tokens)} />
               <AskAgentButton theme={theme} subject={{ kind: "cleanup", id: workspace.id }} label="Ask an agent instead" />
             </Row>
-            <Meta theme={theme}>Shows exactly what goes, checked again just before, and asks first. Only build folders git ignores are deleted.</Meta>
+            <Meta theme={theme}>Shows exactly what goes, checked again just before, and asks first. Only folders a tool makes and manages are deleted; ask an agent about the rest.</Meta>
           </View>
-        ) : workspace.clearableBytes > 0 && !workspace.busy ? (
+        ) : (workspace.clearableBytes > 0 || workspace.items.some((item) => item.askOnly && item.bytes > 0)) && !workspace.busy ? (
           <View style={{ gap: SPACE.xs }}>
             <Row><AskAgentButton theme={theme} subject={{ kind: "cleanup", id: workspace.id }} label="Ask an agent to clean this up" /></Row>
             <Meta theme={theme}>{AGENT_PROMISE}</Meta>
