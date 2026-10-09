@@ -1,5 +1,6 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
+import { redactSecrets } from "./redaction";
 
 /**
  * 0.14.0: disk usage, read-only. Hosts shows how full the disk is, what each
@@ -103,16 +104,53 @@ export const IGNORED_ONLY_MAX_DEPTH = 4;
  */
 export const ONE_PRESS_NAMES: readonly string[] = ["node_modules", ".next", ".nuxt", ".svelte-kit", ".turbo", ".vite", ".parcel-cache", "__pycache__", ".pytest_cache"];
 export const isOnePressName = (name: string) => ONE_PRESS_NAMES.includes(name);
-/** Where a top-level source file (depth 1) means someone put it there by hand. */
-export const TOP_SOURCE_CHECKED: readonly string[] = [".turbo", ".vite", ".parcel-cache", ".pytest_cache"];
+/**
+ * What each tool itself puts at the TOP LEVEL of its folder (final gate: by
+ * structure, not by extension). Anything else at the top level (another
+ * file, another folder, a symlink, anything unreadable) refuses the folder.
+ * From real layouts: Next 15 and 16.4 (build, standalone, dev), Nuxt 4
+ * (build, and a real dev .nuxt), SvelteKit 2 and 3 plus the cloudflare,
+ * netlify and vercel adapters, Turbo 2.11, Vite 8 and Vitest 5, Parcel 2.16,
+ * pytest 8 and CPython 3.14. Whole-name regex sources (the walk runs in a
+ * child process); "f" a regular file, "d" a folder. Finder's .DS_Store is
+ * allowed in every kind. node_modules has no layout: its lockfile stands in.
+ */
+export type LayoutRule = readonly [pattern: string, type: "f" | "d"];
+export const TOOL_LAYOUT: Readonly<Record<string, readonly LayoutRule[]>> = {
+  ".next": [
+    ["cache|server|static|types|standalone|diagnostics|dev", "d"],
+    ["BUILD_ID|trace|trace-build|turbopack|package\\.json|export-marker\\.json|required-server-files\\.json|required-server-files\\.js|next-server\\.js\\.nft\\.json|next-minimal-server\\.js\\.nft\\.json|[a-z0-9-]+-manifest\\.json|[a-z0-9-]+-manifest\\.js", "f"],
+  ],
+  ".nuxt": [
+    ["dev|dist|manifest|schema|types", "d"],
+    ["app\\.config\\.mjs|components\\.d\\.ts|imports\\.d\\.ts|fetch\\.d\\.ts|nuxt\\.d\\.ts|nuxt\\.node\\.d\\.ts|nuxt\\.shared\\.d\\.ts|nitro\\.json|nuxt\\.json|tsconfig(\\.(app|node|server|shared))?\\.json|tsconfig\\.(app|node|server|shared)\\.tsbuildinfo", "f"],
+  ],
+  ".svelte-kit": [
+    ["generated|output|types|cloudflare|cloudflare-tmp|netlify-tmp|vercel-tmp", "d"],
+    ["ambient\\.d\\.ts|non-ambient\\.d\\.ts|env\\.d\\.ts|tsconfig\\.json", "f"],
+  ],
+  ".turbo": [["cache|cookies|daemon|runs|logs|preferences", "d"], ["[^/]+\\.log", "f"]],
+  // deps (client), deps_<environment>, and the temporary deps…_temp_<hash> while optimising; vitest/<hash>/results.json.
+  ".vite": [["deps(_[A-Za-z0-9]+)?(_temp_[0-9a-f]+)?|vitest", "d"]],
+  // LMDB, the watcher snapshot, large blobs (<hash>-RequestGraph, <hash>-large…) and FSCache's two-hex-digit folders.
+  ".parcel-cache": [["data\\.mdb|lock\\.mdb|snapshot-[0-9a-f]+\\.txt|[0-9a-f]{16,}(-[A-Za-z0-9]+)*", "f"], ["[0-9a-f]{2}", "d"]],
+  ".pytest_cache": [["README\\.md|CACHEDIR\\.TAG|\\.gitignore", "f"], ["v", "d"]],
+  __pycache__: [["[^/]+\\.pyc", "f"]],
+};
+/** A kind's layout plus what every kind may hold (Finder's .DS_Store); null for node_modules. */
+export const layoutFor = (name: string): LayoutRule[] | null => (has(TOOL_LAYOUT, name) ? [...TOOL_LAYOUT[name]!, ["\\.DS_Store", "f"]] : null);
+/** Defence in depth: kinds whose tool never writes source at its top level (.next/.nuxt/.svelte-kit do: their layouts name those files). */
+export const TOP_SOURCE_CHECKED: readonly string[] = [".turbo", ".vite", ".parcel-cache", ".pytest_cache", "__pycache__"];
 /** Credential-shaped names, matched on the folded name anywhere inside (regex source: the walk runs in a child process). */
 export const CREDENTIAL_PATTERN = "\\.(pem|key|p12|pfx|keystore)$|^id_rsa|^id_ed25519|service-account.*\\.json$|^credentials|^\\.npmrc$|^\\.netrc$|\\.env";
-export const TOP_SOURCE_PATTERN = "\\.(ts|tsx|js|py|go|rs)$";
+export const TOP_SOURCE_PATTERN = "\\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|vue|svelte|astro|py|rb|php|java|kt|swift|c|cpp|h|cs|go|rs|sh)$";
 /** A node_modules goes only when one of these sits beside the package.json that owns it (or the workspace root's). */
 export const LOCKFILES: readonly string[] = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock"];
 /** What the inside-look refuses on, by kind. node_modules is exempt from the credential check (packages ship test keys and .npmrc); its lockfile stands in. */
-export interface ProbeChecks { credentials: boolean; topSource: boolean }
-export const probeChecksFor = (name: string): ProbeChecks => ({ credentials: name !== "node_modules", topSource: TOP_SOURCE_CHECKED.includes(name) });
+export interface ProbeChecks { credentials: boolean; topSource: boolean; layout: LayoutRule[] | null }
+export const probeChecksFor = (name: string): ProbeChecks => ({ credentials: name !== "node_modules", topSource: TOP_SOURCE_CHECKED.includes(name), layout: layoutFor(name) });
+/** The refusal for a top-level entry outside its tool's layout; the name is redacted and cut short. */
+export const strayWords = (kind: string, name: string) => `${kind} holds something its tool didn't create: ${redactSecrets(name).slice(0, 80)}`;
 
 /**
  * A name as the disk may treat it (0.16.0 review fix): macOS's APFS is

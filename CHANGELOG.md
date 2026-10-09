@@ -95,6 +95,17 @@ belongs to. `requirements.paseo` stays `>=0.9.0`; no settings change, so no migr
     delete was interrupted; <folder> may be incomplete. Run the project's install or build to be
     sure." Hosts never says "removed part of". The same wording reaches the agent handoff; every
     stage is tested against its message.
+  - By structure, not by extension (last gate): a hand-made `.turbo/custom.mjs` slipped past the
+    extension list. Now each kind except `node_modules` may hold at its top level only what its tool
+    creates there; any other file, folder, symlink or unreadable entry refuses the whole folder
+    (".turbo holds something its tool didn't create: custom.mjs"), at the check and again in the look
+    inside just before rm. The layouts come from real output made on 2026-10-09 (Next 15 and 16.4
+    build, standalone and dev; Nuxt 4 plus a real dev `.nuxt`; SvelteKit 2 and 3 and the cloudflare,
+    netlify and vercel adapters; Turbo 2.11; Vite 8 and Vitest 5; Parcel 2.16; pytest 8; CPython 3.14).
+    Finder's `.DS_Store` is allowed everywhere. Nuxt modules that write their own files into `.nuxt`
+    are refused (Ask an agent), by design. The source-file check stays as a second layer, now also
+    `.mjs`, `.cjs`, `.mts`, `.cts`, `.jsx`, `.vue`, `.svelte`, `.astro`, `.rb`, `.php`, `.java`, `.kt`,
+    `.swift`, `.c`, `.cpp`, `.h`, `.cs` and `.sh`.
 - **Where processes belong.** Processes groups rows under their project and workspace ("project-hub ·
   feature-x", "Not in a workspace", "Paseo itself") and each row shows its project chip. What needs
   attention on Overview and in the sidebar popover says which project it's in.

@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import {
   CLEARABLE_NAMES, CREDENTIAL_PATTERN, IGNORED_ONLY_MAX_DEPTH, IGNORED_ONLY_NAMES, LOCKFILES, PROTECTED_NAME, TMP_NEVER, TOP_SOURCE_PATTERN,
-  ago, describeName, isOnePressName, isWithin, leftoverMessage, probeChecksFor, diskSpace, formatSize, protectedReason, protectedSet, toolCacheName, type ProtectedSet,
+  ago, describeName, isOnePressName, isWithin, layoutFor, leftoverMessage, probeChecksFor, strayWords, TOOL_LAYOUT, diskSpace, formatSize, protectedReason, protectedSet, toolCacheName, type ProtectedSet,
   type CacheGroup, type ClearItem, type DiskReport, type DiskSpace, type LeftoverState, type WorkspaceState, type WorkspaceUsage,
 } from "../shared/disk";
 import { stateDirectory } from "./binaries";
@@ -347,7 +347,7 @@ export class DiskScanner {
     const walkUntil = this.now() + left() * WALK_SHARE;
     const run = await (this.deps.walk ?? runWorker)<WalkResult>({
       op: "scan", roots, deadline: walkUntil,
-      clearable: Object.keys(CLEARABLE_NAMES), ignoredOnly: Object.keys(IGNORED_ONLY_NAMES), ignoredMaxDepth: IGNORED_ONLY_MAX_DEPTH, maxItemsPerRoot: 200, credential: CREDENTIAL_PATTERN, topSource: TOP_SOURCE_PATTERN,
+      clearable: Object.keys(CLEARABLE_NAMES), ignoredOnly: Object.keys(IGNORED_ONLY_NAMES), ignoredMaxDepth: IGNORED_ONLY_MAX_DEPTH, maxItemsPerRoot: 200, credential: CREDENTIAL_PATTERN, topSource: TOP_SOURCE_PATTERN, layouts: TOOL_LAYOUTS,
     }, Math.max(1000, walkUntil - this.now() + 10_000), (result) => {
       byId.set(result.id, result);
       this.progress.done += 1;
@@ -609,7 +609,7 @@ export function cleanupAskText(scope: { kind: "workspaces"; title: string; check
  * answers (disk-git.ts); no answer, a cut-off check, a .env, .git or bare
  * repository inside, or a protected path all say no.
  */
-export function itemBlocked(item: Pick<WalkItem, "name" | "hasEnv" | "hasGit" | "ignoredOnly" | "partial" | "hasCredential" | "hasTopSource">, git: GitVerdict | null, path: string, guard: ProtectedSet): string | null | "hide" {
+export function itemBlocked(item: Pick<WalkItem, "name" | "hasEnv" | "hasGit" | "ignoredOnly" | "partial" | "hasCredential" | "hasTopSource" | "topUnexpected">, git: GitVerdict | null, path: string, guard: ProtectedSet): string | null | "hide" {
   if (git && (git.ignored === false || git.tracked === true || git.untracked === true)) return "hide";
   // dist/build/out are only build output when git says so; otherwise they're just part of the project.
   if (item.ignoredOnly && !gitAllows(git)) return "hide";
@@ -620,10 +620,15 @@ export function itemBlocked(item: Pick<WalkItem, "name" | "hasEnv" | "hasGit" | 
   if (item.hasEnv) return "It has a .env file inside, so Hosts leaves it.";
   if (item.hasGit) return "It has a git repository inside, so Hosts leaves it.";
   const checks = probeChecksFor(item.name);
+  // By structure first: only what the tool itself puts at the top level. Not checked (an old scan) counts as a stray.
+  if (checks.layout && item.topUnexpected !== null) return item.topUnexpected ? `${strayWords(item.name, item.topUnexpected)}. Hosts leaves it.` : "Hosts couldn't confirm what's at its top level. Check again to clear it.";
   if (checks.credentials && item.hasCredential !== false) return item.hasCredential ? "It has a file inside that looks like a key or credentials, so Hosts leaves it." : "Hosts couldn't confirm there are no keys or credentials inside. Check again to clear it.";
   if (checks.topSource && item.hasTopSource !== false) return item.hasTopSource ? "It has a source file at its top level that someone may have put there, so Hosts leaves it." : "Hosts couldn't confirm what's at its top level. Check again to clear it.";
   return protectedReason(path, guard);
 }
+
+/** Every kind's layout, with .DS_Store, as the walk wants it. */
+const TOOL_LAYOUTS = Object.fromEntries(Object.keys(TOOL_LAYOUT).map((name) => [name, layoutFor(name)!]));
 
 /** Shown on a git-ignored folder Hosts won't delete itself (dist, build, coverage, …). */
 export const ASK_ONLY = "Hosts doesn't delete this kind of folder itself: it can hold hand-made files. Ask an agent to check it.";

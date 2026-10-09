@@ -775,7 +775,7 @@ describe("final Astra gate on 3ac1b6e", () => {
     expect(item(first.report, ".turbo")).toMatchObject({ safe: true });
     for (const [folder, file] of [[".vite", "config.ts"], [".turbo", "run.js"], [".parcel-cache", "main.py"], [".pytest_cache", "helper.go"], [".vite", "lib.RS"], [".turbo", "view.tsx"]] as const) {
       big(join(app, folder, file), 10);
-      expect(item((await scanned()).report, folder), `${folder}/${file}`).toMatchObject({ safe: false, blocked: expect.stringMatching(/source file at its top level/) });
+      expect(item((await scanned()).report, folder), `${folder}/${file}`).toMatchObject({ safe: false, blocked: expect.stringMatching(/its tool didn't create|source file at its top level/) });
       rmSync(join(app, folder, file));
     }
     // Appears after the check: the look inside refuses it and puts the folder back. A whole-second mtime,
@@ -786,7 +786,7 @@ describe("final Astra gate on 3ac1b6e", () => {
     big(join(app, ".vite", "plugin.ts"), 10);
     utimesSync(join(app, ".vite"), 1_700_000_000, 1_700_000_000);
     const job = await run(cleaner(tokens, scanner, { beforeRemove: () => { throw new Error("rm must not run"); } }).instance, [token]);
-    expect(job.results[0], JSON.stringify(job.results[0])).toMatchObject({ ok: false, message: expect.stringMatching(/source file at its top level.*put back/) });
+    expect(job.results[0], JSON.stringify(job.results[0])).toMatchObject({ ok: false, message: expect.stringMatching(/(its tool didn't create: plugin\.ts|source file at its top level).*put back/) });
     expect(existsSync(join(app, ".vite", "plugin.ts"))).toBe(true);
   });
 
@@ -907,5 +907,118 @@ describe("final Astra gate on 3ac1b6e (2, 3: every stage → its words, in the n
     const { leftoverLead } = await import("../server/disk-scan");
     expect(leftoverMessage("unchecked", "~/x")).toBe("Couldn't check a leftover from an interrupted delete (~/x). Nothing is deleted until Hosts can look at it.");
     expect(leftoverLead("unchecked", "~/x", "1 MB", true)).not.toMatch(/gone|removed|incomplete/);
+  });
+});
+
+describe("final Astra gate on 279d2cf: by structure, not by extension", () => {
+  /**
+   * Top-level names from real layouts made on 2026-10-09 (Next 15.x and
+   * 16.4 build/standalone/dev, Nuxt 4 build plus a real dev .nuxt, SvelteKit
+   * 2 and 3, Turbo 2.11 root and package, Vite 8 + Vitest 5, Parcel 2.16,
+   * pytest 8, CPython 3.14). A trailing "/" is a folder.
+   */
+  const REAL: Record<string, string[]> = {
+    ".next": ["BUILD_ID", "app-build-manifest.json", "app-path-routes-manifest.json", "build-manifest.json", "cache/", "dev/", "diagnostics/", "dynamic-css-manifest.json", "export-marker.json", "fallback-build-manifest.json", "images-manifest.json", "next-minimal-server.js.nft.json", "next-server.js.nft.json", "package.json", "prerender-manifest.json", "react-loadable-manifest.json", "required-server-files.js", "required-server-files.json", "routes-manifest.json", "server/", "standalone/", "static/", "trace", "trace-build", "turbopack", "types/"],
+    ".nuxt": [".DS_Store", "app.config.mjs", "components.d.ts", "dev/", "dist/", "fetch.d.ts", "imports.d.ts", "manifest/", "nitro.json", "nuxt.d.ts", "nuxt.json", "nuxt.node.d.ts", "nuxt.shared.d.ts", "schema/", "tsconfig.app.json", "tsconfig.app.tsbuildinfo", "tsconfig.json", "tsconfig.node.json", "tsconfig.node.tsbuildinfo", "tsconfig.server.json", "tsconfig.server.tsbuildinfo", "tsconfig.shared.json", "tsconfig.shared.tsbuildinfo", "types/"],
+    ".svelte-kit": ["ambient.d.ts", "env.d.ts", "generated/", "non-ambient.d.ts", "output/", "tsconfig.json", "types/"],
+    ".turbo": ["cache/", "runs/", "turbo-build.log"],
+    ".vite": ["deps/", "vitest/"],
+    ".parcel-cache": ["22899de899d4c27b-BundleGraph", "7daea178f9b48961-RequestGraph", "880d99dfa4847a06-AssetGraph", "c23923128c744515-AssetGraph", "data.mdb", "lock.mdb", "snapshot-7daea178f9b48961.txt"],
+    ".pytest_cache": [".gitignore", "CACHEDIR.TAG", "README.md", "v/"],
+    __pycache__: ["cache-trim.cpython-314.pyc", "devserver-guard.cpython-314.pyc"],
+  };
+  const KINDS = Object.keys(REAL);
+  const lay = (kind: string, names = REAL[kind]!) => {
+    for (const name of names) {
+      if (name.endsWith("/")) big(join(app, kind, name, "inner.bin"), 100);
+      else big(join(app, kind, name), 100);
+    }
+  };
+  const ignoreAll = () => writeFileSync(join(app, ".gitignore"), `node_modules\n.env\ndist/\n${KINDS.join("\n")}\n`);
+
+  it("a real-shaped folder of every kind passes the check and the look inside, and is deleted", async () => {
+    rmSync(join(app, ".next"), { recursive: true });
+    ignoreAll();
+    for (const kind of KINDS) lay(kind);
+    const { scanner, tokens, report } = await scanned();
+    for (const kind of KINDS) expect(item(report, kind), kind).toMatchObject({ safe: true, blocked: null });
+    const job = await run(cleaner(tokens, scanner).instance, KINDS.map((kind) => item(report, kind)!.token!));
+    for (const result of job.results) expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+    for (const kind of KINDS) expect(existsSync(join(app, kind)), kind).toBe(false);
+  });
+
+  it("the reviewer's repro: a hand-made .turbo/custom.mjs is never offered, and the look inside refuses it if it appears later", async () => {
+    ignoreAll();
+    lay(".turbo");
+    big(join(app, ".turbo", "custom.mjs"), 4096);
+    const first = await scanned();
+    expect(item(first.report, ".turbo")).toMatchObject({ safe: false, token: null, blocked: ".turbo holds something its tool didn't create: custom.mjs. Hosts leaves it." });
+    rmSync(join(app, ".turbo", "custom.mjs"));
+    // Clean at the check; the file appears after it with .turbo's mtime kept, so only the look inside can catch it.
+    utimesSync(join(app, ".turbo"), 1_700_000_000, 1_700_000_000);
+    const { scanner, tokens, report } = await scanned();
+    const token = item(report, ".turbo")!.token!;
+    big(join(app, ".turbo", "custom.mjs"), 4096);
+    utimesSync(join(app, ".turbo"), 1_700_000_000, 1_700_000_000);
+    const job = await run(cleaner(tokens, scanner, { beforeRemove: () => { throw new Error("rm must not run"); } }).instance, [token]);
+    expect(job.results[0]).toMatchObject({ ok: false, message: ".turbo holds something its tool didn't create: custom.mjs, so it was put back." });
+    expect(existsSync(join(app, ".turbo", "custom.mjs"))).toBe(true);
+    expect(existsSync(join(app, ".turbo", "cache", "inner.bin"))).toBe(true);
+  });
+
+  it("anything else at the top level refuses: another folder, another file, a symlink, a folder where a file belongs, any kind", async () => {
+    ignoreAll();
+    const strays: Array<[string, (dir: string) => void, string]> = [
+      [".next", (dir) => big(join(dir, "my-notes", "a.md"), 10), "my-notes"],
+      [".nuxt", (dir) => big(join(dir, "seed.sql"), 10), "seed.sql"],
+      [".svelte-kit", (dir) => big(join(dir, "backup", "x"), 10), "backup"],
+      [".vite", (dir) => symlinkSync(join(app, "src"), join(dir, "deps_link")), "deps_link"],
+      [".vite", (dir) => big(join(dir, "results.json"), 10), "results.json"],
+      [".parcel-cache", (dir) => big(join(dir, "readme.txt"), 10), "readme.txt"],
+      [".pytest_cache", (dir) => big(join(dir, "v2", "x"), 10), "v2"],
+      [".pytest_cache", (dir) => big(join(dir, "README.md", "x"), 10), "README.md"],
+      ["__pycache__", (dir) => big(join(dir, "helper.py"), 10), "helper.py"],
+      ["__pycache__", (dir) => big(join(dir, "sub", "a.pyc"), 10), "sub"],
+      [".turbo", (dir) => big(join(dir, "Cache", "x"), 10), "Cache"],
+    ];
+    for (const [kind, add, name] of strays) {
+      rmSync(join(app, kind), { recursive: true, force: true });
+      // Compared without case: on a case-insensitive disk "Cache" would land in "cache".
+      lay(kind, REAL[kind]!.filter((entry) => entry.replace(/\/$/, "").toLowerCase() !== name.toLowerCase()));
+      add(join(app, kind));
+      expect(item((await scanned()).report, kind), `${kind}/${name}`).toMatchObject({ safe: false, token: null, blocked: `${kind} holds something its tool didn't create: ${name}. Hosts leaves it.` });
+    }
+  });
+
+  it("the stray's name is redacted before it's shown", async () => {
+    const { strayWords } = await import("../shared/disk");
+    expect(strayWords(".next", "token=supersecretvalue123")).not.toContain("supersecretvalue123");
+  });
+
+  it("defence in depth: the source check covers mjs, cjs, jsx, vue, svelte, sh and the rest, at the top level only", async () => {
+    const { diskWorker } = await import("../server/disk-worker");
+    const { TOP_SOURCE_PATTERN, CREDENTIAL_PATTERN } = await import("../shared/disk");
+    const fs = await import("node:fs");
+    for (const ext of ["mjs", "cjs", "mts", "cts", "jsx", "vue", "svelte", "astro", "rb", "php", "java", "kt", "swift", "c", "cpp", "h", "cs", "sh", "ts", "js", "py", "go", "rs"]) {
+      const dir = join(root, `probe-${ext}`);
+      big(join(dir, `a.${ext}`), 10);
+      big(join(dir, "deep", `b.${ext}`), 10);
+      const out: Array<{ hasTopSource?: boolean }> = [];
+      diskWorker(fs, { op: "scan", roots: [{ id: "x", path: dir, mode: "whole" }], deadline: Date.now() + 10_000, clearable: [], ignoredOnly: [], ignoredMaxDepth: 0, maxItemsPerRoot: 0, credential: CREDENTIAL_PATTERN, topSource: TOP_SOURCE_PATTERN }, (result) => out.push(result as never));
+      expect(out[0]!.hasTopSource, ext).toBe(true);
+      rmSync(join(dir, `a.${ext}`));
+      out.length = 0;
+      diskWorker(fs, { op: "scan", roots: [{ id: "x", path: dir, mode: "whole" }], deadline: Date.now() + 10_000, clearable: [], ignoredOnly: [], ignoredMaxDepth: 0, maxItemsPerRoot: 0, credential: CREDENTIAL_PATTERN, topSource: TOP_SOURCE_PATTERN }, (result) => out.push(result as never));
+      expect(out[0]!.hasTopSource, `deep ${ext}`).toBe(false);
+    }
+    const { itemBlocked } = await import("../server/disk-scan");
+    const guard = { folded: new Set<string>(), workspaceRoots: [], worktreeRoots: [], byRoot: new Map() } as never;
+    expect(itemBlocked({ name: ".vite", hasEnv: false, hasGit: false, ignoredOnly: false, partial: false, hasCredential: false, hasTopSource: true, topUnexpected: null }, { ignored: true, tracked: false, untracked: false } as never, join(app, ".vite"), guard)).toMatch(/source file at its top level/);
+  });
+
+  it("an old scan without the layout answer counts as not confirmed", async () => {
+    const { itemBlocked } = await import("../server/disk-scan");
+    const guard = { folded: new Set<string>(), workspaceRoots: [], worktreeRoots: [], byRoot: new Map() } as never;
+    expect(itemBlocked({ name: ".next", hasEnv: false, hasGit: false, ignoredOnly: false, partial: false, hasCredential: false, hasTopSource: false }, { ignored: true, tracked: false, untracked: false } as never, join(app, ".next"), guard)).toMatch(/couldn't confirm what's at its top level/);
   });
 });
