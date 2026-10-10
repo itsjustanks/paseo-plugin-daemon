@@ -1,3 +1,4 @@
+import { chatAttribution, chatGroups } from "../shared/processes";
 import React from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
@@ -8,7 +9,7 @@ import { runningIn, type ProcessRow } from "../shared/processes";
 import { ClearResults } from "./clear";
 import { useSafeToast } from "./feedback";
 import { StopProcess } from "./guard";
-import { AskAgentButton } from "./ask";
+import { AskAgentButton, OpenChatButton } from "./ask";
 import { PathDetails, PathLabel } from "./paths";
 import { friendlyPath } from "../shared/paths";
 import { Accordion, AccordionItem, Button, Card, Disclosure, Divider, ItemTitle, Meta, Note, Row, SectionTitle, SPACE, TYPE, type Tone } from "./kit";
@@ -186,17 +187,25 @@ const ITEMS_SHOWN = 6;
 
 /** One workspace folder: its row's summary says it all; opening shows where, what's in it, and Ask an agent. */
 /** What a workspace is running now (0.16.0), from the same list as Processes: heaviest first, each with ask-first Stop. */
-function RunningHere({ theme, rows, say }: { theme: Theme; rows: readonly ProcessRow[]; say: Say }) {
+export function RunningHere({ theme, rows, say }: { theme: Theme; rows: readonly ProcessRow[]; say: Say }) {
   if (!rows.length) return <Meta theme={theme}>Nothing is running in this workspace.</Meta>;
   return (
     <View style={{ gap: SPACE.sm }}>
-      {rows.map((row) => (
-        <View key={row.pid} style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: SPACE.sm }}>
-          <View style={{ flex: 1, minWidth: 180, gap: SPACE.hair }}>
-            <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${row.name}${row.job ? ` · ${row.job.label}` : ""}`}</Text>
-            <Meta theme={theme}>{[formatSize(row.rssBytes), row.cpuPercent === null ? null : `${Math.round(row.cpuPercent)}% CPU`, row.ports.length ? row.ports.map((port) => `:${port}`).join(" ") : null, row.flags[0]?.text ?? null].filter(Boolean).join(" · ")}</Meta>
-          </View>
-          {row.stoppable ? <StopProcess theme={theme} pid={row.pid} say={say} /> : <Meta theme={theme}>{row.owner.kind === "agent" ? "Stop it from its chat" : "Can't be stopped here"}</Meta>}
+      {chatGroups(rows).map((chat) => (
+        <View key={chat.id} style={{ gap: SPACE.sm }}>
+          <ItemTitle theme={theme}>{chat.title}</ItemTitle>
+          {chat.rows.map((row) => (
+            <View key={row.pid} style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: SPACE.sm }}>
+              <View style={{ flex: 1, minWidth: 180, gap: SPACE.hair }}>
+                <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${row.name}${row.job ? ` · ${row.job.label}` : ""}`}</Text>
+                <Meta theme={theme}>{chatAttribution(row)}</Meta>
+                {!row.stoppable ? <Text style={{ ...TYPE.secondary, color: theme.colors.foreground }}>{row.protectedReason ?? "It can't be stopped here."}</Text> : null}
+                <Meta theme={theme}>{[formatSize(row.rssBytes), row.cpuPercent === null ? null : `${Math.round(row.cpuPercent)}% CPU`, row.ports.length ? row.ports.map((port) => `:${port}`).join(" ") : null, row.flags[0]?.text ?? null].filter(Boolean).join(" · ")}</Meta>
+              </View>
+              <OpenChatButton theme={theme} agentId={row.chat?.id} />
+              {row.stoppable ? <StopProcess theme={theme} pid={row.pid} say={say} /> : null}
+            </View>
+          ))}
         </View>
       ))}
     </View>

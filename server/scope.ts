@@ -1,10 +1,12 @@
-import type { PaseoApi } from "@getpaseo/client";
+import type { PaseoApi, PaseoAgent } from "@getpaseo/client";
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import type { RawProcess } from "./platform";
 import { detectService } from "./heuristics";
-import { homeRelative } from "./redaction";
+import { friendlyPath } from "../shared/paths";
+import type { ProcessChat } from "../shared/processes";
+import { homeRelative, redactSecrets } from "./redaction";
 
 export interface ProjectMatch {
   id: string; name: string; path: string; workspace: string | null;
@@ -51,6 +53,7 @@ export class ProjectScope {
   private roots: Root[] = [];
   /** Every active workspace descriptor from the last read, unfiltered (0.14.0: disk usage reads these). */
   private descriptors: unknown[] = [];
+  private agents = new Map<string, ProcessChat>();
   private failedAt = 0;
   private updated = 0;
   private pending?: Promise<void>;
@@ -78,8 +81,8 @@ export class ProjectScope {
     const generation = ++this.generation;
     this.pending = withDeadline(this.load(this.api, generation), REGISTRY_READ_MS).catch(() => {
       this.generation++; // A read that answers after its deadline is dropped, never written over a newer one.
-      this.roots = []; this.descriptors = []; this.updated = 0; this.failedAt = this.now();
-      this.failure = "Paseo projects could not be verified. Refresh this host; sharing and process controls are paused.";
+      this.roots = []; this.descriptors = []; this.agents.clear(); this.updated = 0; this.failedAt = this.now();
+      this.failure = "Paseo projects could not be verified. Refresh this host; sharing is paused and chat attribution may be missing.";
       throw new Error(this.failure);
     }).finally(() => { this.pending = undefined; });
     return this.pending;
@@ -93,7 +96,7 @@ export class ProjectScope {
     const roots: Root[] = projects.map((p) => ({ id: p.projectId, name: p.projectDisplayName, path: p.projectRootPath, workspace: null, servicePorts: [] }));
     let cursor: string | undefined;
     const seen = new Set<string>();
-    const descriptors: unknown[] = [];
+    const descriptors: Awaited<ReturnType<PaseoApi["workspaces"]["list"]>>["entries"] = [];
     for (let page = 0; page < 20; page++) {
       const result = await api.workspaces.list({ page: { limit: 100, ...(cursor ? { cursor } : {}) } });
       descriptors.push(...result.entries);
@@ -108,6 +111,36 @@ export class ProjectScope {
       seen.add(next); cursor = next;
     }
     if (generation !== this.generation) throw new Error("A newer registry read replaced this one.");
+    const agents = new Map<string, ProcessChat>();
+    // Older hosts may lack agents.list. Failure removes attribution, never invents ownership.
+    if (typeof api.agents?.list === "function") {
+      try {
+        let agentCursor: string | undefined;
+        const agentCursors = new Set<string>();
+        for (let page = 0; page < 100; page++) {
+          const result = await api.agents.list({ page: { limit: 100, ...(agentCursor ? { cursor: agentCursor } : {}) } });
+          for (const entry of result.entries) {
+            const agent: PaseoAgent = entry.agent;
+            const workspace = descriptors.find((item) => item.id === agent.workspaceId);
+            const directory = workspace?.workspaceDirectory || workspace?.projectRootPath || agent.cwd;
+            agents.set(agent.id, {
+              id: agent.id, title: redactSecrets(agent.title || `${agent.provider} chat`, this.home), status: redactSecrets(agent.status),
+              workspaceId: agent.workspaceId ?? null,
+              workspace: workspace ? redactSecrets(workspace.name, this.home) : null,
+              project: workspace ? redactSecrets(workspace.projectDisplayName, this.home) : null,
+              workspacePath: directory || null,
+              where: directory ? redactSecrets(friendlyPath(directory, { home: this.home }).label, this.home) : null,
+            });
+          }
+          if (!result.pageInfo.hasMore) break;
+          const next = result.pageInfo.nextCursor;
+          if (!next || agentCursors.has(next) || page === 99) throw new Error("Incomplete agent registry");
+          agentCursors.add(next); agentCursor = next;
+        }
+      } catch { agents.clear(); }
+    }
+    if (generation !== this.generation) throw new Error("A newer registry read replaced this one.");
+    this.agents = agents;
     this.descriptors = descriptors;
     this.broadRoots = 0;
     const canonicalRoots = await Promise.all(roots.map(async (root) => {
@@ -122,6 +155,8 @@ export class ProjectScope {
     this.roots = canonicalRoots.filter((root): root is Root => root !== null).sort((a, b) => b.path.length - a.path.length || Number(!!b.workspace) - Number(!!a.workspace));
     this.updated = this.now(); this.failure = "";
   }
+
+  agent(id: string | null | undefined): ProcessChat | null { return id ? this.agents.get(id) ?? null : null; }
 
   match(process: RawProcess, ports: readonly number[] = []): ProjectMatch | null {
     if (!process.cwd || !isAbsolute(process.cwd) || isInfrastructure(process)) return null;

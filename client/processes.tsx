@@ -4,10 +4,10 @@ import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-nativ
 import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc } from "@getpaseo/plugin/client";
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
-import { ownerGroup, processDetails, processGroups, processPreview, processReport, processStop, sameness, twinKeys, type ActionLogEntry, type ProcessReport, type ProcessRow, type ReportSort, type StopPlan } from "../shared/processes";
+import { OUTSIDE_PASEO_WARNING, chatAttribution, chatGroups, ownerGroup, processDetails, processGroups, processPreview, processReport, processStop, sameness, twinKeys, type ActionLogEntry, type ProcessReport, type ProcessRow, type ReportSort, type StopPlan } from "../shared/processes";
 import { Accordion, AccordionItem, Banner, Button, Card, Chip, Divider, HostIcon, ItemTitle, Meta, Note, QuietLine, RADIUS, Row, SPACE, TYPE, tint, toneColor, type Tone } from "./kit";
 import { formatBytes, formatDuration, formatPercent } from "./ui";
-import { AskAgentButton } from "./ask";
+import { AskAgentButton, OpenChatButton } from "./ask";
 import { PathDetails, PathLabel } from "./paths";
 import { StopProcess, StuckPlugins } from "./guard";
 import type { HealthIssue } from "../shared/health";
@@ -153,7 +153,7 @@ function Stat({ theme, label, value, tone }: { theme: Theme; label: string; valu
 }
 
 /** One process: name, what it is, whose it is, its figures; details and the stop control behind a press. */
-function ProcessItem({ theme, row, compact, byTree, selected, onSelect, onStop, first, twin }: { theme: Theme; row: ProcessRow; compact: boolean; byTree: boolean; selected: boolean; onSelect(): void; onStop(): void; first: boolean; twin: boolean }) {
+export function ProcessItem({ theme, hostId, row, compact, byTree, selected, onSelect, onStop, first, twin }: { theme: Theme; hostId?: string; row: ProcessRow; compact: boolean; byTree: boolean; selected: boolean; onSelect(): void; onStop(): void; first: boolean; twin: boolean }) {
   const [open, setOpen] = useState(false);
   const copy = useCopy();
   const flagged = row.flags.length > 0;
@@ -173,6 +173,8 @@ function ProcessItem({ theme, row, compact, byTree, selected, onSelect, onStop, 
               {tag ? <Chip theme={theme} label={byTree && row.tree.count > 1 ? `${tag} · ${row.tree.count} processes` : tag} tone={flagged ? "warning" : "neutral"} /> : flagged ? <Chip theme={theme} label="Needs attention" tone="warning" /> : null}
             </View>
             <Meta theme={theme}>{row.owner.label}{row.ports.length ? ` · ${row.ports.map((port) => `:${port}`).join(" ")}` : ""}{twin ? ` · PID ${row.pid}` : ""}</Meta>
+            <Meta theme={theme}>{chatAttribution(row)}</Meta>
+            {!row.stoppable ? <Text style={{ ...TYPE.secondary, color: theme.colors.foreground }}>{row.protectedReason ?? "It can't be stopped here."}</Text> : null}
             {row.flags.map((flag) => <Text key={flag.code} style={{ ...TYPE.secondary, color: toneColor(theme, "warning") }}>{flag.text}</Text>)}
           </View>
           <View style={{ flexDirection: "row", gap: SPACE.row, flexWrap: "wrap" }}>
@@ -182,6 +184,7 @@ function ProcessItem({ theme, row, compact, byTree, selected, onSelect, onStop, 
           </View>
         </Pressable>
       </View>
+      {row.chat ? <Row><OpenChatButton theme={theme} agentId={row.chat.id} hostId={hostId} /></Row> : null}
       {open ? (
         <View style={{ paddingLeft: CHECK_SIZE + SPACE.row, gap: SPACE.sm }}>
           <View style={{ backgroundColor: theme.colors.surface0, borderColor: theme.colors.border, borderWidth: 1, borderRadius: RADIUS.control, padding: SPACE.row }}>
@@ -195,7 +198,6 @@ function ProcessItem({ theme, row, compact, byTree, selected, onSelect, onStop, 
             {row.stoppable ? <Button theme={theme} label="Stop…" icon="OctagonX" danger accessibilityLabel={`Stop ${row.name} (PID ${row.pid})…`} onPress={onStop} /> : null}
             <Button theme={theme} label="Copy details" icon="Copy" accessibilityLabel={`Copy details of ${row.name} (PID ${row.pid})`} onPress={() => void copy(processDetails(row), "Details copied")} />
           </Row>
-          {!row.stoppable ? <Note theme={theme}>{row.protectedReason ?? "It can't be stopped here."}</Note> : null}
         </View>
       ) : null}
     </View>
@@ -235,6 +237,7 @@ export function StopSheet({ theme, plan, busy, onCancel, onConfirm }: { theme: T
     <Sheet title={plan ? (ready.length ? title : "Nothing can be stopped") : "Stop processes"} icon={HostIcon ? <HostIcon name="OctagonX" size={18} color={theme.colors.statusDanger} /> : undefined} open={plan !== null} busy={busy} onClose={() => onCancel()} colors={{ surface: theme.colors.surface1, border: theme.colors.border, foreground: theme.colors.foreground }}>
         <View style={{ gap: SPACE.row, padding: SPACE.card }}>
           {ready.length ? <DangerLine theme={theme}>{`This stops ${ready.length + children === 1 ? "this process" : `these ${ready.length + children} processes`}. Anything not saved in ${ready.length + children === 1 ? "it" : "them"} may be lost.`}</DangerLine> : null}
+          {ready.some((target) => target.outsidePaseo) ? <DangerLine theme={theme}>{OUTSIDE_PASEO_WARNING}</DangerLine> : null}
           {ready.map((target) => (
             <View key={target.pid ?? target.name} style={{ gap: SPACE.hair }}>
               <ItemTitle theme={theme}>{`${target.name} (PID ${target.pid})`}</ItemTitle>
@@ -285,6 +288,7 @@ export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChang
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [plan, setPlan] = useState<StopPlan | null>(null);
   const [planTokens, setPlanTokens] = useState<string[]>([]);
+  const closePlan = () => { setPlan(null); setPlanTokens([]); };
   const input = useMemo(() => ({ sort, filter, query: search.trim(), limit, offset: 0 }), [sort, filter, search, limit]);
   const query = useQuery({ queryKey: [...processesKey(hostId), input], queryFn: () => report(input), refetchInterval: POLL_MS, placeholderData: keepPreviousData, retry: 1 });
   const data = query.data;
@@ -303,13 +307,13 @@ export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChang
   const confirm = useMutation({
     mutationFn: () => stop({ tokens: planTokens }),
     onSuccess: (outcome) => {
-      setPlan(null);
+      closePlan();
       setSelected(new Set());
       const failed = outcome.results.filter((result) => !result.ok);
       say({ text: outcome.results.map((result) => (result.ok ? result.message : `${result.name}: ${result.message}`)).join(" "), tone: failed.length === outcome.results.length ? "danger" : failed.length ? "warning" : "success" });
       void query.refetch();
     },
-    onError: (error) => { setPlan(null); say({ text: errorText(error), tone: "danger" }); },
+    onError: (error) => { closePlan(); say({ text: errorText(error), tone: "danger" }); },
   });
 
   if (!data) {
@@ -335,7 +339,7 @@ export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChang
       <Card theme={theme} title={filter === "jobs" ? "Heavy jobs" : "Heaviest processes"} icon="ListOrdered" subtitle={filter === "jobs" ? "Each job with everything it started, added together" : SORTED[sort]}>
         <Pills<Filter> theme={theme} label="Show" items={FILTERS} value={filter} onChange={(next) => { setFilter(next); setLimit(PAGE); }} />
         <Pills<ReportSort> theme={theme} label="Sort" items={SORTS} value={sort} onChange={setSort} />
-        <TextInput accessibilityLabel="Search processes" value={search} onChangeText={(text) => { setSearch(text); setLimit(PAGE); }} placeholder="Search by name, workspace, folder or PID" placeholderTextColor={theme.colors.foregroundMuted} autoCapitalize="none" autoCorrect={false}
+        <TextInput accessibilityLabel="Search processes" value={search} onChangeText={(text) => { setSearch(text); setLimit(PAGE); }} placeholder="Search by name, chat, workspace, folder or PID" placeholderTextColor={theme.colors.foregroundMuted} autoCapitalize="none" autoCorrect={false}
           style={{ ...TYPE.body, color: theme.colors.foreground, backgroundColor: theme.colors.surface0, borderColor: theme.colors.border, borderWidth: 1, borderRadius: RADIUS.control, paddingHorizontal: SPACE.row, paddingVertical: SPACE.sm + SPACE.hair }} />
         {chosen.length ? (
           <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: SPACE.sm, padding: SPACE.row, borderRadius: RADIUS.control, backgroundColor: tint(theme.colors.statusDanger, 0.07) ?? theme.colors.surface2 }}>
@@ -356,7 +360,12 @@ export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChang
                   <Text style={{ ...TYPE.item, color: theme.colors.foreground }}>{group.title}</Text>
                   <Meta theme={theme}>{`${group.rows.length} · ${formatBytes(group.rssBytes)}`}</Meta>
                 </View>
-                <View>{group.rows.map((row, index) => <ProcessItem key={`${row.pid}-${row.name}`} theme={theme} row={row} compact={compact} byTree={byTree} first={index === 0} twin={twins.has(sameness(row))} selected={selected.has(row.pid)} onSelect={() => toggle(row.pid)} onStop={() => ask.mutate([row.pid])} />)}</View>
+                {chatGroups(group.rows).map((chat) => (
+                  <View key={chat.id} style={{ gap: SPACE.xs }}>
+                    <ItemTitle theme={theme}>{chat.title}</ItemTitle>
+                    {chat.rows.map((row, index) => <ProcessItem key={`${row.pid}-${row.name}`} hostId={hostId} theme={theme} row={row} compact={compact} byTree={byTree} first={index === 0} twin={twins.has(sameness(row))} selected={selected.has(row.pid)} onSelect={() => toggle(row.pid)} onStop={() => ask.mutate([row.pid])} />)}
+                  </View>
+                ))}
               </View>
             ))}
           </View>
@@ -366,17 +375,17 @@ export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChang
           {data.matched > rows.length ? <Button theme={theme} label="Show more" onPress={() => setLimit(limit + PAGE)} /> : null}
         </View>
       </Card>
-      {!data.projectsVerified ? <QuietLine theme={theme} icon="ShieldAlert">Paseo projects aren't verified on this host right now, so workspace names are missing and only processes started from Paseo can be stopped.</QuietLine> : null}
+      {!data.projectsVerified ? <QuietLine theme={theme} icon="ShieldAlert">Paseo projects aren't verified on this host right now, so some workspace and chat names may be missing. Stop still checks every protection rule.</QuietLine> : null}
       <Accordion theme={theme}>
         <AccordionItem theme={theme} compact={compact} icon="History" title="Recent stops and restarts" summary={data.recentActions.length ? `${data.recentActions.length} logged · last: ${data.recentActions[0]!.name}` : "None yet"}>
           <RecentStops theme={theme} entries={data.recentActions} />
         </AccordionItem>
-        <AccordionItem theme={theme} compact={compact} icon="ShieldCheck" title="What can be stopped here" summary="Only your own projects' jobs, and always after asking">
-          <Note theme={theme}>Only processes started from Paseo or running inside your Paseo projects can be stopped here. Paseo itself, its plugins, agents, terminals and databases never are. Nothing is stopped without asking, unless you turn on the memory guard in Settings → Hosts.</Note>
+        <AccordionItem theme={theme} compact={compact} icon="ShieldCheck" title="What can be stopped here" summary="Your own jobs, after a warning; protected programs explain why">
+          <Note theme={theme}>Your own processes can be stopped after a warning. Processes started outside Paseo get an extra warning. Paseo itself, its plugins, agent programs, terminal shells, databases, system services and Mac desktop apps stay protected. Nothing is stopped without asking, unless you turn on the memory guard in Settings → Hosts.</Note>
           <Meta theme={theme}>A stop asks the process to finish first and forces it only if it is still running after the grace period. Each one is logged, without command lines (where: Overview → Technical details).</Meta>
         </AccordionItem>
       </Accordion>
-      <StopSheet theme={theme} plan={plan} busy={confirm.isPending} onCancel={() => setPlan(null)} onConfirm={() => confirm.mutate()} />
+      <StopSheet theme={theme} plan={plan} busy={confirm.isPending} onCancel={closePlan} onConfirm={() => confirm.mutate()} />
     </>
   );
 }

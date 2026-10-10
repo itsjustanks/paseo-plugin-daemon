@@ -13,6 +13,8 @@ import {
   type TreeRow,
 } from "./platform";
 
+import { parseMacAgentIds, parseMacExecutables } from "./process-tags";
+
 const execFileAsync = promisify(execFile);
 
 /** Fixed-argv only. No shell, no interpolation, a small deterministic env. */
@@ -305,6 +307,11 @@ export class DarwinAdapter implements PlatformAdapter {
     const all = await this.psRows();
     if (all === null) return { processes: [], warnings: ["Process list unavailable: `ps` failed or timed out."] };
     const rows = all.filter((row) => row.uid === uid);
+    // One bounded read per sample, no per-PID ps calls. Parse then discard all other env values.
+    const [tags, executables] = await Promise.all([
+      this.exec("ps", ["-Eww", "-axo", "pid=,command="]).then(parseMacAgentIds).catch(() => new Map<number, string>()),
+      this.exec("lsof", ["-a", "-u", String(uid), "-d", "txt", "-F", "pn"]).then(parseMacExecutables).catch(() => new Map<number, string>()),
+    ]);
     const warnings: string[] = [];
     // cwd is only resolved for listening candidates (see listeningPorts) to
     // keep `lsof` invocations bounded; everything else reports null.
@@ -318,7 +325,7 @@ export class DarwinAdapter implements PlatformAdapter {
         cwds.set(row.pid, parseLsofCwd(out));
       });
     }
-    return { processes: rows.map((row) => this.toRaw(row, cwds.get(row.pid) ?? null)), warnings };
+    return { processes: rows.map((row) => ({ ...this.toRaw(row, cwds.get(row.pid) ?? null), agentId: tags.get(row.pid) ?? null, executable: executables.get(row.pid) ?? null })), warnings };
   }
 
   async listeningPorts(pids: readonly number[]): Promise<PortScanResult> {

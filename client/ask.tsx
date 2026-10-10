@@ -9,7 +9,7 @@ import { askContext, terminalOpen, type AskSubject } from "../shared/ask";
 import { Button, HostIcon, ItemTitle, Meta, Note, RADIUS, Row, SPACE, TYPE, tint } from "./kit";
 
 type Theme = PluginTheme;
-type Navigation = { openAgent?: (input: { agentId: string }) => void; openWorkspace?: (input: { workspaceId: string }) => void } | undefined;
+type Navigation = { openAgent?: (input: { agentId: string; serverId?: string }) => void; openWorkspace?: (input: { workspaceId: string }) => void } | undefined;
 
 /**
  * "Ask an agent" and "Open a terminal here" (0.12.0). Both need the app's
@@ -22,8 +22,21 @@ type Navigation = { openAgent?: (input: { agentId: string }) => void; openWorksp
 
 /** Where the sheet can send people afterwards; screens set it once. */
 const HostsNavigation = createContext<Navigation>(undefined);
-export function HostsNavigationProvider({ navigation, children }: { navigation: Navigation; children: React.ReactNode }) {
-  return <HostsNavigation.Provider value={navigation}>{children}</HostsNavigation.Provider>;
+export function HostsNavigationProvider({ navigation, hostId, children }: { navigation: Navigation; hostId?: string; children: React.ReactNode }) {
+  const value = useMemo(() => navigation ? {
+    ...navigation,
+    openAgent: typeof navigation.openAgent === "function"
+      ? (input: { agentId: string; serverId?: string }) => navigation.openAgent!({ ...input, ...(hostId ? { serverId: hostId } : {}) })
+      : undefined,
+  } : undefined, [navigation, hostId]);
+  return <HostsNavigation.Provider value={value}>{children}</HostsNavigation.Provider>;
+}
+
+/** Native chat navigation is absent on older hosts; the attribution text remains. */
+export function OpenChatButton({ theme, agentId, hostId }: { theme: Theme; agentId: string | null | undefined; hostId?: string }) {
+  const navigation = useContext(HostsNavigation);
+  if (!agentId || typeof navigation?.openAgent !== "function") return null;
+  return <Button theme={theme} label="Open chat" icon="MessagesSquare" onPress={() => navigation.openAgent!({ agentId, ...(hostId ? { serverId: hostId } : {}) })} />;
 }
 
 /** The app's Paseo session, or null on an app that doesn't provide one to plugins. */

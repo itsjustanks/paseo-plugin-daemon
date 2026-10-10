@@ -45,6 +45,10 @@ export interface RawProcess {
    * treats such argv more aggressively.
    */
   argvLossy?: boolean;
+  /** Only the Paseo tag is retained; raw environments never leave the adapter. */
+  agentId?: string | null;
+  /** Full executable path where the OS supplies it, including spaces. */
+  executable?: string | null;
   state: ProcessState;
   /** Cumulative CPU time in seconds (user + system). */
   cpuSeconds: number;

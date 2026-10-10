@@ -95,7 +95,7 @@ describe("process report", () => {
     expect(result.total).toBe(18);
     expect(result.processes.some((item) => item.pid === 1)).toBe(false);
     const stoppable = result.processes.filter((item) => item.stoppable).map((item) => item.pid).sort((a, b) => a - b);
-    expect(stoppable).toEqual([302, 303, 401, 402, 403, 404]);
+    expect(stoppable).toEqual([302, 303, 401, 402, 403, 404, 501, 600]);
     expect(row(100)).toMatchObject({ owner: { kind: "paseo", label: "Paseo · daemon" }, protectedReason: "Part of Paseo, so it can't be stopped here.", actionToken: null });
     expect(row(200).protectedReason).toBe("This is Hosts itself.");
     expect(row(201).owner.label).toBe("Paseo · plugin host");
@@ -104,8 +104,8 @@ describe("process report", () => {
     expect(row(301).protectedReason).toMatch(/terminal's shell/);
     expect(row(400).protectedReason).toMatch(/An agent/);
     expect(row(500).protectedReason).toMatch(/database or system service/);
-    expect(row(501).protectedReason).toMatch(/Started outside Paseo/);
-    expect(row(600).protectedReason).toMatch(/Started outside Paseo/);
+    expect(row(501)).toMatchObject({ stoppable: true, outsidePaseo: true, protectedReason: null });
+    expect(row(600)).toMatchObject({ stoppable: true, outsidePaseo: true, protectedReason: null });
     expect(row(402)).toMatchObject({ owner: { kind: "paseo-started", label: "Started from Paseo" }, job: { kind: "typecheck" }, jobRoot: true });
     expect(row(402).actionToken).toEqual(expect.any(String));
     expect(row(404).jobRoot).toBe(false);

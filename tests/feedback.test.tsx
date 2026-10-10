@@ -37,7 +37,10 @@ vi.mock("react-native", async () => {
 const { Confirm, SayProvider, SayRoot, copyToClipboard, useCopy, usePageSay, useSafeToast, useSay } = await import("../client/feedback");
 const { ForceStopModal } = await import("../client/surface");
 const { ConfirmButton, TokensProvider, useUi } = await import("../client/ui");
-const { StopSheet } = await import("../client/processes");
+const { StopSheet, ProcessItem } = await import("../client/processes");
+
+const { HostsNavigationProvider } = await import("../client/ask");
+const { RunningHere } = await import("../client/workspaces");
 
 const theme = { colors: new Proxy({}, { get: () => "#336699" }) } as never;
 const SECRET = SYNTHETIC_ANTHROPIC_KEY;
@@ -299,3 +302,38 @@ describe("review fixes: no Modal, no toast", () => {
   });
 });
 const Text = (props: Record<string, unknown>) => React.createElement("Text", props);
+
+
+describe("process chat attribution and outside warning", () => {
+  const chat = { id: "00000000-0000-4000-8000-000000000001", title: "Build the site", status: "idle", workspaceId: "w1", workspace: "Feature", project: "Website", workspacePath: "/example/app", where: "~/app" };
+  const row = { pid: 42, ppid: 1, name: "codex", command: "codex", cwd: null, state: "sleeping", cpuPercent: 0, rssBytes: 100, ageSeconds: 5, owner: { kind: "agent", label: "Agent", project: null, workspace: null }, flags: [], ports: [], tree: { count: 1, cpuPercent: 0, rssBytes: 100 }, job: null, chat, stoppable: false, protectedReason: "An agent. Stop it from its chat in Paseo." } as never;
+  it("shows attribution and protection without expanding; Open chat sends the exact agent and host", async () => {
+    const open = vi.fn();
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<HostsNavigationProvider navigation={{ openAgent: open }} hostId="host-example"><ProcessItem theme={theme} row={row} compact byTree={false} selected={false} onSelect={() => undefined} onStop={() => undefined} first twin={false} /></HostsNavigationProvider>); });
+    expect(text(renderer.toJSON())).toContain("Started by chat Build the site · Feature");
+    expect(text(renderer.toJSON())).toContain("An agent. Stop it from its chat in Paseo.");
+    await press(renderer, "Open chat");
+    expect(open).toHaveBeenCalledWith({ agentId: chat.id, serverId: "host-example" });
+    await act(async () => { renderer.unmount(); });
+  });
+  it("keeps titles when chat navigation is absent, including Running here", async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<HostsNavigationProvider navigation={undefined}><RunningHere theme={theme} rows={[row]} say={() => undefined} /></HostsNavigationProvider>); });
+    expect(text(renderer.toJSON())).toContain("Chat · Build the site");
+    expect(text(renderer.toJSON())).toContain("Started by chat Build the site · Feature");
+    expect(pressable(renderer, "Open chat")).toBeUndefined();
+    await act(async () => { renderer.unmount(); });
+  });
+  it("shows the stronger warning for an outside target or child and Cancel never stops", async () => {
+    const cancel = vi.fn(), confirm = vi.fn();
+    const plan = { graceSeconds: 10, targets: [{ pid: 42, name: "sleep", ok: true, reason: null, rssBytes: 100, cpuPercent: 0, outsidePaseo: true, children: [] }] };
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<StopSheet theme={theme} plan={plan} busy={false} onCancel={cancel} onConfirm={confirm} />); });
+    expect(text(renderer.toJSON())).toContain("This wasn't started by Paseo. Make sure you don't need it.");
+    await press(renderer, "Cancel");
+    expect(cancel).toHaveBeenCalledTimes(1);
+    expect(confirm).not.toHaveBeenCalled();
+    await act(async () => { renderer.unmount(); });
+  });
+});

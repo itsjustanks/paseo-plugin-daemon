@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.17.0
+
+- Attribute processes to their Paseo chat and workspace, including detached jobs, using cached agent metadata.
+- Group Processes by workspace then chat, and Running here by chat. Open chat uses native navigation when available.
+- Allow reviewed Stop for same-user jobs outside Paseo, with an extra warning and inline protection reasons.
+- Keep system services, Mac system programs and desktop apps protected, alongside all existing process guards.
+- Explain protection rules in Help. Preserve signed identities, fresh checks, graceful stops and action logging.
+
 ## 0.16.0 — 2026-10-08
 
 Workspaces is the one place to manage a workspace: what runs in it, what it uses on disk, and one-press

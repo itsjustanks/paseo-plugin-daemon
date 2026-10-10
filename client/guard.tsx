@@ -87,6 +87,7 @@ export function StopProcess({ theme, pid, say, onDone }: { theme: Theme; pid: nu
   const report = useRpc(processReport), preview = useRpc(processPreview), stop = useRpc(processStop);
   const [plan, setPlan] = useState<StopPlan | null>(null);
   const [tokens, setTokens] = useState<string[]>([]);
+  const closePlan = () => { setPlan(null); setTokens([]); };
   const ask = useMutation({
     mutationFn: async () => {
       const found = await report({ query: String(pid), filter: "stoppable", sort: "memory", limit: 10, offset: 0 });
@@ -101,17 +102,17 @@ export function StopProcess({ theme, pid, say, onDone }: { theme: Theme; pid: nu
   const confirm = useMutation({
     mutationFn: () => stop({ tokens }),
     onSuccess: (outcome) => {
-      setPlan(null);
+      closePlan();
       const failed = outcome.results.filter((item) => !item.ok);
       say({ text: outcome.results.map((item) => (item.ok ? item.message : `${item.name}: ${item.message}`)).join(" "), tone: failed.length ? "danger" : "success" });
       onDone?.();
     },
-    onError: (error) => { setPlan(null); say({ text: errorText(error), tone: "danger" }); },
+    onError: (error) => { closePlan(); say({ text: errorText(error), tone: "danger" }); },
   });
   return (
     <>
       <Button theme={theme} label="Stop…" icon="OctagonX" danger busy={ask.isPending} accessibilityLabel={`Stop PID ${pid}. Asks first.`} onPress={() => ask.mutate()} />
-      <StopSheet theme={theme} plan={plan} busy={confirm.isPending} onCancel={() => setPlan(null)} onConfirm={() => confirm.mutate()} />
+      <StopSheet theme={theme} plan={plan} busy={confirm.isPending} onCancel={closePlan} onConfirm={() => confirm.mutate()} />
     </>
   );
 }

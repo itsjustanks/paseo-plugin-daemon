@@ -43,7 +43,7 @@ import { Button, Card, Facts, Grid, Notice, StatusPill, TokensProvider, formatBy
 type DaemonProps = PluginSurfaceProps & { shortcuts?: boolean; params?: Record<string, string>; initialTab?: string };
 
 export function DaemonSurface(props: DaemonProps) {
-  return <TokensProvider value={useUi(props.theme, props.layout.compact)}><HostsNavigationProvider navigation={props.navigation}><SayRoot><DaemonBody key={props.host.id} {...props} /></SayRoot></HostsNavigationProvider></TokensProvider>;
+  return <TokensProvider value={useUi(props.theme, props.layout.compact)}><HostsNavigationProvider navigation={props.navigation} hostId={props.host.id}><SayRoot><DaemonBody key={props.host.id} {...props} /></SayRoot></HostsNavigationProvider></TokensProvider>;
 }
 
 /** The page header: the plugin's icon and name, one line on this host with a coloured dot, and the page's one Refresh link (0.12.1). */

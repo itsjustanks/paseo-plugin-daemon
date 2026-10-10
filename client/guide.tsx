@@ -210,6 +210,15 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
       action: { label: "See processes", tab: "processes" },
     },
     {
+      icon: "ShieldBan", question: "Why can't I stop this process?",
+      answer: [
+        "Each protected row says why beside its name. Paseo itself, plugin hosts and their helpers, agent programs, interactive terminal shells, databases, system services and other users' processes stay protected. On a Mac, system programs and desktop apps stay protected too: quit those in their app.",
+        "Use Open chat for an agent program, or close an interactive terminal in Paseo. Jobs started by a known chat can be stopped even after they detach or move outside the workspace. The chat title and workspace stay on the row; older apps without chat navigation show the title only.",
+        "Other processes you own can be stopped after an extra warning: This wasn't started by Paseo. Make sure you don't need it. Cancel is the default. Hosts checks the process again before signalling, asks it to stop first, and only forces the same process after the grace period. Every step is logged.",
+      ],
+      action: { label: "See processes", tab: "processes" },
+    },
+    {
       icon: "HardDrive", question: "My disk is filling up. What can I clear?",
       answer: [
         "Open Workspaces. It shows how much space is free, what each Paseo workspace uses (biggest first, with whether an agent is working in it), and how much of it looks safe to clear. The sidebar dot warns when the disk is 85% full and turns red at 95%.",
@@ -289,7 +298,7 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
     {
       icon: "ShieldCheck", question: "What can and can't be stopped?",
       answer: [
-        "Only processes started from Paseo or running inside your Paseo projects. Paseo itself, its plugins, agents, terminals and databases never can be. Nothing is stopped automatically unless you turn on the memory guard under Settings → Hosts.",
+        "Your own jobs, including detached chat jobs, can be stopped after asking. Jobs started outside Paseo get an extra warning. Paseo itself, plugins, agent programs, terminal shells, databases, system services and Mac desktop apps stay protected. Nothing is stopped automatically unless you turn on the memory guard under Settings → Hosts.",
         "A stop asks first, waits a few seconds, and only then forces it. A plugin is never stopped like this; it can only be restarted, and only its own process. Every stop and restart is listed under Processes → Recent stops and restarts.",
       ],
     },

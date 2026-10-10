@@ -15,6 +15,8 @@ import {
   type TreeRow,
 } from "./platform";
 
+import { parseLinuxAgentId } from "./process-tags";
+
 const execFileAsync = promisify(execFile);
 
 /** Upper bounds so Monitor never becomes the thing that thrashes the machine. */
@@ -292,7 +294,10 @@ export class LinuxAdapter implements PlatformAdapter {
     const fields = parseProcPidStat(stat);
     const cmdline = await optional(this.fs.readFileBuffer(`/proc/${pid}/cmdline`));
     const argv = cmdline ? parseCmdline(cmdline) : [];
-    const cwd = await optional(this.fs.readlink(`/proc/${pid}/cwd`));
+    const [cwd, environ] = await Promise.all([
+      optional(this.fs.readlink(`/proc/${pid}/cwd`)),
+      optional(this.fs.readFileBuffer(`/proc/${pid}/environ`)),
+    ]);
     const startSeconds = fields.startTicks / clockTicks;
     return {
       pid: fields.pid,
@@ -306,6 +311,7 @@ export class LinuxAdapter implements PlatformAdapter {
       rssBytes: parsedStatus.rssBytes ?? fields.rssPages * this.pageSize,
       ageSeconds: Math.max(0, uptimeSeconds - startSeconds),
       cwd,
+      agentId: environ === null ? null : parseLinuxAgentId(environ),
     };
   }
 

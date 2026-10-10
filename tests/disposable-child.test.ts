@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAdapter } from "../server/adapter";
 import { Collector } from "../server/collector";
+import { hashArgv } from "../server/redaction";
 import { ProcessGuard } from "../server/safety";
 
 /**
@@ -17,17 +18,13 @@ const supported = (platform === "linux" || platform === "darwin") && uid >= 0;
 const children: ChildProcess[] = [];
 
 function spawnChild(trapTerm: boolean): { child: ChildProcess; ready: Promise<void> } {
-  const marker = `monitor-test-${process.pid}-${Date.now()}`;
-  // No process.title here: on Linux it rewrites /proc/<pid>/cmdline, which the
-  // guard would (correctly) treat as an identity change and deny.
-  const script = trapTerm
-    ? "process.on('SIGTERM',()=>{});setInterval(()=>{},1000);process.send?.('ready');"
-    : "setInterval(()=>{},1000);process.send?.('ready');";
-  const child = spawn(process.execPath, ["-e", script, "--", marker], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+  // Signal only disposable sleep processes, never an agent or any existing process.
+  const child = trapTerm
+    ? spawn("/bin/sh", ["-c", 'trap "" TERM; exec /bin/sleep 60'], { stdio: "ignore" })
+    : spawn("/bin/sleep", ["60"], { stdio: "ignore" });
   const ready = new Promise<void>((resolve, reject) => {
-    child.once("message", (message) => (message === "ready" ? resolve() : reject(new Error("child sent an unexpected readiness message"))));
+    child.once("spawn", resolve);
     child.once("error", reject);
-    child.once("exit", () => reject(new Error("child exited before signalling readiness")));
   });
   children.push(child);
   return { child, ready };
@@ -68,7 +65,7 @@ describe.runIf(supported)("disposable child (real adapter)", () => {
     const gentle = gentleSpawn.child;
     const stubborn = stubbornSpawn.child;
     await Promise.all([gentleSpawn.ready, stubbornSpawn.ready]);
-    expect(await waitFor(async () => (await adapter.readIdentity(gentle.pid!)) !== null && (await adapter.readIdentity(stubborn.pid!)) !== null)).toBe(true);
+    expect(await waitFor(async () => (await adapter.readIdentity(gentle.pid!))?.argvHash === hashArgv(["/bin/sleep", "60"]) && (await adapter.readIdentity(stubborn.pid!))?.argvHash === hashArgv(["/bin/sleep", "60"]))).toBe(true);
 
     const signalled: Array<[number, string]> = [];
     const guard = new ProcessGuard({

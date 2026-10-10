@@ -32,6 +32,14 @@ export type OwnerKind = z.infer<typeof OwnerKindSchema>;
 
 export const ProcessFlagSchema = z.object({ code: z.enum(["cpu-runaway", "memory-heavy", "memory-growing", "pressure-driver"]), text: z.string() });
 
+export const ProcessChatSchema = z.object({
+  id: z.string(), title: z.string(), status: z.string(),
+  workspaceId: z.string().nullable(), workspace: z.string().nullable(), project: z.string().nullable(),
+  workspacePath: z.string().nullable(), where: z.string().nullable(),
+});
+export type ProcessChat = z.infer<typeof ProcessChatSchema>;
+export const OUTSIDE_PASEO_WARNING = "This wasn't started by Paseo. Make sure you don't need it.";
+
 export const ProcessRowSchema = z.object({
   pid: z.number().int().positive(),
   ppid: z.number().int().min(0),
@@ -60,6 +68,9 @@ export const ProcessRowSchema = z.object({
   /** This process plus the descendants this user owns. */
   tree: z.object({ count: z.number().int().min(1), cpuPercent: z.number().min(0).nullable(), rssBytes: z.number().min(0) }),
   owner: z.object({ kind: OwnerKindSchema, label: z.string(), project: z.string().nullable(), workspace: z.string().nullable() }),
+  chat: ProcessChatSchema.nullable().optional(),
+  /** Requires the stronger ask-first warning, even inside a registered workspace. */
+  outsidePaseo: z.boolean().optional(),
   flags: z.array(ProcessFlagSchema),
   stoppable: z.boolean(),
   /** Plain words on why it can't be stopped here; null when it can. */
@@ -145,7 +156,7 @@ export const ProcessReportSchema = z.object({
   matched: z.number().int().min(0),
   /** Memory held by Paseo itself (daemon, plugins, terminals). */
   paseoBytes: z.number().min(0),
-  /** False while Paseo projects can't be verified: project names are missing, and only processes started from Paseo can be stopped. */
+  /** False while Paseo projects cannot be verified; some workspace and chat names may be missing. */
   projectsVerified: z.boolean(),
   warnings: z.array(z.string()),
   recentActions: z.array(ActionLogEntrySchema),
@@ -165,6 +176,7 @@ export const StopPlanSchema = z.object({
     reason: z.string().nullable(),
     rssBytes: z.number().min(0),
     cpuPercent: z.number().min(0).nullable(),
+    outsidePaseo: z.boolean().optional(),
     /** Child processes that will be stopped with it, after the same checks. */
     children: z.array(z.object({ pid: z.number().int(), name: z.string() })),
   })),
@@ -222,7 +234,7 @@ export interface ProcessGroup { title: string; rows: ProcessRow[]; rssBytes: num
 export function processGroups(rows: readonly ProcessRow[]): ProcessGroup[] {
   const groups = new Map<string, ProcessGroup>();
   for (const row of rows) {
-    const title = ownerGroup(row.owner);
+    const title = row.chat?.workspace ? [row.chat.project, row.chat.workspace].filter(Boolean).join(" · ") : ownerGroup(row.owner);
     const group = groups.get(title) ?? { title, rows: [], rssBytes: 0, flagged: false };
     group.rows.push(row);
     group.rssBytes += row.rssBytes;
@@ -236,6 +248,22 @@ export function processGroups(rows: readonly ProcessRow[]): ProcessGroup[] {
 export function runningIn(rows: readonly ProcessRow[], workspace: { path?: string | null }): ProcessRow[] {
   const root = (workspace.path ?? "").replace(/\/+$/, "");
   if (!root) return [];
-  return rows.filter((row) => !!row.cwdPath && (row.cwdPath === root || row.cwdPath.startsWith(`${root}/`)))
+  return rows.filter((row) => row.chat?.workspacePath
+    ? row.chat.workspacePath.replace(/\/+$/, "") === root
+    : !!row.cwdPath && (row.cwdPath === root || row.cwdPath.startsWith(`${root}/`)))
     .sort((a, b) => b.rssBytes - a.rssBytes || a.name.localeCompare(b.name) || a.pid - b.pid);
+}
+
+/** Group by stable chat identity; equal titles must never merge different chats. */
+export function chatGroups(rows: readonly ProcessRow[]): { id: string; title: string; rows: ProcessRow[] }[] {
+  const groups = new Map<string, { id: string; title: string; rows: ProcessRow[] }>();
+  for (const row of rows) {
+    const id = row.chat?.id ?? "unknown";
+    const group = groups.get(id) ?? { id, title: row.chat ? `Chat · ${row.chat.title}` : "No chat identified", rows: [] };
+    group.rows.push(row); groups.set(id, group);
+  }
+  return [...groups.values()];
+}
+export function chatAttribution(row: Pick<ProcessRow, "chat">): string {
+  return row.chat ? `Started by chat ${row.chat.title}${row.chat.workspace || row.chat.where ? ` · ${row.chat.workspace ?? row.chat.where}` : ""}` : "No chat identified";
 }

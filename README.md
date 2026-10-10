@@ -360,11 +360,17 @@ limit or the machine, CPU, heavy jobs against your limit); then the list. Show *
 by CPU, memory, age or name; search by name, workspace, folder or PID. Press a row for its command,
 parent and folder.
 
-**What can be stopped.** Only processes owned by the daemon's OS user that Paseo started (anything an
-agent or a terminal launched) or that run inside a registered Paseo project. Never Paseo itself (the
-daemon, supervisor, plugin hosts, terminal workers), anything a plugin started, an agent CLI (stop it
-from its chat), a terminal's own shell, or a database or system service. Anything else your user runs
-is listed but view-only, with the reason on the row.
+**Which chat started it.** Processes are grouped by workspace, then chat. Each tagged job shows
+**Started by chat** with its title and workspace, including detached jobs and builds outside project
+folders. **Open chat** opens that chat on hosts with native navigation; older apps keep the title.
+Workspaces groups **Running here** by chat too. Unknown attribution stays unknown.
+
+**What can be stopped.** Processes owned by the daemon's OS user, including detached chat jobs and
+jobs started outside Paseo. Outside jobs get an extra warning: "This wasn't started by Paseo. Make
+sure you don't need it." Never Paseo itself (daemon, supervisor, plugin hosts, terminal workers),
+anything a plugin started, an agent CLI (open its chat), an interactive terminal's shell, a database,
+a system service, init, or another user's/root process. On Mac, system executables and desktop app
+bundles stay protected too. Each protected row explains why without opening its details.
 
 **How a stop works.** Select one or more rows and press **Stop**. A sheet lists exactly what will stop,
 children included, and anything that won't, with why. Confirming asks each process to exit; anything
@@ -375,7 +381,7 @@ the moment of each signal, and every step is written to `$PASEO_HOME/daemon-link
 **Stuck plugins and the memory guard (0.13.0).** A banner at the top lists any Paseo plugin that isn't
 answering, with **Restart** (see the [changelog](CHANGELOG.md) for exactly how its process is found
 and stopped). Memory runaways show **Stop** beside them even when their row isn't on this page. With
-the optional memory guard on, Hosts stops the biggest job you could stop yourself once memory has been
+the optional memory guard on, Hosts stops the biggest eligible Paseo job once memory has been
 nearly full for over a minute, through the same checks, and logs it as an automatic stop.
 
 ### Overview and the quick health check
@@ -411,8 +417,8 @@ project can qualify too; the plugin does not claim every matching process was la
   projects are excluded; register each project directory separately.
 - Sharing is limited to verified dev servers; agents and unknown listeners are never shared. Custom web
   servers can be registered as running Paseo service scripts with explicit ports.
-- If project verification fails, sharing pauses and only processes Paseo started can be stopped.
-  Global health stays readable.
+- If project verification fails, sharing pauses and some workspace/chat names may be missing.
+  Process controls still check every protection rule; global health stays readable.
 - Process commands are redacted before display, paths are home-relative, and secrets are not logged.
 - Pairing codes and temporary access links grant access. Share them only with the intended recipient.
 

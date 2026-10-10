@@ -45,7 +45,7 @@ export function WorkspacePanel(props: PluginWorkspacePanelProps) {
   if (values.panelScope === "host") return <DaemonSurface {...props} />;
   return (
     <TokensProvider value={tokens}>
-      <HostsNavigationProvider navigation={props.navigation}>
+      <HostsNavigationProvider navigation={props.navigation} hostId={props.host.id}>
       <SayRoot><WorkspaceBody key={`${props.host.id}:${props.workspaceId}`} theme={props.theme} hostId={props.host.id} workspaceId={props.workspaceId} intervalSeconds={values.snapshotIntervalSeconds} minutes={values.tunnelMinutes} settingsLoading={settings.status === "loading"} /></SayRoot>
       </HostsNavigationProvider>
     </TokensProvider>

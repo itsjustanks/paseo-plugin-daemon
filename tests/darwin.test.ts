@@ -108,7 +108,7 @@ describe("DarwinAdapter", () => {
     expect(vite.state).toBe("running");
     expect(processes.find((p) => p.pid === 501)!.cwd).toBeNull();
     expect(processes.find((p) => p.pid === 778)!.state).toBe("zombie");
-    const cwdLookups = calls.filter((c) => c[0] === "lsof" && c[1] === "-a");
+    const cwdLookups = calls.filter((c) => c[0] === "lsof" && c[1] === "-a" && c[2] === "-p");
     expect(cwdLookups).toHaveLength(1);
   });
 

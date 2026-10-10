@@ -41,9 +41,9 @@ import { homedir } from "node:os";
  *  4. never an agent CLI (stop it from its chat) and never a terminal's own
  *     shell (close the terminal);
  *  5. never a database or system service (postgres, redis, sshd, …);
- *  6. and only if Paseo started it (a descendant of the daemon: agents'
- *     builds, terminals' dev servers) or it runs inside a registered Paseo
- *     project. Anything else this user runs is shown but view-only.
+ *  6. same-user jobs may be stopped after asking, with a stronger warning
+ *     when neither a known chat tag nor daemon ancestry proves Paseo started it.
+ *     macOS system executables and GUI bundles remain protected.
  *
  * A stop sends SIGTERM to the process and its eligible children, then, after
  * STOP_GRACE_SECONDS, SIGKILL to whichever of them are still the same
@@ -126,7 +126,8 @@ export class ProcessManager {
     const ancestors = this.chain(raw, byPid);
     const project = this.options.scope?.match(raw, ports) ?? null;
     const place = project ? describeOwner("project", project.workspace ? `${project.name} · ${project.workspace}` : project.name, project.name, project.workspace) : null;
-    const startedByPaseo = raw.ppid === this.daemonPid || ancestors.some((row) => row.pid === this.daemonPid);
+    const chat = this.options.scope?.agent(raw.agentId) ?? null;
+    const startedByPaseo = !!chat || raw.ppid === this.daemonPid || ancestors.some((row) => row.pid === this.daemonPid);
     const deny = (owner: ProcessRow["owner"], reason: string): Decision => ({ stoppable: false, reason, owner });
     // A browser's or desktop app's helpers all share its name; their role tells them apart.
     const role = helperRole(raw.argv);
@@ -139,6 +140,13 @@ export class ProcessManager {
     }
     if (ancestors.some(isPluginHost)) return deny(describeOwner("plugin", "Started by a Paseo plugin"), "Started by a Paseo plugin. Manage it in that plugin (browser links: the Dev servers tab).");
     if (isAgentTool(raw)) return deny(place ? { ...place, kind: "agent", label: `Agent · ${place.label}` } : describeOwner("agent", raw.cwd && raw.cwd !== "/" ? `Agent · in ${folderName(raw.cwd)}` : "Agent"), "An agent. Stop it from its chat in Paseo.");
+    const executable = raw.executable ?? raw.argv[0] ?? "";
+    if (/\.app(?:\/|$)/i.test(executable)) return deny(place ?? describeOwner("other", withRole("Desktop app")), "A desktop app or its helper. Quit it in the app instead.");
+    if (this.options.adapter.platform === "darwin") {
+      if (/^\/(?:System|Library\/Apple|usr\/libexec|usr\/sbin|sbin)(?:\/|$)/.test(executable)) return deny(place ?? describeOwner("infrastructure", "macOS service"), "Part of macOS. Manage it in System Settings or its app.");
+      if (!raw.executable?.startsWith("/")) return deny(place ?? describeOwner("other", withRole("Unknown program")), "Its program couldn't be verified. Refresh before trying again.");
+    }
+    if (/^(?:init|tini)$/.test((raw.argv[0] ?? raw.comm).split("/").pop() ?? "")) return deny(describeOwner("infrastructure", "System startup process"), "A system startup process. It can't be stopped here.");
     if (isInfrastructure(raw)) return deny(describeOwner("infrastructure", "Database or system service"), "A database or system service. Stop it where it was started.");
     const parent = byPid.get(raw.ppid);
     if (parent && isTerminalWorker(parent)) return deny(place ?? describeOwner("terminal", "Paseo terminal"), "A Paseo terminal's shell. Close the terminal in Paseo instead.");
@@ -146,7 +154,11 @@ export class ProcessManager {
     if (!base.actionable) return deny(place ?? describeOwner("other", withRole(startedByPaseo ? "Started from Paseo" : "Outside Paseo")), `Can't be stopped here: ${base.reason}.`);
     if (place) return { stoppable: true, reason: null, owner: place };
     if (startedByPaseo) return { stoppable: true, reason: null, owner: describeOwner("paseo-started", withRole("Started from Paseo")) };
-    return deny(describeOwner("other", withRole("Outside Paseo")), "Started outside Paseo and outside your Paseo projects, so it can only be viewed here.");
+    return { stoppable: true, reason: null, owner: describeOwner("other", withRole("Started outside Paseo")) };
+  }
+
+  private outsidePaseo(raw: RawProcess, byPid: ReadonlyMap<number, RawProcess>): boolean {
+    return !this.options.scope?.agent(raw.agentId) && raw.ppid !== this.daemonPid && !this.chain(raw, byPid).some((row) => row.pid === this.daemonPid);
   }
 
   /** The guard's per-process check at action time: a fresh read, then the same rules. */
@@ -206,6 +218,7 @@ export class ProcessManager {
     const growthByPid = new Map<number, number | null>();
     const rows: ProcessRow[] = base.details.map((detail) => {
       const decision = this.decide(detail, byPid, detail.view.ports);
+      const chat = this.options.scope?.agent(detail.raw.agentId) ?? null;
       const job = jobs.get(detail.raw.pid) ?? null;
       const flags: ProcessRow["flags"] = [];
       if (detail.hotSeconds >= RUNAWAY_CPU_SECONDS) flags.push({ code: "cpu-runaway", text: `Has used a full CPU core for ${minutes(detail.hotSeconds)}` });
@@ -223,6 +236,7 @@ export class ProcessManager {
         cpuPercent: detail.view.cpuPercent, cpuSustained: detail.cpuSustained, hotSeconds: Math.round(detail.hotSeconds),
         rssBytes: detail.raw.rssBytes, memoryPercent: detail.view.memoryPercent, ageSeconds: detail.view.ageSeconds, ports: detail.view.ports,
         job, jobRoot: isJobRoot(detail), tree: tree(detail), owner: decision.owner, flags,
+        chat, outsidePaseo: this.outsidePaseo(detail.raw, byPid),
         stoppable: decision.stoppable, protectedReason: decision.reason, actionToken: null,
       };
     });
@@ -234,7 +248,7 @@ export class ProcessManager {
       if (input.filter === "jobs" && !row.jobRoot) return false;
       if (input.filter === "stoppable" && !row.stoppable) return false;
       if (!query) return true;
-      return [row.name, row.command, row.cwd ?? "", row.owner.label, row.job?.label ?? "", String(row.pid)].some((text) => text.toLowerCase().includes(query));
+      return [row.name, row.command, row.cwd ?? "", row.owner.label, row.chat?.title ?? "", row.chat?.workspace ?? "", row.job?.label ?? "", String(row.pid)].some((text) => text.toLowerCase().includes(query));
     });
     matched.sort(order(input.sort, input.filter === "jobs"));
     const page = matched.slice(input.offset, input.offset + input.limit).map((row) => {
@@ -301,13 +315,16 @@ export class ProcessManager {
 
   // --------------------------------------------------------------- actions
 
-  private async names(): Promise<Map<number, { name: string; rssBytes: number; cpuPercent: number | null; owner: string | null }>> {
+  private async names(): Promise<Map<number, { name: string; rssBytes: number; cpuPercent: number | null; owner: string | null; outsidePaseo: boolean }>> {
+    if (this.options.scope) await this.options.scope.refresh(true).catch(() => undefined);
     this.options.collector.invalidate();
     const base = await this.options.collector.collect();
+    this.fresh = { at: this.clock.now(), base: Promise.resolve(base) };
     const byPid = new Map(base.details.map((detail) => [detail.raw.pid, detail.raw]));
     return new Map(base.details.map((detail) => [detail.raw.pid, {
       name: programName(detail.raw.argv, detail.view.name), rssBytes: detail.raw.rssBytes, cpuPercent: detail.view.cpuPercent,
       owner: this.decide(detail, byPid, detail.view.ports).owner.label,
+      outsidePaseo: this.outsidePaseo(detail.raw, byPid),
     }]));
   }
 
@@ -326,6 +343,7 @@ export class ProcessManager {
       }
       targets.push({
         pid: plan.pid, name: known?.name ?? "Process", ok: true, reason: null, rssBytes: known?.rssBytes ?? 0, cpuPercent: known?.cpuPercent ?? null,
+        outsidePaseo: !!known?.outsidePaseo || plan.children.some((child) => names.get(child)?.outsidePaseo),
         children: plan.children.map((child) => ({ pid: child, name: names.get(child)?.name ?? "process" })),
       });
     }
@@ -412,7 +430,7 @@ export class ProcessManager {
     const byPid = new Map(base.details.map((detail) => [detail.raw.pid, detail.raw]));
     const floor = (base.memoryBasisBytes * minPercent) / 100;
     const candidates = base.details
-      .filter((detail) => detail.raw.rssBytes >= floor && this.decide(detail, byPid, detail.view.ports).stoppable)
+      .filter((detail) => detail.raw.rssBytes >= floor && !this.outsidePaseo(detail.raw, byPid) && this.decide(detail, byPid, detail.view.ports).stoppable)
       .sort((a, b) => b.raw.rssBytes - a.raw.rssBytes || a.raw.pid - b.raw.pid);
     const target = candidates[0];
     if (!target) return null;
