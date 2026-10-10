@@ -2,7 +2,12 @@
 
 ## 0.17.0
 
-- Attribute processes to their Paseo chat and workspace, including detached jobs, using cached agent metadata.
+- Label chat tags using cached agent metadata; detached tags are unconfirmed and get a stronger Stop warning.
+- Protect by executable identity and protected service ancestry, including renamed databases and their workers.
+- Bind signed actions and grace records to executable paths, and re-read exact identities after all policy/tree
+  awaits before every signal. No signal authorization cache.
+- Keep automatic memory stops limited to verified daemon descendants or workspace roots; cap environment reads at
+  64 KB, with 16 Linux readers and a sample deadline.
 - Group Processes by workspace then chat, and Running here by chat. Open chat uses native navigation when available.
 - Allow reviewed Stop for same-user jobs outside Paseo, with an extra warning and inline protection reasons.
 - Keep system services, Mac system programs and desktop apps protected, alongside all existing process guards.

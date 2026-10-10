@@ -237,6 +237,7 @@ export function StopSheet({ theme, plan, busy, onCancel, onConfirm }: { theme: T
     <Sheet title={plan ? (ready.length ? title : "Nothing can be stopped") : "Stop processes"} icon={HostIcon ? <HostIcon name="OctagonX" size={18} color={theme.colors.statusDanger} /> : undefined} open={plan !== null} busy={busy} onClose={() => onCancel()} colors={{ surface: theme.colors.surface1, border: theme.colors.border, foreground: theme.colors.foreground }}>
         <View style={{ gap: SPACE.row, padding: SPACE.card }}>
           {ready.length ? <DangerLine theme={theme}>{`This stops ${ready.length + children === 1 ? "this process" : `these ${ready.length + children} processes`}. Anything not saved in ${ready.length + children === 1 ? "it" : "them"} may be lost.`}</DangerLine> : null}
+          {[...new Set(ready.flatMap((target) => target.tagWarnings ?? []))].map((warning) => <DangerLine key={warning} theme={theme}>{warning}</DangerLine>)}
           {ready.some((target) => target.outsidePaseo) ? <DangerLine theme={theme}>{OUTSIDE_PASEO_WARNING}</DangerLine> : null}
           {ready.map((target) => (
             <View key={target.pid ?? target.name} style={{ gap: SPACE.hair }}>

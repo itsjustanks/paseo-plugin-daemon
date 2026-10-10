@@ -1,6 +1,7 @@
 import type { ActionResult } from "../shared/contracts";
 import {
   MEMORY_HEAVY_PERCENT,
+  taggedProcessWarning,
   ReportInputSchema,
   RUNAWAY_CPU_SECONDS,
   STOP_GRACE_SECONDS,
@@ -24,7 +25,8 @@ import type { Clock, PlatformAdapter, RawProcess } from "./platform";
 import { systemClock } from "./platform";
 import { hashArgv } from "./redaction";
 import { ProcessGuard, type KillFn } from "./safety";
-import { isAgentTool, isInfrastructure, type ProjectScope } from "./scope";
+import { isAgentTool, type ProjectScope } from "./scope";
+import { programProtection, protectsDescendants } from "./process-protection";
 import { friendlyPath } from "../shared/paths";
 import { homedir } from "node:os";
 
@@ -42,7 +44,7 @@ import { homedir } from "node:os";
  *     shell (close the terminal);
  *  5. never a database or system service (postgres, redis, sshd, …);
  *  6. same-user jobs may be stopped after asking, with a stronger warning
- *     when neither a known chat tag nor daemon ancestry proves Paseo started it.
+ *     when neither a workspace root nor daemon ancestry confirms Paseo started it.
  *     macOS system executables and GUI bundles remain protected.
  *
  * A stop sends SIGTERM to the process and its eligible children, then, after
@@ -92,8 +94,6 @@ export class ProcessManager {
   private readonly graceMs: number;
   private readonly timers = new Set<unknown>();
   private closed = false;
-  /** One fresh read shared by the per-process checks of a single action. */
-  private fresh: { at: number; base: Promise<ClassifiedBase> } | null = null;
 
   constructor(private readonly options: ProcessManagerOptions) {
     this.clock = options.clock ?? systemClock;
@@ -103,7 +103,8 @@ export class ProcessManager {
     this.guard = new ProcessGuard({
       adapter: options.adapter, uid: options.uid, selfPid: this.selfPid, kill: options.kill, clock: this.clock,
       alwaysProtected: this.daemonPid > 1 ? [this.daemonPid] : [],
-      authorizeProcess: (pid) => this.authorize(pid),
+      verifiedOrigin: (identity, daemonAncestor) => daemonAncestor || !!this.options.scope?.match({ ...identity, cwd: identity.cwd ?? null }),
+      authorizeProcess: (pid, _descendant, verifiedOnly) => this.authorize(pid, verifiedOnly),
     });
   }
 
@@ -115,19 +116,19 @@ export class ProcessManager {
     let current = byPid.get(raw.ppid);
     for (let hops = 0; current && hops < 64 && !seen.has(current.pid); hops += 1) {
       out.push(current);
+      if (current.pid === this.daemonPid) break;
       seen.add(current.pid);
       current = byPid.get(current.ppid);
     }
     return out;
   }
 
-  decide(detail: ProcessDetail, byPid: ReadonlyMap<number, RawProcess>, ports: readonly number[]): Decision {
+  decide(detail: Pick<ProcessDetail, "raw">, byPid: ReadonlyMap<number, RawProcess>, ports: readonly number[]): Decision {
     const { raw } = detail;
     const ancestors = this.chain(raw, byPid);
     const project = this.options.scope?.match(raw, ports) ?? null;
     const place = project ? describeOwner("project", project.workspace ? `${project.name} · ${project.workspace}` : project.name, project.name, project.workspace) : null;
-    const chat = this.options.scope?.agent(raw.agentId) ?? null;
-    const startedByPaseo = !!chat || raw.ppid === this.daemonPid || ancestors.some((row) => row.pid === this.daemonPid);
+    const startedByPaseo = raw.ppid === this.daemonPid || ancestors.some((row) => row.pid === this.daemonPid);
     const deny = (owner: ProcessRow["owner"], reason: string): Decision => ({ stoppable: false, reason, owner });
     // A browser's or desktop app's helpers all share its name; their role tells them apart.
     const role = helperRole(raw.argv);
@@ -139,17 +140,12 @@ export class ProcessManager {
       return deny(describeOwner("paseo", `Paseo · ${paseoRole(raw, raw.pid === this.daemonPid)}`), "Part of Paseo, so it can't be stopped here.");
     }
     if (ancestors.some(isPluginHost)) return deny(describeOwner("plugin", "Started by a Paseo plugin"), "Started by a Paseo plugin. Manage it in that plugin (browser links: the Dev servers tab).");
+    const terminalParent = byPid.get(raw.ppid);
+    if (terminalParent && isTerminalWorker(terminalParent)) return deny(place ?? describeOwner("terminal", "Paseo terminal"), "A Paseo terminal's shell. Close the terminal in Paseo instead.");
+    if (ancestors.some((row) => row.pid !== this.daemonPid && (row.pid === this.selfPid || protectsDescendants(row, this.options.adapter.platform)))) return deny(describeOwner("infrastructure", "Protected service's child"), "Started by a protected service or Paseo component. Stop it where it was started.");
     if (isAgentTool(raw)) return deny(place ? { ...place, kind: "agent", label: `Agent · ${place.label}` } : describeOwner("agent", raw.cwd && raw.cwd !== "/" ? `Agent · in ${folderName(raw.cwd)}` : "Agent"), "An agent. Stop it from its chat in Paseo.");
-    const executable = raw.executable ?? raw.argv[0] ?? "";
-    if (/\.app(?:\/|$)/i.test(executable)) return deny(place ?? describeOwner("other", withRole("Desktop app")), "A desktop app or its helper. Quit it in the app instead.");
-    if (this.options.adapter.platform === "darwin") {
-      if (/^\/(?:System|Library\/Apple|usr\/libexec|usr\/sbin|sbin)(?:\/|$)/.test(executable)) return deny(place ?? describeOwner("infrastructure", "macOS service"), "Part of macOS. Manage it in System Settings or its app.");
-      if (!raw.executable?.startsWith("/")) return deny(place ?? describeOwner("other", withRole("Unknown program")), "Its program couldn't be verified. Refresh before trying again.");
-    }
-    if (/^(?:init|tini)$/.test((raw.argv[0] ?? raw.comm).split("/").pop() ?? "")) return deny(describeOwner("infrastructure", "System startup process"), "A system startup process. It can't be stopped here.");
-    if (isInfrastructure(raw)) return deny(describeOwner("infrastructure", "Database or system service"), "A database or system service. Stop it where it was started.");
-    const parent = byPid.get(raw.ppid);
-    if (parent && isTerminalWorker(parent)) return deny(place ?? describeOwner("terminal", "Paseo terminal"), "A Paseo terminal's shell. Close the terminal in Paseo instead.");
+    const programReason = programProtection(raw, this.options.adapter.platform);
+    if (programReason) return deny(place ?? describeOwner(/desktop app/.test(programReason) ? "other" : "infrastructure", "Protected program"), programReason);
     const base = this.guard.evaluate(raw, byPid);
     if (!base.actionable) return deny(place ?? describeOwner("other", withRole(startedByPaseo ? "Started from Paseo" : "Outside Paseo")), `Can't be stopped here: ${base.reason}.`);
     if (place) return { stoppable: true, reason: null, owner: place };
@@ -158,22 +154,18 @@ export class ProcessManager {
   }
 
   private outsidePaseo(raw: RawProcess, byPid: ReadonlyMap<number, RawProcess>): boolean {
-    return !this.options.scope?.agent(raw.agentId) && raw.ppid !== this.daemonPid && !this.chain(raw, byPid).some((row) => row.pid === this.daemonPid);
+    return !this.options.scope?.match(raw) && raw.ppid !== this.daemonPid && !this.chain(raw, byPid).some((row) => row.pid === this.daemonPid);
   }
 
   /** The guard's per-process check at action time: a fresh read, then the same rules. */
-  private async authorize(pid: number): Promise<boolean> {
-    const now = this.clock.now();
-    if (!this.fresh || now - this.fresh.at > 1000) {
-      this.options.collector.invalidate();
-      // A stop is a user action: the registry is read fresh, not from the passive cache.
-      if (this.options.scope) await this.options.scope.refresh(true).catch(() => undefined);
-      this.fresh = { at: now, base: this.options.collector.collect() };
-    }
-    const base = await this.fresh.base;
-    const byPid = new Map(base.details.map((detail) => [detail.raw.pid, detail.raw]));
-    const detail = base.details.find((item) => item.raw.pid === pid);
-    return !!detail && this.decide(detail, byPid, detail.view.ports).stoppable;
+  private async authorize(pid: number, verifiedOnly: boolean): Promise<boolean> {
+    if (verifiedOnly && this.options.scope) await this.options.scope.refresh(true).catch(() => undefined);
+    // Bypass both the passive cache and any earlier in-flight collection.
+    const sampled = await this.options.adapter.sampleProcesses(this.options.uid);
+    if (sampled.warnings.some((warning) => /deadline|first \d+ are tracked/.test(warning))) return false;
+    const byPid = new Map(sampled.processes.map((raw) => [raw.pid, raw]));
+    const raw = byPid.get(pid);
+    return !!raw && (!verifiedOnly || !this.outsidePaseo(raw, byPid)) && this.decide({ raw }, byPid, []).stoppable;
   }
 
   // ---------------------------------------------------------------- report
@@ -315,22 +307,21 @@ export class ProcessManager {
 
   // --------------------------------------------------------------- actions
 
-  private async names(): Promise<Map<number, { name: string; rssBytes: number; cpuPercent: number | null; owner: string | null; outsidePaseo: boolean }>> {
+  private async names(): Promise<Map<number, { name: string; rssBytes: number; cpuPercent: number | null; owner: string | null; outsidePaseo: boolean; tagWarning: string | null }>> {
     if (this.options.scope) await this.options.scope.refresh(true).catch(() => undefined);
     this.options.collector.invalidate();
     const base = await this.options.collector.collect();
-    this.fresh = { at: this.clock.now(), base: Promise.resolve(base) };
     const byPid = new Map(base.details.map((detail) => [detail.raw.pid, detail.raw]));
     return new Map(base.details.map((detail) => [detail.raw.pid, {
       name: programName(detail.raw.argv, detail.view.name), rssBytes: detail.raw.rssBytes, cpuPercent: detail.view.cpuPercent,
       owner: this.decide(detail, byPid, detail.view.ports).owner.label,
-      outsidePaseo: this.outsidePaseo(detail.raw, byPid),
+      outsidePaseo: this.outsidePaseo(detail.raw, byPid) && !this.options.scope?.agent(detail.raw.agentId),
+      tagWarning: this.outsidePaseo(detail.raw, byPid) && this.options.scope?.agent(detail.raw.agentId) ? taggedProcessWarning(this.options.scope.agent(detail.raw.agentId)!.title) : null,
     }]));
   }
 
   /** The ask-first list: what each token would stop, children included, or why it would be refused. */
   async preview(tokens: readonly string[]): Promise<StopPlan> {
-    this.fresh = null;
     const names = await this.names();
     const targets: StopPlan["targets"] = [];
     for (const token of tokens) {
@@ -344,6 +335,7 @@ export class ProcessManager {
       targets.push({
         pid: plan.pid, name: known?.name ?? "Process", ok: true, reason: null, rssBytes: known?.rssBytes ?? 0, cpuPercent: known?.cpuPercent ?? null,
         outsidePaseo: !!known?.outsidePaseo || plan.children.some((child) => names.get(child)?.outsidePaseo),
+        tagWarnings: [...new Set([known?.tagWarning, ...plan.children.map((child) => names.get(child)?.tagWarning)].filter((warning): warning is string => !!warning))],
         children: plan.children.map((child) => ({ pid: child, name: names.get(child)?.name ?? "process" })),
       });
     }
@@ -352,7 +344,6 @@ export class ProcessManager {
 
   /** SIGTERM now; SIGKILL survivors after the grace period. Returns at once. */
   async stop(tokens: readonly string[], by: StopSource = BY_PERSON): Promise<StopOutcome> {
-    this.fresh = null;
     const names = await this.names();
     const results: StopOutcome["results"] = [];
     for (const token of tokens) {
@@ -365,7 +356,7 @@ export class ProcessManager {
         results.push({ pid: payload?.pid ?? null, name, ok: false, status: "denied", message, signaled: 0 });
         continue;
       }
-      const { result, children } = await this.guard.stopTree(token);
+      const { result, children } = await this.guard.stopTree(token, by.source === "guard");
       await this.record(by.action, result, name, known?.owner ?? null, by.source);
       results.push({ pid: result.pid, name, ok: result.ok, status: result.status, message: plain(result, name, this.graceMs), signaled: result.signaledCount });
       if (result.status === "signaled") this.escalate(token, payload?.startId ?? null, result.pid!, children, name, known?.owner ?? null, by.source, by.confirm);
@@ -381,7 +372,6 @@ export class ProcessManager {
       void (async () => {
         let alive = false;
         try { const identity = await this.options.adapter.readIdentity(pid); alive = !!identity && identity.startId === startId; } catch { alive = false; }
-        this.fresh = null;
         // An automatic stop asks again before forcing: the guard may be off, or memory may have recovered, by now.
         if (confirm && (this.closed || !await confirm().catch(() => false))) {
           if (alive) await this.record("auto-force-stop", { ok: false, status: "denied", message: `${name} was not stopped forcefully: the memory guard was turned off, memory recovered, or Hosts was unloaded.`, pid, signaledCount: 0 }, name, owner, source);
@@ -391,12 +381,12 @@ export class ProcessManager {
         let status: ActionResult["status"] = "already-exited";
         let message = `${name} stopped within ${Math.round(this.graceMs / 1000)} seconds.`;
         if (alive) {
-          const forced = await this.guard.forceStop(token);
+          const forced = await this.guard.forceStop(token, source === "guard");
           status = forced.status;
           signaled = forced.signaledCount;
           message = forced.ok ? `${name} was still running after ${Math.round(this.graceMs / 1000)} seconds, so it was stopped forcefully.` : friendly(forced);
         }
-        const survivors = await this.guard.forceSurvivors(children);
+        const survivors = await this.guard.forceSurvivors(children, source === "guard");
         if (survivors > 0) {
           signaled += survivors;
           status = "signaled";
@@ -422,7 +412,6 @@ export class ProcessManager {
    * plugin unloading) sends nothing.
    */
   async autoStopBiggest(minPercent: number, confirm: () => Promise<boolean>): Promise<AutoStop | null> {
-    this.fresh = null;
     this.options.collector.invalidate();
     // The project list comes through the daemon, which may be starved right now: without it only Paseo-started jobs qualify.
     if (this.options.scope) await Promise.race([this.options.scope.refresh(true).catch(() => undefined), new Promise((resolve) => { const timer = setTimeout(resolve, 5000); (timer as { unref?: () => void }).unref?.(); })]);
@@ -487,7 +476,7 @@ const rootsFor = (match: { name: string; path: string; workspace: string | null 
 export function friendly(result: ActionResult): string {
   if (result.status === "already-exited") return "It has already stopped.";
   if (result.message.startsWith("Action token")) return "This list is out of date. Refresh and try again.";
-  if (result.message.includes("identity changed")) return "That process ended and its number was reused. Refresh and try again.";
+  if (result.message.includes("identity changed")) return "That process changed or became protected. Refresh and try again.";
   if (result.message.startsWith("Only a verified")) return "It is no longer something Hosts may stop (it changed, or projects can't be verified right now).";
   if (result.status === "needs-graceful-first") return "It has to be asked to stop first.";
   if (result.message.startsWith("Refusing to signal: ")) return `Hosts won't stop it: ${result.message.slice(20).replace(/\.$/, "")}.`;

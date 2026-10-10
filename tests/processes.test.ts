@@ -236,7 +236,7 @@ describe("ask first, then stop", () => {
   it("says the guard's refusals in plain words", () => {
     expect(friendly({ ok: true, status: "already-exited", message: "", pid: 1, signaledCount: 0 })).toBe("It has already stopped.");
     expect(friendly({ ok: false, status: "denied", message: "Refusing to signal: owned by another user.", pid: 1, signaledCount: 0 })).toBe("Hosts won't stop it: owned by another user.");
-    expect(friendly({ ok: false, status: "denied", message: "Process identity changed since the snapshot (PID may have been reused).", pid: 1, signaledCount: 0 })).toMatch(/reused/);
+    expect(friendly({ ok: false, status: "denied", message: "Process identity changed since the snapshot (PID may have been reused).", pid: 1, signaledCount: 0 })).toMatch(/changed or became protected/);
   });
 });
 

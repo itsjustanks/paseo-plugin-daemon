@@ -66,6 +66,11 @@ export interface ProcessIdentity {
   uid: number;
   startId: string;
   argvHash: string;
+  /** Fresh cwd for verified workspace-only automatic actions. */
+  cwd?: string | null;
+  executable: string | null;
+  comm: string;
+  argv: string[];
   state: ProcessState;
 }
 
@@ -148,4 +153,13 @@ export async function mapLimit<T, R>(
   });
   await Promise.all(workers);
   return results;
+}
+
+/** A read that misses the sample deadline cannot hold polling open indefinitely. */
+export function beforeDeadline<T>(work: Promise<T>, deadline: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Process sample deadline exceeded")), Math.max(0, deadline - Date.now()));
+    (timer as { unref?: () => void }).unref?.();
+    work.then((value) => { clearTimeout(timer); resolve(value); }, (error) => { clearTimeout(timer); reject(error); });
+  });
 }

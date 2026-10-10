@@ -18,12 +18,13 @@ export const containsDirectory = (root: string, directory: string) => {
   const rest = relative(root, directory);
   return rest === "" || (rest !== ".." && !rest.startsWith(`..${sep}`) && !isAbsolute(rest));
 };
-const executableWords = (process: RawProcess) => process.argv.slice(0, 4).map((arg) => arg.split(/[\\/]/).pop()!.toLowerCase());
-export function isAgentTool(process: RawProcess): boolean {
+type Program = Pick<RawProcess, "argv" | "comm" | "executable">;
+const executableWords = (process: Program) => [process.executable ?? "", process.comm, ...process.argv.slice(0, 4)].map((arg) => arg.split(/[\\/]/).pop()!.toLowerCase());
+export function isAgentTool(process: Program): boolean {
   return executableWords(process).some((word) => /^(codex|claude|opencode|aider|gemini|copilot|goose|cursor-agent)(?:\.[cm]?js)?$/.test(word));
 }
-export function isInfrastructure(process: RawProcess): boolean {
-  return executableWords(process).some((word) => /^(postgres|postmaster|redis-server|mongod|mysqld|sshd|systemd|cloudflared|paseo|agent-browser)(?:[ .-]|$)/.test(word));
+export function isInfrastructure(process: Pick<RawProcess, "executable" | "comm">): boolean {
+  return [process.executable?.split("/").pop()?.replace(/ \(deleted\)$/, ""), process.comm].some((word) => /^(postgres|postmaster|redis-server|mongod|mysqld|sshd|systemd|cloudflared|paseo|agent-browser)(?:[ .-]|$)/.test(word?.toLowerCase() ?? ""));
 }
 
 /**
@@ -158,7 +159,7 @@ export class ProjectScope {
 
   agent(id: string | null | undefined): ProcessChat | null { return id ? this.agents.get(id) ?? null : null; }
 
-  match(process: RawProcess, ports: readonly number[] = []): ProjectMatch | null {
+  match(process: Program & Pick<RawProcess, "cwd">, ports: readonly number[] = []): ProjectMatch | null {
     if (!process.cwd || !isAbsolute(process.cwd) || isInfrastructure(process)) return null;
     const candidates = this.roots.filter((candidate) => containsDirectory(candidate.path, process.cwd!));
     const root = candidates.find((candidate) => ports.some((port) => candidate.servicePorts.includes(port))) || candidates[0];

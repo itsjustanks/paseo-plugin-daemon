@@ -77,6 +77,7 @@ describe("DarwinAdapter", () => {
     calls.push([file, ...args]);
     if (file === "ps" && args[0] === "-axo" && args[1] === PS_FORMAT) return fx.PS_OUTPUT;
     if (file === "ps" && args[0] === "-axo" && args[1] === PS_TREE_FORMAT) return fx.PS_TREE_OUTPUT;
+    if (file === "ps" && args.includes("comm=")) return "/usr/local/bin/node\n";
     if (file === "ps" && args[0] === "-o") return fx.PS_OUTPUT.split("\n").filter((l) => l.trim().startsWith(`${args[3]} `)).join("\n");
     if (file === "vm_stat") return fx.VM_STAT;
     if (file === "sysctl" && args[1] === "vm.swapusage") return fx.SWAPUSAGE;
@@ -179,7 +180,7 @@ describe("DarwinAdapter", () => {
     await adapter.readIdentity(777);
     await adapter.readTree();
     for (const call of calls) expect(call.join(" ")).not.toMatch(/[|;&$`]/);
-    expect(calls).toContainEqual(["ps", "-o", PS_FORMAT, "-p", "777"]);
+    expect(calls).toContainEqual(["ps", "-o", PS_FORMAT, "-p", "777", "-ww"]);
     expect(calls).toContainEqual(["ps", "-axo", PS_TREE_FORMAT]);
   });
 });

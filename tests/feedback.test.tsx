@@ -311,7 +311,7 @@ describe("process chat attribution and outside warning", () => {
     const open = vi.fn();
     let renderer!: ReactTestRenderer;
     await act(async () => { renderer = create(<HostsNavigationProvider navigation={{ openAgent: open }} hostId="host-example"><ProcessItem theme={theme} row={row} compact byTree={false} selected={false} onSelect={() => undefined} onStop={() => undefined} first twin={false} /></HostsNavigationProvider>); });
-    expect(text(renderer.toJSON())).toContain("Started by chat Build the site · Feature");
+    expect(text(renderer.toJSON())).toContain("Tagged by chat Build the site · Feature");
     expect(text(renderer.toJSON())).toContain("An agent. Stop it from its chat in Paseo.");
     await press(renderer, "Open chat");
     expect(open).toHaveBeenCalledWith({ agentId: chat.id, serverId: "host-example" });
@@ -321,7 +321,7 @@ describe("process chat attribution and outside warning", () => {
     let renderer!: ReactTestRenderer;
     await act(async () => { renderer = create(<HostsNavigationProvider navigation={undefined}><RunningHere theme={theme} rows={[row]} say={() => undefined} /></HostsNavigationProvider>); });
     expect(text(renderer.toJSON())).toContain("Chat · Build the site");
-    expect(text(renderer.toJSON())).toContain("Started by chat Build the site · Feature");
+    expect(text(renderer.toJSON())).toContain("Tagged by chat Build the site · Feature");
     expect(pressable(renderer, "Open chat")).toBeUndefined();
     await act(async () => { renderer.unmount(); });
   });
@@ -336,4 +336,13 @@ describe("process chat attribution and outside warning", () => {
     expect(confirm).not.toHaveBeenCalled();
     await act(async () => { renderer.unmount(); });
   });
+  it("shows the unconfirmed chat tag warning in the Stop dialog", async () => {
+    const warning = "Tagged as started by chat Build the site, but Paseo can't confirm it";
+    const plan = { graceSeconds: 10, targets: [{ pid: 42, name: "sleep", ok: true, reason: null, rssBytes: 100, cpuPercent: 0, tagWarnings: [warning], children: [] }] };
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<StopSheet theme={theme} plan={plan} busy={false} onCancel={() => undefined} onConfirm={() => undefined} />); });
+    expect(text(renderer.toJSON())).toContain(warning);
+    await act(async () => { renderer.unmount(); });
+  });
+
 });

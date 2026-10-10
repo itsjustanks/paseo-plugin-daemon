@@ -1,10 +1,11 @@
 import { execFile } from "node:child_process";
-import { readdir, readFile, readlink } from "node:fs/promises";
+import { open, readdir, readFile, readlink } from "node:fs/promises";
 import { cpus, loadavg, uptime } from "node:os";
 import { promisify } from "node:util";
 import { parsePsiFull, readCgroup } from "./cgroup";
 import { hashArgv } from "./redaction";
 import {
+  beforeDeadline,
   mapLimit,
   mapState,
   type PlatformAdapter,
@@ -24,6 +25,8 @@ export const MAX_PROCESSES = 4096;
 export const MAX_FDS_PER_PROCESS = 2048;
 export const FD_SCAN_CONCURRENCY = 8;
 export const PROC_READ_CONCURRENCY = 16;
+export const MAX_ENVIRON_BYTES = 64 * 1024;
+export const PROCESS_SAMPLE_MS = 5000;
 /** PIDs examined per batch while looking for same-user processes. */
 export const PROC_READ_BATCH = 256;
 
@@ -181,14 +184,22 @@ export function parseSocketInode(link: string): number | null {
 
 export interface LinuxFs {
   readFile(path: string): Promise<string>;
-  readFileBuffer(path: string): Promise<Buffer>;
+  readFileBuffer(path: string, maxBytes?: number): Promise<Buffer>;
   readdir(path: string): Promise<string[]>;
   readlink(path: string): Promise<string>;
 }
 
 const realFs: LinuxFs = {
   readFile: (path) => readFile(path, "utf8"),
-  readFileBuffer: (path) => readFile(path),
+  readFileBuffer: async (path, maxBytes) => {
+    if (maxBytes === undefined) return readFile(path);
+    const file = await open(path, "r");
+    try {
+      const buffer = Buffer.alloc(maxBytes);
+      const { bytesRead } = await file.read(buffer, 0, maxBytes, 0);
+      return buffer.subarray(0, bytesRead);
+    } finally { await file.close(); }
+  },
   readdir: (path) => readdir(path),
   readlink: (path) => readlink(path),
 };
@@ -209,6 +220,7 @@ function isGone(error: unknown): boolean {
 
 export interface LinuxAdapterOptions {
   fs?: LinuxFs;
+  sampleMs?: number;
   clockTicks?: number;
   pageSize?: number;
   /** Injectable for tests; defaults to `getconf CLK_TCK`. */
@@ -218,6 +230,7 @@ export interface LinuxAdapterOptions {
 export class LinuxAdapter implements PlatformAdapter {
   readonly platform = "linux" as const;
   private readonly fs: LinuxFs;
+  private readonly sampleMs: number;
   private readonly pageSize: number;
   private clockTicks: number | null;
   private readonly readClockTicks: () => Promise<number>;
@@ -225,6 +238,7 @@ export class LinuxAdapter implements PlatformAdapter {
 
   constructor(options: LinuxAdapterOptions = {}) {
     this.fs = options.fs ?? realFs;
+    this.sampleMs = options.sampleMs ?? PROCESS_SAMPLE_MS;
     this.pageSize = options.pageSize ?? 4096;
     this.clockTicks = options.clockTicks ?? null;
     this.readClockTicks = options.readClockTicks ?? defaultReadClockTicks;
@@ -294,9 +308,10 @@ export class LinuxAdapter implements PlatformAdapter {
     const fields = parseProcPidStat(stat);
     const cmdline = await optional(this.fs.readFileBuffer(`/proc/${pid}/cmdline`));
     const argv = cmdline ? parseCmdline(cmdline) : [];
-    const [cwd, environ] = await Promise.all([
+    const [cwd, environ, executable] = await Promise.all([
       optional(this.fs.readlink(`/proc/${pid}/cwd`)),
-      optional(this.fs.readFileBuffer(`/proc/${pid}/environ`)),
+      optional(this.fs.readFileBuffer(`/proc/${pid}/environ`, MAX_ENVIRON_BYTES)),
+      optional(this.fs.readlink(`/proc/${pid}/exe`)),
     ]);
     const startSeconds = fields.startTicks / clockTicks;
     return {
@@ -311,7 +326,8 @@ export class LinuxAdapter implements PlatformAdapter {
       rssBytes: parsedStatus.rssBytes ?? fields.rssPages * this.pageSize,
       ageSeconds: Math.max(0, uptimeSeconds - startSeconds),
       cwd,
-      agentId: environ === null ? null : parseLinuxAgentId(environ),
+      executable,
+      agentId: environ === null ? null : parseLinuxAgentId(environ.subarray(0, MAX_ENVIRON_BYTES)),
     };
   }
 
@@ -322,14 +338,19 @@ export class LinuxAdapter implements PlatformAdapter {
    * per batch and dropped immediately.
    */
   async sampleProcesses(uid: number): Promise<{ processes: RawProcess[]; warnings: string[] }> {
-    const [clockTicks, upText, pids] = await Promise.all([this.ticks(), optional(this.fs.readFile("/proc/uptime")), this.listPids()]);
+    const deadline = Date.now() + this.sampleMs;
+    let inputs: [number, string | null, number[]];
+    try { inputs = await beforeDeadline(Promise.all([this.ticks(), optional(this.fs.readFile("/proc/uptime")), this.listPids()]), deadline); }
+    catch { return { processes: [], warnings: ["Process sample deadline exceeded; attribution may be missing."] }; }
+    const [clockTicks, upText, pids] = inputs;
     const uptimeSeconds = upText ? parseUptime(upText) : uptime();
     const processes: RawProcess[] = [];
     const warnings: string[] = [];
     let truncated = false;
-    for (let offset = 0; offset < pids.length && !truncated; offset += PROC_READ_BATCH) {
+    for (let offset = 0; offset < pids.length && !truncated && Date.now() < deadline; offset += PROC_READ_BATCH) {
       const batch = pids.slice(offset, offset + PROC_READ_BATCH);
-      const rows = await mapLimit(batch, PROC_READ_CONCURRENCY, (pid) => this.readOne(pid, uid, clockTicks, uptimeSeconds));
+      const rows = await mapLimit(batch, PROC_READ_CONCURRENCY, (pid) => Date.now() >= deadline ? Promise.resolve(null)
+        : beforeDeadline(this.readOne(pid, uid, clockTicks, uptimeSeconds), deadline).catch(() => null));
       for (const row of rows) {
         if (row === null) continue;
         if (processes.length >= MAX_PROCESSES) {
@@ -339,6 +360,7 @@ export class LinuxAdapter implements PlatformAdapter {
         processes.push(row);
       }
     }
+    if (Date.now() >= deadline) warnings.push("Process sample deadline exceeded; attribution may be missing.");
     if (truncated) warnings.push(`You have more than ${MAX_PROCESSES} processes; only the first ${MAX_PROCESSES} are tracked.`);
     return { processes, warnings };
   }
@@ -414,9 +436,15 @@ export class LinuxAdapter implements PlatformAdapter {
       if (isGone(error)) return null;
       throw new Error("process identity unreadable");
     }
+    const executable = await this.fs.readlink(`/proc/${pid}/exe`);
+    const cwd = await optional(this.fs.readlink(`/proc/${pid}/cwd`));
+    const finalStat = parseProcPidStat(await this.fs.readFile(`/proc/${pid}/stat`));
+    const finalStatus = parseProcStatus(await this.fs.readFile(`/proc/${pid}/status`));
+    if (finalStat.startTicks !== fields.startTicks || finalStatus.uid !== parsedStatus.uid) throw new Error("process identity changed during read");
     return {
+      cwd, executable, comm: finalStat.comm, argv: parseCmdline(cmdline),
       pid: fields.pid,
-      ppid: fields.ppid,
+      ppid: finalStat.ppid,
       uid: parsedStatus.uid,
       startId: String(fields.startTicks),
       argvHash: hashArgv(parseCmdline(cmdline)),

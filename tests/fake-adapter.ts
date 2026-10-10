@@ -28,7 +28,6 @@ export function proc(overrides: Partial<RawProcess> & { pid: number }): RawProce
   return {
     ppid: 1,
     uid: 1000,
-    comm: "node",
     argv: ["node", "app.js"],
     state: "sleeping",
     cpuSeconds: 0,
@@ -37,6 +36,8 @@ export function proc(overrides: Partial<RawProcess> & { pid: number }): RawProce
     ageSeconds: 60,
     cwd: "/home/alice/app",
     ...overrides,
+    executable: overrides.executable === undefined ? (overrides.argv?.[0]?.startsWith("/") ? overrides.argv[0] : `/usr/local/bin/${overrides.argv?.[0] ?? "node"}`) : overrides.executable,
+    comm: overrides.comm ?? overrides.argv?.[0]?.split("/").pop() ?? "node",
   };
 }
 
@@ -82,7 +83,7 @@ export class FakeAdapter implements PlatformAdapter {
     this.beforeIdentityRead?.(pid);
     const found = this.processes.find((p) => p.pid === pid);
     if (!found) return null;
-    return { pid: found.pid, ppid: found.ppid, uid: found.uid, startId: found.startId, argvHash: hashArgv(found.argv), state: found.state };
+    return { pid: found.pid, ppid: found.ppid, uid: found.uid, startId: found.startId, argvHash: hashArgv(found.argv), cwd: found.cwd, executable: found.executable ?? null, comm: found.comm, argv: [...found.argv], state: found.state };
   }
 
   async readTree(): Promise<TreeRow[]> {

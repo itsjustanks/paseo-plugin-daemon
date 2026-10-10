@@ -80,7 +80,7 @@ describe("Paseo project scope", () => {
     expect(scope.match(app, [9229])?.shareable).toBe(false);
     expect(scope.match(app, [3000])).toMatchObject({ id: "website", shareable: true, canStop: true, path: "~/app" });
     for (const cwd of ["/home/alice/app-secret", "/home/alice/elsewhere", "/home/alice", null]) expect(scope.match({ ...app, cwd }, [3000])).toBeNull();
-    for (const name of ["postgres", "redis-server", "sshd", "agent-browser", "cloudflared"]) expect(scope.match({ ...app, argv: [name] }, [3000])).toBeNull();
+    for (const name of ["postgres", "redis-server", "sshd", "agent-browser", "cloudflared"]) expect(scope.match({ ...app, executable: `/usr/local/bin/${name}`, comm: name, argv: [name] }, [3000])).toBeNull();
     expect(containsDirectory("/a/b", "/a/b/../other")).toBe(false);
     expect(scope.match({ ...app, argv: ["node", "custom.js"] }, [3000])).toMatchObject({ shareable: false, canStop: false });
     expect(scope.match({ ...app, argv: ["codex"] }, [3000])).toMatchObject({ kind: "agent", shareable: false, canStop: false });

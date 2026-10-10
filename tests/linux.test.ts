@@ -90,7 +90,7 @@ function fakeFs(files: Record<string, string | Buffer>, dirs: Record<string, str
       return value;
     },
     async readlink(path) {
-      const value = links[path];
+      const value = links[path] ?? (path.endsWith("/exe") && files[path.replace(/exe$/, "cmdline")] !== undefined ? "/usr/local/bin/node" : undefined);
       if (!value) throw missing(path);
       return value;
     },

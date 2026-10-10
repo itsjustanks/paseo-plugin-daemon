@@ -3,6 +3,7 @@ import { cpus, loadavg, totalmem, uptime } from "node:os";
 import { promisify } from "node:util";
 import { hashArgv } from "./redaction";
 import {
+  beforeDeadline,
   mapLimit,
   mapState,
   type PlatformAdapter,
@@ -13,7 +14,7 @@ import {
   type TreeRow,
 } from "./platform";
 
-import { parseMacAgentIds, parseMacExecutables } from "./process-tags";
+import { parseMacAgentIds, parseMacComms, parseMacExecutables } from "./process-tags";
 
 const execFileAsync = promisify(execFile);
 
@@ -214,6 +215,7 @@ export function parseLsofCwd(text: string): string | null {
 
 export interface DarwinAdapterOptions {
   exec?: Exec;
+  sampleMs?: number;
   /** How often `lsof` may run for ports (ms). */
   portCacheMs?: number;
   now?: () => number;
@@ -222,6 +224,7 @@ export interface DarwinAdapterOptions {
 export class DarwinAdapter implements PlatformAdapter {
   readonly platform = "darwin" as const;
   private readonly exec: Exec;
+  private readonly sampleMs: number;
   private readonly portCacheMs: number;
   private readonly now: () => number;
   private portCache: { at: number; result: PortScanResult } | null = null;
@@ -229,6 +232,7 @@ export class DarwinAdapter implements PlatformAdapter {
 
   constructor(options: DarwinAdapterOptions = {}) {
     this.exec = options.exec ?? defaultExec;
+    this.sampleMs = options.sampleMs ?? 5000;
     this.portCacheMs = options.portCacheMs ?? 5000;
     this.now = options.now ?? Date.now;
   }
@@ -271,7 +275,7 @@ export class DarwinAdapter implements PlatformAdapter {
   /** Null when `ps` failed, timed out, or overflowed its buffer. */
   private async psRows(): Promise<PsRow[] | null> {
     try {
-      return parsePsOutput(await this.exec("ps", ["-axo", PS_FORMAT]));
+      return parsePsOutput(await this.exec("ps", ["-axo", PS_FORMAT, "-ww"]));
     } catch {
       return null;
     }
@@ -304,14 +308,22 @@ export class DarwinAdapter implements PlatformAdapter {
    * to an empty list with a warning rather than failing the snapshot.
    */
   async sampleProcesses(uid: number): Promise<{ processes: RawProcess[]; warnings: string[] }> {
+    const deadline = Date.now() + this.sampleMs;
+    return beforeDeadline(this.sampleBefore(uid, deadline), deadline).catch(() => ({ processes: [], warnings: ["Process sample deadline exceeded; attribution may be missing."] }));
+  }
+
+  private async sampleBefore(uid: number, deadline: number): Promise<{ processes: RawProcess[]; warnings: string[] }> {
     const all = await this.psRows();
     if (all === null) return { processes: [], warnings: ["Process list unavailable: `ps` failed or timed out."] };
     const rows = all.filter((row) => row.uid === uid);
     // One bounded read per sample, no per-PID ps calls. Parse then discard all other env values.
-    const [tags, executables] = await Promise.all([
-      this.exec("ps", ["-Eww", "-axo", "pid=,command="]).then(parseMacAgentIds).catch(() => new Map<number, string>()),
+    const [argsOnly, withEnv, comms, executables] = await Promise.all([
+      this.exec("ps", ["-ww", "-axo", "pid=,args="]).catch(() => ""),
+      this.exec("ps", ["-Eww", "-axo", "pid=,command="]).catch(() => ""),
+      this.exec("ps", ["-ww", "-axo", "pid=,comm="]).then(parseMacComms).catch(() => new Map<number, string>()),
       this.exec("lsof", ["-a", "-u", String(uid), "-d", "txt", "-F", "pn"]).then(parseMacExecutables).catch(() => new Map<number, string>()),
     ]);
+    const tags = parseMacAgentIds(argsOnly, withEnv);
     const warnings: string[] = [];
     // cwd is only resolved for listening candidates (see listeningPorts) to
     // keep `lsof` invocations bounded; everything else reports null.
@@ -321,11 +333,12 @@ export class DarwinAdapter implements PlatformAdapter {
     const cwds = new Map<number, string | null>();
     if (!this.lsofMissing) {
       await mapLimit(candidates, CWD_LOOKUP_CONCURRENCY, async (row) => {
+        if (Date.now() >= deadline) return;
         const out = await this.exec("lsof", ["-a", "-p", String(row.pid), "-d", "cwd", "-F", "n"]).catch(() => "");
         cwds.set(row.pid, parseLsofCwd(out));
       });
     }
-    return { processes: rows.map((row) => ({ ...this.toRaw(row, cwds.get(row.pid) ?? null), agentId: tags.get(row.pid) ?? null, executable: executables.get(row.pid) ?? null })), warnings };
+    return { processes: rows.map((row) => ({ ...this.toRaw(row, cwds.get(row.pid) ?? null), agentId: tags.get(row.pid) ?? null, comm: comms.get(row.pid) ?? "", executable: comms.get(row.pid)?.startsWith("/") ? comms.get(row.pid)! : executables.get(row.pid) ?? null })), warnings };
   }
 
   async listeningPorts(pids: readonly number[]): Promise<PortScanResult> {
@@ -362,16 +375,24 @@ export class DarwinAdapter implements PlatformAdapter {
     if (!Number.isInteger(pid) || pid <= 0) return null;
     let out: string;
     try {
-      out = await this.exec("ps", ["-o", PS_FORMAT, "-p", String(pid)]);
+      out = await this.exec("ps", ["-o", PS_FORMAT, "-p", String(pid), "-ww"]);
     } catch (error) {
       if (psSaysGone(error)) return null;
       throw new Error("process identity unreadable");
     }
     const row = parsePsOutput(out).find((r) => r.pid === pid);
     if (!row) return null;
+    const comm = (await this.exec("ps", ["-ww", "-o", "comm=", "-p", String(pid)])).trim();
+    const executable = comm.startsWith("/") ? comm : parseMacExecutables(await this.exec("lsof", ["-a", "-p", String(pid), "-d", "txt", "-F", "pn"])).get(pid) ?? null;
+    const cwd = parseLsofCwd(await this.exec("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-F", "n"]).catch(() => ""));
+    // Re-read the start identity after the executable and cwd lookups as well.
+    const finalRow = parsePsOutput(await this.exec("ps", ["-o", PS_FORMAT, "-p", String(pid), "-ww"])).find((r) => r.pid === pid);
+    if (!finalRow) return null;
+    if (finalRow.lstart !== row.lstart || finalRow.uid !== row.uid || finalRow.command !== row.command) throw new Error("process identity changed during read");
     return {
+      cwd, executable, comm, argv: row.command ? row.command.split(" ") : [],
       pid: row.pid,
-      ppid: row.ppid,
+      ppid: finalRow.ppid,
       uid: row.uid,
       startId: row.lstart,
       argvHash: hashArgv(row.command ? row.command.split(" ") : []),

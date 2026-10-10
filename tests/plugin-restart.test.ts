@@ -91,8 +91,8 @@ class FakeDaemon {
       identity: async (pid: number): Promise<ProcessIdentity | null> => {
         this.beforeIdentity?.(pid);
         const process = this.processes.get(pid);
-        if (pid === SELF) return { pid, ppid: DAEMON, uid: UID, startId: "self", argvHash: "plugin-process", state: "running" };
-        return process?.alive ? { pid, ppid: DAEMON, uid: UID, startId: process.startId, argvHash: process.argvHash, state: "sleeping" } : null;
+        if (pid === SELF) return { pid, ppid: DAEMON, uid: UID, startId: "self", argvHash: "plugin-process", executable: "/usr/local/bin/node", comm: "node", argv: ["node", "plugin-process.js"], state: "running" };
+        return process?.alive ? { pid, ppid: DAEMON, uid: UID, startId: process.startId, argvHash: process.argvHash, executable: "/usr/local/bin/node", comm: "node", argv: ["node", "plugin-process.js"], state: "sleeping" } : null;
       },
       kill: this.kill,
       self: { pid: SELF, startMs: async () => null },
@@ -196,7 +196,7 @@ describe("Restart <plugin>", () => {
     const lying = daemon.deps({ hosts: async () => [{ pid: DAEMON, startId: "d", startMs: daemon.processes.get(1000)!.startMs, argvHash: "plugin-process" }] });
     expect(await new PluginRestarter(lying).restart("activity")).toMatchObject({ ok: false });
     // A process that is no longer the daemon's child (re-parented) is refused too.
-    const orphan = daemon.deps({ identity: async (pid) => ({ pid, ppid: 1, uid: UID, startId: daemon.processes.get(pid)?.startId ?? "", argvHash: "plugin-process", state: "sleeping" }) });
+    const orphan = daemon.deps({ identity: async (pid) => ({ pid, ppid: 1, uid: UID, startId: daemon.processes.get(pid)?.startId ?? "", argvHash: "plugin-process", executable: "/usr/local/bin/node", comm: "node", argv: ["node", "plugin-process.js"], state: "sleeping" }) });
     expect(await new PluginRestarter(orphan).restart("activity")).toMatchObject({ ok: false });
     expect(daemon.kills).toEqual([]);
   });

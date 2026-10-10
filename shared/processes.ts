@@ -38,6 +38,7 @@ export const ProcessChatSchema = z.object({
   workspacePath: z.string().nullable(), where: z.string().nullable(),
 });
 export type ProcessChat = z.infer<typeof ProcessChatSchema>;
+export const taggedProcessWarning = (title: string) => `Tagged as started by chat ${title}, but Paseo can't confirm it`;
 export const OUTSIDE_PASEO_WARNING = "This wasn't started by Paseo. Make sure you don't need it.";
 
 export const ProcessRowSchema = z.object({
@@ -177,6 +178,7 @@ export const StopPlanSchema = z.object({
     rssBytes: z.number().min(0),
     cpuPercent: z.number().min(0).nullable(),
     outsidePaseo: z.boolean().optional(),
+    tagWarnings: z.array(z.string()).optional(),
     /** Child processes that will be stopped with it, after the same checks. */
     children: z.array(z.object({ pid: z.number().int(), name: z.string() })),
   })),
@@ -265,5 +267,5 @@ export function chatGroups(rows: readonly ProcessRow[]): { id: string; title: st
   return [...groups.values()];
 }
 export function chatAttribution(row: Pick<ProcessRow, "chat">): string {
-  return row.chat ? `Started by chat ${row.chat.title}${row.chat.workspace || row.chat.where ? ` · ${row.chat.workspace ?? row.chat.where}` : ""}` : "No chat identified";
+  return row.chat ? `Tagged by chat ${row.chat.title}${row.chat.workspace || row.chat.where ? ` · ${row.chat.workspace ?? row.chat.where}` : ""}` : "No chat identified";
 }

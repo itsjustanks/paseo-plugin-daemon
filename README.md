@@ -360,29 +360,33 @@ limit or the machine, CPU, heavy jobs against your limit); then the list. Show *
 by CPU, memory, age or name; search by name, workspace, folder or PID. Press a row for its command,
 parent and folder.
 
-**Which chat started it.** Processes are grouped by workspace, then chat. Each tagged job shows
-**Started by chat** with its title and workspace, including detached jobs and builds outside project
+**Which chat tagged it.** Processes are grouped by workspace, then chat. Each tagged job shows
+**Tagged by chat** with its title and workspace, including detached jobs and builds outside project
 folders. **Open chat** opens that chat on hosts with native navigation; older apps keep the title.
-Workspaces groups **Running here** by chat too. Unknown attribution stays unknown.
+Workspaces groups **Running here** by chat too. Tags are labels, not proof of origin. Unknown attribution stays unknown.
 
 **What can be stopped.** Processes owned by the daemon's OS user, including detached chat jobs and
 jobs started outside Paseo. Outside jobs get an extra warning: "This wasn't started by Paseo. Make
-sure you don't need it." Never Paseo itself (daemon, supervisor, plugin hosts, terminal workers),
+sure you don't need it." Detached tag-only jobs warn: "Tagged as started by chat <title>, but Paseo can't confirm
+it". The normal warning applies only to verified daemon descendants or workspace-root jobs. Never Paseo itself
+(daemon, supervisor, plugin hosts, terminal workers),
 anything a plugin started, an agent CLI (open its chat), an interactive terminal's shell, a database,
-a system service, init, or another user's/root process. On Mac, system executables and desktop app
+a system service or its children, init, or another user's/root process. On Mac, system executables and desktop app
 bundles stay protected too. Each protected row explains why without opening its details.
 
 **How a stop works.** Select one or more rows and press **Stop**. A sheet lists exactly what will stop,
 children included, and anything that won't, with why. Confirming asks each process to exit; anything
 still running 10 seconds later is stopped forcefully. Every rule is re-checked against a fresh read at
-the moment of each signal, and every step is written to `$PASEO_HOME/daemon-link/actions.jsonl`
+the moment of each signal. Signed identities include the executable path as well as PID, user, start time and argv
+hash. Every step is written to `$PASEO_HOME/daemon-link/actions.jsonl`
 (names, PIDs and outcomes only, never command lines). **Recent stops and restarts** lists them.
 
 **Stuck plugins and the memory guard (0.13.0).** A banner at the top lists any Paseo plugin that isn't
 answering, with **Restart** (see the [changelog](CHANGELOG.md) for exactly how its process is found
 and stopped). Memory runaways show **Stop** beside them even when their row isn't on this page. With
 the optional memory guard on, Hosts stops the biggest eligible Paseo job once memory has been
-nearly full for over a minute, through the same checks, and logs it as an automatic stop.
+nearly full for over a minute, through the same checks, and logs it as an automatic stop. Only verified daemon
+descendants or workspace-root jobs qualify; detached tag-only and outside-Paseo processes never do.
 
 ### Overview and the quick health check
 

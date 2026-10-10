@@ -48,7 +48,7 @@ describe("environment tags", () => {
     for (const text of ["", `X_PASEO_AGENT_ID=${ID}\0`, `value=PASEO_AGENT_ID=${ID}\0`, `PASEO_AGENT_ID=${ID}x\0`, "PASEO_AGENT_ID=bad\0"]) expect(parseLinuxAgentId(text)).toBeNull();
   });
   it("parses one macOS ps table without retaining other environment values", () => {
-    expect([...parseMacAgentIds(` 42 /bin/sleep 60 PASEO_AGENT_ID=${ID} TOKEN=private\n43 node X_PASEO_AGENT_ID=${ID}\n44 node PASEO_AGENT_ID=bad\n45 node PASEO_AGENT_ID=${SECOND}\n`)]).toEqual([[42, ID], [45, SECOND]]);
+    expect([...parseMacAgentIds("42 /bin/sleep 60\n43 node\n44 node\n45 node\n", ` 42 /bin/sleep 60 PASEO_AGENT_ID=${ID} TOKEN=private\n43 node X_PASEO_AGENT_ID=${ID}\n44 node PASEO_AGENT_ID=bad\n45 node PASEO_AGENT_ID=${SECOND}\n`)]).toEqual([[42, ID], [45, SECOND]]);
     expect(parseMacExecutables("p42\nn/Applications/Google Chrome.app/Contents/MacOS/Google Chrome\nn/usr/lib/dyld\n").get(42)).toBe("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
   });
   it("reads Linux environ only once per same-user sample and tolerates denial", async () => {
@@ -70,7 +70,8 @@ describe("environment tags", () => {
     const exec = vi.fn(async (file: string, args: readonly string[]) => {
       if (args[0] === "-Eww") { if (denied) throw new Error("denied"); return `42 /bin/sleep 60 PASEO_AGENT_ID=${ID}`; }
       if (file === "lsof" && args.includes("txt")) return "p42\nn/bin/sleep\nn/usr/lib/dyld";
-      if (file === "ps" && args[1] === PS_FORMAT) return "42 1 1000 S 100 0:00 0:01 Sat Oct 10 12:00:00 2026 /bin/sleep 60";
+      if (args.includes("pid=,args=")) return "42 /bin/sleep 60";
+      if (file === "ps" && args.includes(PS_FORMAT)) return "42 1 1000 S 100 0:00 0:01 Sat Oct 10 12:00:00 2026 /bin/sleep 60";
       return "";
     });
     const adapter = new DarwinAdapter({ exec });
@@ -114,7 +115,7 @@ describe("process decisions and grouping", () => {
     adapter.processes = [proc({ pid: 42, cwd: "/tmp/clone", agentId: ID }), proc({ pid: 43, cwd: "/tmp/clone" }), proc({ pid: 44, cwd: "/tmp/clone", agentId: SECOND })];
     const report = await manager.report({}, async () => []);
     const tagged = report.processes.find((row) => row.pid === 42)!;
-    expect(tagged).toMatchObject({ stoppable: true, outsidePaseo: false, chat: { id: ID, title: "Build the site", workspace: "Feature" } });
+    expect(tagged).toMatchObject({ stoppable: true, outsidePaseo: true, chat: { id: ID, title: "Build the site", workspace: "Feature" } });
     expect(report.processes.find((row) => row.pid === 43)).toMatchObject({ stoppable: true, outsidePaseo: true, chat: null });
     expect(report.processes.find((row) => row.pid === 44)).toMatchObject({ outsidePaseo: true, chat: null });
     expect(processGroups(report.processes)[0]?.title).toBe("Not in a workspace");
@@ -123,6 +124,7 @@ describe("process decisions and grouping", () => {
     expect(chatGroups([tagged, { ...tagged, pid: 45, chat: { ...tagged.chat!, id: SECOND } }])).toHaveLength(2);
     const plan = await manager.preview([tagged.actionToken!, report.processes.find((row) => row.pid === 43)!.actionToken!]);
     expect(plan.targets.map((target) => target.outsidePaseo)).toEqual([false, true]);
+    expect(plan.targets[0]?.tagWarnings).toEqual(["Tagged as started by chat Build the site, but Paseo can't confirm it"]);
     expect(kills).not.toHaveBeenCalled();
   });
 
@@ -172,4 +174,47 @@ describe("process decisions and grouping", () => {
     expect(await manager.autoStopBiggest(25, async () => true)).toBeNull();
     expect(kills).not.toHaveBeenCalled();
   });
+  it("protects a database with renamed argv and its worker child", async () => {
+    const { manager, adapter, kills } = await setup();
+    adapter.processes = [proc({ pid: 42, argv: ["worker"], comm: "worker", executable: "/opt/postgresql/bin/postgres", agentId: ID }), proc({ pid: 43, ppid: 42, argv: ["worker"], agentId: ID })];
+    const rows = (await manager.report({}, async () => [])).processes;
+    expect(rows.find((row) => row.pid === 42)).toMatchObject({ stoppable: false, protectedReason: expect.stringMatching(/database or system service/) });
+    expect(rows.find((row) => row.pid === 43)).toMatchObject({ stoppable: false, protectedReason: expect.stringMatching(/protected service/) });
+    expect(kills).not.toHaveBeenCalled();
+  });
+
+  it("never automatically stops a detached tag-only process, but allows a workspace-root job", async () => {
+    const { manager, adapter, kills } = await setup();
+    adapter.processes = [proc({ pid: 42, cwd: "/tmp/clone", agentId: ID, rssBytes: 30 * 1024 ** 3 })];
+    expect(await manager.autoStopBiggest(25, async () => true)).toBeNull();
+    expect(kills).not.toHaveBeenCalled();
+    adapter.processes[0]!.cwd = "/home/alice/app";
+    expect(await manager.autoStopBiggest(25, async () => true)).toMatchObject({ pid: 42 });
+    expect(kills).toHaveBeenCalledWith(42, "SIGTERM");
+  });
+
+  it("has no one-second signal authorization cache", async () => {
+    const { manager, adapter, kills } = await setup();
+    adapter.processes = [proc({ pid: 42, ppid: 100 })];
+    const row = (await manager.report({}, async () => [])).processes[0]!;
+    expect((await manager.preview([row.actionToken!])).targets[0]?.ok).toBe(true);
+    adapter.processes[0]!.executable = "/opt/postgresql/bin/postgres";
+    expect((await manager.stop([row.actionToken!])).results[0]?.ok).toBe(false);
+    expect(kills).not.toHaveBeenCalled();
+  });
+
+  it("rechecks automatic workspace origin after all awaited tree reads", async () => {
+    const { manager, adapter, kills } = await setup();
+    adapter.processes = [proc({ pid: 42, cwd: "/home/alice/app", agentId: ID, rssBytes: 30 * 1024 ** 3 })];
+    const readTree = adapter.readTree.bind(adapter);
+    let reads = 0;
+    adapter.readTree = async () => {
+      const rows = await readTree();
+      if (++reads === 2) adapter.processes[0]!.cwd = "/tmp/clone";
+      return rows;
+    };
+    expect(await manager.autoStopBiggest(25, async () => true)).toBeNull();
+    expect(kills).not.toHaveBeenCalled();
+  });
+
 });

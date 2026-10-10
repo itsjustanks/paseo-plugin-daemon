@@ -213,7 +213,7 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
       icon: "ShieldBan", question: "Why can't I stop this process?",
       answer: [
         "Each protected row says why beside its name. Paseo itself, plugin hosts and their helpers, agent programs, interactive terminal shells, databases, system services and other users' processes stay protected. On a Mac, system programs and desktop apps stay protected too: quit those in their app.",
-        "Use Open chat for an agent program, or close an interactive terminal in Paseo. Jobs started by a known chat can be stopped even after they detach or move outside the workspace. The chat title and workspace stay on the row; older apps without chat navigation show the title only.",
+        "Use Open chat for an agent program, or close an interactive terminal in Paseo. Tagged jobs can be stopped even after they detach or move outside the workspace, with an extra warning because a tag cannot prove who started them. The chat title and workspace stay on the row; older apps without chat navigation show the title only.",
         "Other processes you own can be stopped after an extra warning: This wasn't started by Paseo. Make sure you don't need it. Cancel is the default. Hosts checks the process again before signalling, asks it to stop first, and only forces the same process after the grace period. Every step is logged.",
       ],
       action: { label: "See processes", tab: "processes" },
@@ -266,7 +266,7 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
       answer: [
         "Hosts checks memory every 10 seconds, even when Paseo is closed. A job using a quarter or more of this computer's memory, or growing fast, is flagged in plain words, for example \"A test run is using 36 GB, 61% of this computer's memory.\" So is memory pressure, when programs start waiting for memory.",
         "Press Stop beside it (it asks first, then forces it after 10 seconds if it won't stop), or Ask an agent to find out why it grew.",
-        "If you'd rather Hosts acted on its own, turn on \"Stop a runaway automatically when memory is nearly full\" under Settings → Hosts. It's off by default. When memory has been nearly full for over a minute, it stops the biggest job you could stop by hand, never Paseo, an agent, a terminal's shell or a database, and the sidebar dot tells you.",
+        "If you'd rather Hosts acted on its own, turn on \"Stop a runaway automatically when memory is nearly full\" under Settings → Hosts. It's off by default. When memory has been nearly full for over a minute, it stops the biggest eligible job inside a workspace or verified as a descendant of Paseo, never Paseo, an agent, a terminal's shell or a database, and the sidebar dot tells you.",
       ],
       action: { label: "See processes", tab: "processes" },
     },
@@ -298,7 +298,7 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
     {
       icon: "ShieldCheck", question: "What can and can't be stopped?",
       answer: [
-        "Your own jobs, including detached chat jobs, can be stopped after asking. Jobs started outside Paseo get an extra warning. Paseo itself, plugins, agent programs, terminal shells, databases, system services and Mac desktop apps stay protected. Nothing is stopped automatically unless you turn on the memory guard under Settings → Hosts.",
+        "Your own jobs, including detached chat jobs, can be stopped after asking. Jobs started outside Paseo and detached jobs carrying only a chat tag get an extra warning. The memory guard never stops those jobs. Paseo itself, plugins, agent programs, terminal shells, databases, system services and Mac desktop apps stay protected. Nothing is stopped automatically unless you turn on the memory guard under Settings → Hosts.",
         "A stop asks first, waits a few seconds, and only then forces it. A plugin is never stopped like this; it can only be restarted, and only its own process. Every stop and restart is listed under Processes → Recent stops and restarts.",
       ],
     },
