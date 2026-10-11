@@ -4,16 +4,23 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { matchesProcess, processOrder, type ProcessReport, type ProcessRow } from "../shared/processes";
 import { DiskReportSchema } from "../shared/disk";
+import { HOSTS_SETTINGS_DEFAULTS } from "../shared/settings";
 import { clearItem, processReportFixture, processRow, workspaceUsage } from "./resource-table-fixtures";
 
+const settings = vi.hoisted(() => ({ state: {} as Record<string, unknown>, save: vi.fn() }));
 const rpc = vi.hoisted(() => ({ report: vi.fn(), preview: vi.fn(), stop: vi.fn(), other: vi.fn() }));
 vi.mock("@getpaseo/plugin/client", () => ({
   useRpc: (contract: { name: string }) => contract.name === "daemon-link.processes.report" ? rpc.report : contract.name === "daemon-link.processes.preview" ? rpc.preview : contract.name === "daemon-link.processes.stop" ? rpc.stop : rpc.other,
   usePaseo: () => null,
+  useSettings: () => settings.state,
 }));
+vi.mock("@getpaseo/plugin/client/ui", async () => {
+  const React = await import("react");
+  return { SettingsCard: ({ children }: { children: React.ReactNode }) => React.createElement("SettingsCard", {}, children), SettingsSelect: (props: Record<string, unknown>) => React.createElement("SettingsSelect", props) };
+});
 vi.mock("@getpaseo/plugin/client/react-native", () => ({ Icon: () => null, useToast: undefined, copyText: undefined, Modal: undefined }));
 // Housekeeping has its own settings/RPC tests; these tests exercise table actions only.
-vi.mock("../client/housekeeping", () => ({ HousekeepingSection: () => null }));
+vi.mock("../client/housekeeping", () => ({ HousekeepingSection: () => React.createElement("Text", {}, "Housekeeping fixture") }));
 vi.mock("react-native", async () => {
   const React = await import("react");
   const make = (name: string) => (props: Record<string, unknown>) => React.createElement(name, props, props.children as React.ReactNode);
@@ -21,6 +28,9 @@ vi.mock("react-native", async () => {
 });
 const { ProcessesTab, processesKey, ProcessItem } = await import("../client/processes");
 const { WorkspaceList, WorkspaceRow, CacheList } = await import("../client/workspaces");
+const { TabBar, TAB_IDS } = await import("../client/navigation");
+const { heroState } = await import("../client/home");
+const { HeavyJobSettings } = await import("../client/heavy-job-settings");
 const { ResourceCells, ResourceTable } = await import("../client/resource-table");
 const theme = { colors: new Proxy({}, { get: () => "#336699" }) } as never;
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -45,13 +55,15 @@ async function mount(children: React.ReactNode) {
   renderers.push(renderer);
   return { renderer, client };
 }
-async function mountProcesses() {
-  const result = await mount(<ProcessesTab theme={theme} compact={false} hostId={hostId} say={say} />);
+async function mountProcesses(compact = false) {
+  const result = await mount(<ProcessesTab theme={theme} compact={compact} hostId={hostId} say={say} />);
   await rendered(() => expect(result.renderer.root.findAllByType(ProcessItem)).toHaveLength(source.length > 25 ? 25 : source.length));
   return result;
 }
 beforeEach(() => {
   vi.clearAllMocks(); serial = 0;
+  settings.save.mockResolvedValue(true);
+  settings.state = { status: "ready", values: { ...HOSTS_SETTINGS_DEFAULTS, maxHeavyJobs: 7, autoStopRunaways: true }, revision: "saved-revision", saving: false, saveError: null, save: settings.save };
   source = [processRow(), processRow({ pid: 43, name: "sleep", actionToken: "token-second", rssBytes: 10 })];
   rpc.report.mockImplementation(async (input) => {
     const rows = source.filter((row) => matchesProcess(row, input)).sort(processOrder(input.sort, input.filter === "jobs", input.direction));
@@ -130,6 +142,143 @@ describe("native process table actions", () => {
     expect(buttons(renderer, "Stop node (PID 42)…")).toHaveLength(1);
   });
 });
+
+describe("compact host resource summary", () => {
+  it("folds measurement explanations while keeping all three drilldowns and threshold settings available", async () => {
+    const { renderer } = await mountProcesses(true);
+    expect(text(renderer.toJSON())).toContain("Host load");
+    expect(text(renderer.toJSON())).not.toContain("Counts job roots");
+    expect(buttons(renderer, "Threshold settings")).toHaveLength(1);
+    expect(buttons(renderer, "Largest memory users")).toHaveLength(1);
+    expect(buttons(renderer, "Busiest processes")).toHaveLength(1);
+    expect(buttons(renderer, "Review heavy jobs")).toHaveLength(1);
+    await press(renderer, "Busiest processes");
+    await rendered(() => expect(rpc.report).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "cpu", direction: "desc" })));
+    await press(renderer, "Largest memory users");
+    await rendered(() => expect(rpc.report).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "memory", direction: "desc" })));
+    await press(renderer, "Load details");
+    expect(text(renderer.toJSON())).toContain("Counts job roots");
+    expect(text(renderer.toJSON())).toContain("The warning threshold never stops or blocks jobs");
+    await press(renderer, "Load details");
+    expect(text(renderer.toJSON())).not.toContain("Counts job roots");
+    await press(renderer, "Review heavy jobs");
+    await rendered(() => expect(rpc.report).toHaveBeenLastCalledWith(expect.objectContaining({ filter: "jobs" })));
+    expect(rpc.stop).not.toHaveBeenCalled();
+  });
+  it("uses the actual panel width and leaves the desktop summary expanded", async () => {
+    const { renderer } = await mountProcesses();
+    expect(text(renderer.toJSON())).toContain("This host's load");
+    expect(text(renderer.toJSON())).toContain("Counts job roots");
+    const summary = renderer.root.findAll((node) => (node.type as unknown) === "View" && node.props.accessibilityLabel === "Host load summary")[0]!;
+    await act(async () => summary.props.onLayout({ nativeEvent: { layout: { width: 420 } } }));
+    expect(buttons(renderer, "Load details")).toHaveLength(1);
+    expect(text(renderer.toJSON())).not.toContain("Counts job roots");
+    await act(async () => summary.props.onLayout({ nativeEvent: { layout: { width: 1000 } } }));
+    expect(text(renderer.toJSON())).toContain("This host's load");
+    expect(text(renderer.toJSON())).toContain("Counts job roots");
+  });
+  it("leaves critical runaway warnings visible when resource details are folded", async () => {
+    const report = rpc.report.getMockImplementation()!;
+    rpc.report.mockImplementation(async (input) => ({ ...await report(input), runaways: [{ code: "memory-near-limit", severity: "critical", title: "This container's memory is nearly full", pids: [], cwd: null }] }));
+    const { renderer } = await mountProcesses(true);
+    expect(text(renderer.toJSON())).toContain("This container's memory is nearly full");
+    expect(text(renderer.toJSON())).not.toContain("Counts job roots");
+  });
+});
+
+describe("readable host navigation", () => {
+  it("retains all labels in a horizontal scroller on compact screens", async () => {
+    const select = vi.fn();
+    const { renderer } = await mount(<TabBar theme={theme} compact tabs={TAB_IDS} active="processes" onSelect={select} />);
+    const scroller = renderer.root.findByType("ScrollView" as never);
+    expect(scroller.props.horizontal).toBe(true);
+    for (const label of ["Overview", "Processes", "Workspaces", "Help"]) expect(text(renderer.toJSON())).toContain(label);
+    await press(renderer, "Help");
+    expect(select).toHaveBeenCalledWith("help");
+  });
+  it("switches to labelled scrolling when a desktop panel becomes narrow", async () => {
+    const { renderer } = await mount(<TabBar theme={theme} compact={false} tabs={TAB_IDS} active="processes" onSelect={() => undefined} />);
+    expect(renderer.root.findAllByType("ScrollView" as never)).toHaveLength(0);
+    const bar = renderer.root.findAll((node) => (node.type as unknown) === "View" && node.props.accessibilityLabel === "Hosts navigation")[0]!;
+    await act(async () => bar.props.onLayout({ nativeEvent: { layout: { width: 390 } } }));
+    expect(renderer.root.findByType("ScrollView" as never).props.horizontal).toBe(true);
+    for (const label of ["Overview", "Processes", "Workspaces", "Help"]) expect(text(renderer.toJSON())).toContain(label);
+  });
+});
+
+describe("process pivots and resource drilldown", () => {
+  it("shows every heavy job beyond four, globally sorted with tree resource totals", async () => {
+    source = Array.from({ length: 30 }, (_, i) => processRow({ pid: i + 1, name: `job-${i}`, actionToken: `token-${i}`, jobRoot: true, job: { kind: "build", label: "Build" }, rssBytes: 1000 - i, tree: { count: 3, rssBytes: 100 + i, cpuPercent: i } }));
+    const { renderer } = await mountProcesses();
+    await press(renderer, "Heavy jobs");
+    await rendered(() => expect(rpc.report).toHaveBeenLastCalledWith(expect.objectContaining({ filter: "jobs", sort: "memory", direction: "desc", offset: 0, limit: 25 })));
+    await rendered(() => expect(renderer.root.findAllByType(ProcessItem)).toHaveLength(25));
+    expect(renderer.root.findAllByType(ProcessItem)[0]!.props.row.pid).toBe(30);
+    expect(renderer.root.findAllByType(ProcessItem).every((row) => row.props.byTree)).toBe(true);
+    await press(renderer, "Next page");
+    await rendered(() => expect(renderer.root.findAllByType(ProcessItem)).toHaveLength(5));
+    await search(renderer, "Search processes", "job-29");
+    await rendered(() => expect(renderer.root.findAllByType(ProcessItem)).toHaveLength(1));
+    expect(rpc.stop).not.toHaveBeenCalled();
+  });
+  it("drills into CPU and memory across the host and clears a restrictive filter and search", async () => {
+    const { renderer } = await mountProcesses();
+    await press(renderer, "Filter: Protected");
+    await search(renderer, "Search processes", "missing");
+    await press(renderer, "Busiest processes");
+    await rendered(() => expect(rpc.report).toHaveBeenLastCalledWith(expect.objectContaining({ filter: "all", query: "", sort: "cpu", direction: "desc", offset: 0 })));
+    await press(renderer, "Largest memory users");
+    await rendered(() => expect(rpc.report).toHaveBeenLastCalledWith(expect.objectContaining({ sort: "memory", direction: "desc" })));
+  });
+  it("mounts the provided browser panel and Housekeeping only in their pivots", async () => {
+    const { renderer } = await mount(<ProcessesTab theme={theme} compact hostId={hostId} say={say} browserPanel={<TextFixture />} />);
+    expect(text(renderer.toJSON())).not.toContain("Browser panel fixture");
+    expect(text(renderer.toJSON())).not.toContain("Housekeeping fixture");
+    await press(renderer, "Browsers");
+    expect(text(renderer.toJSON())).toContain("Browser panel fixture");
+    expect(renderer.root.findAllByType(ProcessItem)).toHaveLength(0);
+    await press(renderer, "Housekeeping");
+    expect(text(renderer.toJSON())).toContain("Housekeeping fixture");
+    expect(text(renderer.toJSON())).not.toContain("Browser panel fixture");
+    expect(rpc.stop).not.toHaveBeenCalled();
+  });
+  it("keeps alternate pivots usable when the process report fails and explains a missing browser panel", async () => {
+    rpc.report.mockRejectedValue(new Error("offline"));
+    const { renderer } = await mount(<ProcessesTab theme={theme} compact hostId={hostId} say={say} />);
+    await press(renderer, "Browsers");
+    expect(text(renderer.toJSON())).toContain("Browser details aren't available here");
+    await press(renderer, "Housekeeping");
+    expect(text(renderer.toJSON())).toContain("Housekeeping fixture");
+  });
+  it("explains older daemon limit wording in the Overview hero, including without load data", () => {
+    const verdict = { issues: [{ code: "too-many-jobs", severity: "warning", message: "5 jobs; your limit is 4" }], load: { heavyJobs: 5, heavyJobLimit: 4 } } as never;
+    expect(heroState(verdict, true).lead).toContain("above the warning threshold of 4");
+    expect(heroState(verdict, true).lead).not.toContain("your limit");
+    expect(heroState({ ...verdict as object, load: null } as never, true).lead).toContain("This warning never stops jobs");
+  });
+  it("offers the saved threshold and every valid value without changing other policies", async () => {
+    const { renderer } = await mountProcesses();
+    expect(text(renderer.toJSON())).not.toContain("at once is the limit");
+    expect(text(renderer.toJSON())).toContain("The warning threshold never stops or blocks jobs");
+    await press(renderer, "Threshold settings");
+    const select = renderer.root.findByType("SettingsSelect" as never);
+    expect(select.props.value).toBe("7");
+    expect(select.props.options).toHaveLength(32);
+    expect(select.props.options[0].value).toBe("1");
+    expect(select.props.options[31].value).toBe("32");
+    await act(async () => select.props.onValueChange("32"));
+    expect(settings.save).toHaveBeenCalledWith({ ...(settings.state.values as object), maxHeavyJobs: 32 }, "saved-revision");
+    expect(rpc.stop).not.toHaveBeenCalled();
+  });
+  it("shows a settings failure without offering to reset policies", async () => {
+    settings.state = { status: "invalid", error: "Stored settings need attention", reload: vi.fn() };
+    const { renderer } = await mount(<HeavyJobSettings theme={theme} />);
+    expect(text(renderer.toJSON())).toContain("Stored settings need attention");
+    expect(buttons(renderer, "Reload settings")).toHaveLength(1);
+    expect(settings.save).not.toHaveBeenCalled();
+  });
+});
+function TextFixture() { return React.createElement("Text", {}, "Browser panel fixture"); }
 
 describe("native disk table controls", () => {
   it("filters and sorts workspaces locally, resets pages, and keeps reviewed delete tokens", async () => {

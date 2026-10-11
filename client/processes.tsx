@@ -15,6 +15,8 @@ import { ResourceCells, ResourceHeader, ResourceTable, ResourceToolbar, type Res
 import type { HealthIssue } from "../shared/health";
 
 import { HousekeepingSection } from "./housekeeping";
+import { ProcessPivotBar, type ProcessPivot } from "./navigation";
+import { HeavyJobSettings } from "./heavy-job-settings";
 
 type Theme = PluginTheme;
 export type Say = (message: { text: string; tone: Tone } | null) => void;
@@ -32,7 +34,6 @@ export const PROCESS_COLUMNS: readonly ResourceColumn[] = [
 ];
 const FILTERS: ReadonlyArray<{ id: Filter; label: string }> = [
   { id: "all", label: "Everything" },
-  { id: "jobs", label: "Heavy jobs" },
   { id: "stoppable", label: "Can stop here" },
   { id: "protected", label: "Protected" },
   { id: "known-chat", label: "Known chat" },
@@ -69,19 +70,35 @@ export function Meter({ theme, percent, tone }: { theme: Theme; percent: number 
 }
 
 /** One figure with its label, its meter and a muted line under it. */
-function Figure({ theme, label, value, percent, tone, hint }: { theme: Theme; label: string; value: string; percent: number | null; tone: Tone; hint: string }) {
+function Figure({ theme, label, value, percent, tone, hint, action }: { theme: Theme; label: string; value: string; percent?: number | null; tone: Tone; hint: string; action: { label: string; onPress(): void } }) {
   return (
     <View style={{ flexGrow: 1, flexBasis: 240, gap: SPACE.xs }}>
       <Text style={{ ...TYPE.secondary, color: theme.colors.foregroundMuted, fontWeight: "500" }}>{label}</Text>
-      <Text style={{ ...TYPE.figure, color: theme.colors.foreground, fontVariant: ["tabular-nums"] }}>{value}</Text>
-      <Meter theme={theme} percent={percent} tone={tone} />
+      <Text style={{ ...TYPE.figure, color: tone === "warning" || tone === "danger" ? toneColor(theme, tone) : theme.colors.foreground, fontVariant: ["tabular-nums"] }}>{value}</Text>
+      {percent !== undefined ? <Meter theme={theme} percent={percent} tone={tone} /> : null}
       <Meta theme={theme}>{hint}</Meta>
+      <Row><Button theme={theme} label={action.label} onPress={action.onPress} /></Row>
     </View>
   );
 }
 
-/** The load at a glance: memory against what actually limits it, CPU, and heavy jobs against your limit. */
-function LoadCard({ theme, report }: { theme: Theme; report: ProcessReport }) {
+/** Each compact reading is also the same drilldown offered by the desktop summary. */
+function CompactReading({ theme, label, value, hint, tone, action }: { theme: Theme; label: string; value: string; hint?: string; tone: Tone; action: { label: string; onPress(): void } }) {
+  return <Pressable accessibilityRole="button" accessibilityLabel={action.label} accessibilityHint="Show the processes behind this reading" onPress={action.onPress}
+    style={{ flex: 1, minWidth: 0, minHeight: 64, gap: SPACE.hair, paddingVertical: SPACE.xs }}>
+    <Text style={{ ...TYPE.small, color: theme.colors.foregroundMuted }}>{label}</Text>
+    <Text style={{ ...TYPE.item, color: tone === "warning" || tone === "danger" ? toneColor(theme, tone) : theme.colors.foreground, fontVariant: ["tabular-nums"] }}>{value}</Text>
+    {hint ? <Meta theme={theme}>{hint}</Meta> : null}
+    <Text style={{ ...TYPE.small, color: theme.colors.accent }}>Inspect ›</Text>
+  </Pressable>;
+}
+
+/** Resource readings stay host-wide, even when the table is searched or filtered. */
+function LoadCard({ theme, compact, report, onMemory, onCpu, onJobs }: { theme: Theme; compact: boolean; report: ProcessReport; onMemory(): void; onCpu(): void; onJobs(): void }) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [width, setWidth] = useState<number | null>(null);
+  const narrow = compact || (width !== null && width < 760);
   const memory = memoryWords(report);
   const container = report.container;
   const cpuHint = container?.cpuCoresUsed != null
@@ -89,14 +106,40 @@ function LoadCard({ theme, report }: { theme: Theme; report: ProcessReport }) {
     : `${report.host.cores} cores · load ${report.host.load1.toFixed(1)}`;
   const jobs = report.heavyJobs;
   return (
-    <Card theme={theme} title="This host's load" icon="Gauge" subtitle={report.memoryBasis === "container" ? `A container on a machine with ${formatBytes(report.host.memoryTotalBytes)} of memory` : undefined}>
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: SPACE.section }}>
-        <Figure theme={theme} label="Memory" value={`${formatBytes(memory.used)} of ${formatBytes(memory.limit)}`} percent={memory.percent} tone={shareTone(memory.percent)} hint={`${formatPercent(memory.percent)} of ${memory.where}`} />
-        <Figure theme={theme} label="CPU" value={report.sampling || report.host.cpuPercent === null ? "Measuring…" : formatPercent(report.host.cpuPercent)} percent={report.host.cpuPercent} tone={report.host.cpuPressure === "critical" ? "danger" : report.host.cpuPressure === "high" ? "warning" : "success"} hint={cpuHint} />
-        <Figure theme={theme} label="Heavy jobs" value={`${jobs.count} of ${jobs.limit}`} percent={Math.min(100, (jobs.count / Math.max(1, jobs.limit)) * 100)} tone={jobs.count > jobs.limit ? "warning" : "success"} hint={`Builds, tests, type checks, installs and dev servers running now. ${jobs.limit} at once is the limit.`} />
+    <View accessibilityLabel="Host load summary" onLayout={(event) => setWidth(event.nativeEvent.layout.width)}>
+    {narrow ? <View style={{ padding: SPACE.row, gap: SPACE.sm, borderWidth: 1, borderColor: theme.colors.border, borderRadius: RADIUS.card, backgroundColor: theme.colors.surface1, marginBottom: SPACE.section }}>
+      <Text style={{ ...TYPE.item, color: theme.colors.foreground }}>Host load</Text>
+      <View style={{ flexDirection: "row", gap: SPACE.sm }}>
+        <CompactReading theme={theme} label="Memory" value={formatBytes(memory.used)} hint={`of ${formatBytes(memory.limit)}`} tone={shareTone(memory.percent)} action={{ label: "Largest memory users", onPress: onMemory }} />
+        <CompactReading theme={theme} label="CPU" value={report.sampling || report.host.cpuPercent === null ? "Measuring…" : formatPercent(report.host.cpuPercent)} tone={report.host.cpuPressure === "critical" ? "danger" : report.host.cpuPressure === "high" ? "warning" : "success"} action={{ label: "Busiest processes", onPress: onCpu }} />
+        <CompactReading theme={theme} label="Heavy jobs" value={`${jobs.count} running`} hint={`Warn above ${jobs.limit}`} tone={jobs.count > jobs.limit ? "warning" : "neutral"} action={{ label: "Review heavy jobs", onPress: onJobs }} />
       </View>
-      <Meta theme={theme}>{`Paseo itself uses ${formatBytes(report.paseoBytes)}. ${report.total} processes in all.`}</Meta>
-    </Card>
+      <Row>
+        <Pressable accessibilityRole="button" accessibilityLabel="Load details" accessibilityState={{ expanded: detailsOpen }} {...({ "aria-expanded": detailsOpen } as object)} onPress={() => setDetailsOpen((open) => !open)} style={{ minHeight: 44, justifyContent: "center", paddingHorizontal: SPACE.xs }}>
+          <Text style={{ ...TYPE.secondary, color: theme.colors.accent }}>{`Details ${detailsOpen ? "▴" : "▾"}`}</Text>
+        </Pressable>
+        <Button theme={theme} label="Threshold settings" icon="SlidersHorizontal" onPress={() => setSettingsOpen(true)} />
+      </Row>
+      {detailsOpen ? <View style={{ gap: SPACE.sm }}>
+        <Meta theme={theme}>{`${formatPercent(memory.percent)} of ${memory.where}${report.memoryBasis === "container" ? ` · machine memory ${formatBytes(report.host.memoryTotalBytes)}` : ""}`}</Meta>
+        <Meta theme={theme}>{cpuHint}</Meta>
+        <Meta theme={theme}>{`Warning threshold: more than ${jobs.limit} running. Counts job roots, with child processes included in each job's resource totals.`}</Meta>
+        <Meta theme={theme}>Heavy jobs are builds, tests, type checks, installs and dev servers. The warning threshold never stops or blocks jobs.</Meta>
+        <Meta theme={theme}>{`Paseo uses ${formatBytes(report.paseoBytes)} · ${report.total} processes · refreshed every 5 seconds`}</Meta>
+      </View> : null}
+    </View> : <Card theme={theme} title="This host's load" icon="Gauge" subtitle={report.memoryBasis === "container" ? `A container on a machine with ${formatBytes(report.host.memoryTotalBytes)} of memory` : undefined}>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: SPACE.section }}>
+        <Figure theme={theme} label="Memory" value={`${formatBytes(memory.used)} of ${formatBytes(memory.limit)}`} percent={memory.percent} tone={shareTone(memory.percent)} hint={`${formatPercent(memory.percent)} of ${memory.where}`} action={{ label: "Largest memory users", onPress: onMemory }} />
+        <Figure theme={theme} label="CPU" value={report.sampling || report.host.cpuPercent === null ? "Measuring…" : formatPercent(report.host.cpuPercent)} percent={report.host.cpuPercent} tone={report.host.cpuPressure === "critical" ? "danger" : report.host.cpuPressure === "high" ? "warning" : "success"} hint={cpuHint} action={{ label: "Busiest processes", onPress: onCpu }} />
+        <Figure theme={theme} label="Heavy jobs" value={`${jobs.count} running`} tone={jobs.count > jobs.limit ? "warning" : "neutral"} hint={`Warning threshold: more than ${jobs.limit} running. Counts job roots, with child processes included in each job's resource totals.`} action={{ label: "Review heavy jobs", onPress: onJobs }} />
+      </View>
+      <Row><Meta theme={theme}>{`Paseo uses ${formatBytes(report.paseoBytes)} · ${report.total} processes · refreshed every 5 seconds`}</Meta><Button theme={theme} label="Threshold settings" icon="SlidersHorizontal" onPress={() => setSettingsOpen(true)} /></Row>
+      <Meta theme={theme}>Heavy jobs are builds, tests, type checks, installs and dev servers. The warning threshold never stops or blocks jobs.</Meta>
+    </Card>}
+      <Sheet title="Heavy-job warning threshold" open={settingsOpen} onClose={() => setSettingsOpen(false)} colors={{ surface: theme.colors.surface1, border: theme.colors.border, foreground: theme.colors.foreground }}>
+        <View style={{ padding: SPACE.card, gap: SPACE.row }}>{settingsOpen ? <HeavyJobSettings theme={theme} /> : null}<Row><Button theme={theme} label="Done" onPress={() => setSettingsOpen(false)} /></Row></View>
+      </Sheet>
+    </View>
   );
 }
 
@@ -111,7 +154,7 @@ function RunawayBanner({ theme, report, say, onDone, onJobs }: { theme: Theme; r
     <Banner theme={theme} tone={critical ? "danger" : "warning"} title={report.runaways.length === 1 ? "Something needs attention" : `${report.runaways.length} things need attention`}>
       {report.runaways.map((runaway, index) => (
         <View key={`${runaway.code}-${index}`} style={{ gap: SPACE.sm }}>
-          <Note theme={theme}>{runaway.title}</Note>
+          <Note theme={theme}>{runaway.code === "too-many-jobs" ? `${report.heavyJobs.count} heavy jobs are running. This is above your warning threshold of ${report.heavyJobs.limit}. The warning never stops jobs; review their CPU and memory use below.` : runaway.title}</Note>
           {runaway.code === "too-many-jobs" ? <Row><Button theme={theme} label="Show the heavy jobs" icon="ListFilter" onPress={onJobs} /></Row> : null}
           {(runaway.code === "cpu-runaway" || runaway.code === "memory-heavy") && runaway.pids.length ? (
             <Row>
@@ -254,14 +297,23 @@ export function summarizeNames(names: readonly string[]): string {
   return [...counts].map(([name, count]) => (count > 1 ? `${name} ×${count}` : name)).join(", ");
 }
 
-/**
- * The Processes tab. Status first (runaways, then the load), then the list
- * with its controls, then the log; pointers last.
- */
-export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChanged }: { theme: Theme; compact: boolean; hostId: string; say: Say; issues?: readonly HealthIssue[]; onChanged?: () => void }) {
+type ProcessesProps = { theme: Theme; compact: boolean; hostId: string; say: Say; issues?: readonly HealthIssue[]; onChanged?: () => void; browserPanel?: React.ReactNode };
+
+/** The parent owns browser data and actions; this surface only supplies its pivot. */
+export function ProcessesTab({ browserPanel, ...props }: ProcessesProps) {
+  const [pivot, setPivot] = useState<ProcessPivot>("all");
+  return <>
+    <ProcessPivotBar theme={props.theme} active={pivot} onSelect={setPivot} />
+    {pivot === "housekeeping" ? <HousekeepingSection theme={props.theme} compact={props.compact} hostId={props.hostId} />
+      : pivot === "browsers" ? browserPanel ?? <Card theme={props.theme} title="Browser details aren't available here" icon="Globe"><Note theme={props.theme}>Browser details aren't available in this view. You can still inspect browser processes in All processes.</Note><Row><Button theme={props.theme} label="Show all processes" onPress={() => setPivot("all")} /></Row></Card>
+      : <ProcessList key={pivot} {...props} heavy={pivot === "jobs"} onJobs={() => setPivot("jobs")} />}
+  </>;
+}
+
+function ProcessList({ theme, compact, hostId, say, issues = [], onChanged, heavy, onJobs }: ProcessesProps & { heavy: boolean; onJobs(): void }) {
   const report = useRpc(processReport), preview = useRpc(processPreview), stop = useRpc(processStop);
   const [sort, setSort] = useState<ResourceSort<ReportSort>>({ id: "memory", direction: "desc" });
-  const [filter, setFilter] = useState<Filter>("all");
+  const [filter, setFilter] = useState<Filter>(heavy ? "jobs" : "all");
   const [search, setSearch] = useState("");
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -301,9 +353,9 @@ export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChang
   if (!data) {
     return query.error
       ? <Banner theme={theme} tone="danger" title="This host's processes couldn't be read"><Note theme={theme}>{query.error instanceof Error ? query.error.message : String(query.error)}</Note><Row><Button theme={theme} label="Try again" onPress={() => void query.refetch()} /></Row></Banner>
-      : <View style={{ padding: SPACE.section, alignItems: "center" }}><ActivityIndicator color={theme.colors.accent} /></View>;
+      : <View style={{ padding: SPACE.section, alignItems: "center", gap: SPACE.sm }}><ActivityIndicator color={theme.colors.accent} /><Meta theme={theme}>Reading host resources and processes…</Meta></View>;
   }
-  if (!data.supported) return <><HousekeepingSection theme={theme} hostId={hostId} compact={compact} /><Banner theme={theme} tone="neutral" title="Not available on this host">{data.warnings.map((warning) => <Note key={warning} theme={theme}>{warning}</Note>)}</Banner></>;
+  if (!data.supported) return <><Banner theme={theme} tone="neutral" title="Not available on this host">{data.warnings.map((warning) => <Note key={warning} theme={theme}>{warning}</Note>)}</Banner></>;
 
   const toggle = (token: string) => setSelected((previous) => {
     const next = new Set(previous);
@@ -320,11 +372,10 @@ export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChang
           <StuckPlugins theme={theme} issues={issues} say={say} onDone={() => { onChanged?.(); void query.refetch(); }} />
         </Banner>
       ) : null}
-      <RunawayBanner theme={theme} report={data} say={say} onDone={() => { onChanged?.(); void query.refetch(); }} onJobs={() => { setFilter("jobs"); resetPage(); }} />
-      <LoadCard theme={theme} report={data} />
-      <HousekeepingSection theme={theme} hostId={hostId} compact={compact} />
+      <RunawayBanner theme={theme} report={data} say={say} onDone={() => { onChanged?.(); void query.refetch(); }} onJobs={onJobs} />
+      <LoadCard theme={theme} compact={compact} report={data} onJobs={onJobs} onMemory={() => { setSort({ id: "memory", direction: "desc" }); setSearch(""); setFilter(heavy ? "jobs" : "all"); resetPage(); }} onCpu={() => { setSort({ id: "cpu", direction: "desc" }); setSearch(""); setFilter(heavy ? "jobs" : "all"); resetPage(); }} />
       <Card theme={theme} title={filter === "jobs" ? "Heavy jobs" : "Processes"} icon="ListOrdered" subtitle={filter === "jobs" ? "Each job with everything it started, added together" : "Your processes, sorted across the whole host"}>
-        <ResourceToolbar theme={theme} label="Search processes" search={search} onSearch={(text) => { setSearch(text); resetPage(); }} filters={FILTERS} filter={filter} onFilter={(next) => { setFilter(next as Filter); resetPage(); }} />
+        <ResourceToolbar theme={theme} label="Search processes" search={search} onSearch={(text) => { setSearch(text); resetPage(); }} filters={heavy ? [] : FILTERS} filter={filter} onFilter={(next) => { setFilter(next as Filter); resetPage(); }} />
         {query.isFetching ? <Row><ActivityIndicator size="small" color={theme.colors.accent} /><Meta theme={theme}>Updating processes…</Meta></Row> : null}
         {query.error ? <Note theme={theme} tone="warning">{`Couldn't update processes: ${errorText(query.error)}`}</Note> : null}
         {chosen.length ? (
@@ -336,7 +387,7 @@ export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChang
         ) : null}
         <ResourceTable compact={compact}>{(narrow) => <>
           <ResourceHeader theme={theme} columns={PROCESS_COLUMNS} compact={narrow} sort={sort} onSort={(id) => { setSort(nextResourceSort(sort, id as ReportSort)); resetPage(); }} />
-          {!rows.length && !query.isPlaceholderData ? <Note theme={theme}>{`No processes match these filters${search ? ` and "${search}"` : ""}. Try Everything or clear the search.`}</Note> : null}
+          {!rows.length && !query.isPlaceholderData ? <Note theme={theme}>{heavy && !search ? "No heavy jobs are running. All processes shows the other work on this host." : `No processes match these filters${search ? ` and "${search}"` : ""}. ${heavy ? "Clear the search, or use All processes to see other work." : "Try Everything or clear the search."}`}</Note> : null}
           {rows.map((row, index) => <ProcessItem key={processActionKey(row)} hostId={hostId} theme={theme} row={row} compact={narrow} byTree={byTree} first={index === 0} twin={false} selected={selected.has(processActionKey(row))} onSelect={() => row.actionToken && toggle(row.actionToken)} busy={ask.isPending || plan !== null} onStop={() => row.actionToken && ask.mutate([row.actionToken])} />)}
         </>}</ResourceTable>
         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: SPACE.sm }}>

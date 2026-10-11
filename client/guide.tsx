@@ -145,7 +145,7 @@ export function Checks({ theme, checks }: { theme: Theme; checks: readonly Setup
 const WORDS = [
   { icon: "Server", term: "Host", text: "A computer or container running a Paseo daemon. Pick which one you're looking at with Paseo's host picker." },
   { icon: "HardDrive", term: "Memory limit", text: "A container can only use so much memory before its processes are stopped by the system. Hosts measures against that limit, not the whole machine." },
-  { icon: "Hammer", term: "Heavy job", text: "A build, test run, type check, install or dev server. Several at once compete for the same CPU; your limit is in Settings." },
+  { icon: "Hammer", term: "Heavy job", text: "A build, test run, type check, install or dev server. Several at once compete for the same CPU. Change the warning threshold in Processes → Threshold settings or Settings → Hosts. Counts above it are flagged; this warning never stops jobs." },
   { icon: "Flame", term: "Runaway", text: "A process stuck at a full CPU core for minutes, or holding a large share of memory." },
   { icon: "Globe", term: "Browser link", text: "A temporary public web address for one dev server. It works on any device and always expires." },
   { icon: "Laptop", term: "Private forward", text: "Makes a remote dev server answer at 127.0.0.1 on your own computer, over SSH or a paired host. Nothing is published." },

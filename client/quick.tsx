@@ -77,7 +77,7 @@ export function makeQuickHealth(screenId: string): ComponentType<PopoverProps> {
         {load ? (
           <View style={{ gap: SPACE.hair }}>
             <Note theme={theme}>{`Memory: ${formatBytes(load.memoryUsedBytes)} of ${formatBytes(load.memoryLimitBytes)}${load.memoryBasis === "container" ? " (container limit)" : ""}`}</Note>
-            <Note theme={theme}>{`Heavy jobs: ${load.heavyJobs} running, ${load.heavyJobLimit} at once is the limit${load.cpuPercent === null ? "" : ` · CPU ${Math.round(load.cpuPercent)}%`}`}</Note>
+            <Note theme={theme}>{`Heavy jobs: ${load.heavyJobs} running · warning above ${load.heavyJobLimit}${load.cpuPercent === null ? "" : ` · CPU ${Math.round(load.cpuPercent)}%`}. This count warning never stops jobs.`}</Note>
             {verdict?.disk ? <Note theme={theme}>{`Disk: ${formatSize(verdict.disk.freeBytes)} free (${Math.round(verdict.disk.percent)}% used)`}</Note> : null}
           </View>
         ) : null}

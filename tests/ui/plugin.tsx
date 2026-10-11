@@ -74,7 +74,7 @@ function report(input: any) {
   const container = mac ? null : { memoryLimitBytes: limitBytes, memoryUsedBytes: used, memoryPercent: Math.round((used / limitBytes) * 1000) / 10, cpuLimitCores: null, cpuCoresUsed: busy ? 5.4 : 1.2, cpuPercent: busy ? 67 : 15, psiMemorySome10: 0, psiCpuSome10: 0, oomKills: 0, pressure: busy ? "critical" : "normal", reasons: busy ? ["using 94% of this container's 7.3 GB memory limit"] : [] };
   const runaways = busy ? [
     { code: "memory-near-limit", severity: "critical", title: "This container's memory is nearly full: 6.9 GB of its 7.3 GB limit.", pids: [], cwd: null },
-    { code: "too-many-jobs", severity: "warning", title: "5 heavy jobs are running at once; your limit is 4. Builds, tests and dev servers compete for the same CPU.", pids: [4402, 4310, 4520, 4600, 4700], cwd: null },
+    { code: "too-many-jobs", severity: "warning", title: "5 heavy jobs are running, above your warning threshold of 4. Builds, tests and dev servers compete for the same CPU. This warning never stops jobs.", pids: [4402, 4310, 4520, 4600, 4700], cwd: null },
     { code: "cpu-runaway", severity: "warning", title: "tsc (PID 4402) has used a full CPU core for 4 min.", pids: [4402], cwd: "~/projects/website" },
   ] : [];
   return {

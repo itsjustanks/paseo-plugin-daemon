@@ -131,11 +131,11 @@ describe("process report", () => {
     expect(kills).toEqual([]);
   });
 
-  it("counts heavy jobs once per tree and flags more than the limit, without stopping anything", async () => {
+  it("counts heavy jobs once per tree and flags counts above the warning threshold, without stopping anything", async () => {
     const { report, kills } = await setup({ maxHeavyJobs: 2 });
     const result = await report();
     expect(result.heavyJobs).toEqual({ count: 3, limit: 2, pids: expect.arrayContaining([302, 402, 403]) });
-    expect(result.runaways).toEqual([expect.objectContaining({ code: "too-many-jobs", title: expect.stringMatching(/^3 heavy jobs are running at once; your limit is 2\./) })]);
+    expect(result.runaways).toEqual([expect.objectContaining({ code: "too-many-jobs", title: expect.stringMatching(/^3 heavy jobs are running, above your warning threshold of 2\. Builds, tests and dev servers compete for the same CPU\. This warning never stops jobs\.$/) })]);
     expect((await report({ filter: "jobs" })).processes.map((row) => row.pid).sort()).toEqual([302, 402, 403]);
     expect(kills).toEqual([]);
   });

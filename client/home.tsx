@@ -5,7 +5,7 @@ import { Text, View } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc, useSettings } from "@getpaseo/plugin/client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { askSubjectFor, type HealthVerdict } from "../shared/health";
+import { askSubjectFor, type HealthIssue, type HealthVerdict } from "../shared/health";
 import type { ProcessReport } from "../shared/processes";
 import { hostsSettings } from "../shared/settings";
 import { seconds, watchId, watchSuggestions, type WatchResult } from "../shared/watch";
@@ -28,6 +28,14 @@ const PROCESS_CODES = new Set(["memory-pressure", "cpu-pressure", "too-many-jobs
 /** 0.14.0: a full disk is fixed on Workspaces. */
 const DISK_CODES = new Set(["disk-full"]);
 
+/** Older daemon messages call the advisory threshold a limit. Keep both Overview surfaces clear. */
+function issueText(issue: HealthIssue, load: HealthVerdict["load"]): string {
+  if (issue.code !== "too-many-jobs") return redactSecrets(issue.message);
+  return load
+    ? `${load.heavyJobs} heavy jobs are running, above the warning threshold of ${load.heavyJobLimit}. This warning never stops jobs.`
+    : "The running heavy-job count is above your warning threshold. This warning never stops jobs. Review the count and threshold in Processes.";
+}
+
 /** The hero's words: the state first, in plain English, saying each thing once. */
 export function heroState(verdict: HealthVerdict | undefined, setupDone: boolean): { tone: Tone; icon: string; title: string; lead: string | null } {
   if (!verdict) return { tone: "neutral", icon: "Loader", title: "Checking this host…", lead: "Measuring memory, CPU and running jobs. This takes a moment." };
@@ -37,7 +45,7 @@ export function heroState(verdict: HealthVerdict | undefined, setupDone: boolean
   if (issues.length) {
     const critical = issues.some((issue) => issue.severity === "critical");
     const more = issues.length > 1 ? ` Plus ${issues.length - 1} more: see the rows below and Processes.` : "";
-    return { tone: critical ? "danger" : "warning", icon: critical ? "CircleAlert" : "TriangleAlert", title: issues.length === 1 ? "Something needs attention" : `${issues.length} things need attention`, lead: `${issues[0]!.message}${more}` };
+    return { tone: critical ? "danger" : "warning", icon: critical ? "CircleAlert" : "TriangleAlert", title: issues.length === 1 ? "Something needs attention" : `${issues.length} things need attention`, lead: `${issueText(issues[0]!, verdict.load)}${more}` };
   }
   if (!setupDone) return { tone: "neutral", icon: "ListChecks", title: "One step left: let Hosts read your projects", lead: "Load and processes are being watched. Open Hosts on this host once after the daemon starts, so dev servers and workspace names can be matched to your Paseo projects." };
   return { tone: "success", icon: "CircleCheck", title: "All good: this host is calm", lead: `Memory and CPU are comfortable${verdict.watched?.length ? " and your watched services answer" : ""}.` };
@@ -82,7 +90,7 @@ function AttentionList({ theme, verdict, say, onDone }: { theme: Theme; verdict:
             <View style={{ flexDirection: "row", alignItems: "flex-start", gap: SPACE.sm }}>
               <View style={{ paddingTop: SPACE.sm }}><Dot color={toneColor(theme, issue.severity === "critical" ? "danger" : "warning")} /></View>
               <View style={{ flex: 1, gap: SPACE.hair }}>
-                <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{redactSecrets(issue.message)}</Text>
+                <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{issueText(issue, verdict.load)}</Text>
                 {issue.owner ? <Meta theme={theme}>{`In ${issue.owner}`}</Meta> : null}
               </View>
             </View>
@@ -134,7 +142,7 @@ function watchedWords(watched: readonly WatchResult[]): { value: string; tone: T
   return { value: "Checking…", tone: "neutral" };
 }
 
-/** Overview's "Technical details": the schedule, limits and where things are written. */
+/** Overview's "Technical details": the schedule, warning thresholds and where things are written. */
 function TechnicalDetails({ theme, hostId, verdict, report }: { theme: Theme; hostId: string; verdict: HealthVerdict | undefined; report: ProcessReport | undefined }) {
   const settings = useSettings(hostsSettings);
   const values = settings.status === "ready" ? settings.values : null;
@@ -144,7 +152,7 @@ function TechnicalDetails({ theme, hostId, verdict, report }: { theme: Theme; ho
   return (
     <>
       {values ? <Fact theme={theme} label="Checks every" value={`${values.snapshotIntervalSeconds} seconds${values.backgroundHealthChecks ? ", even with Paseo closed" : ", while Hosts is open"}`} /> : null}
-      {values ? <Fact theme={theme} label="Heavy-job limit" value={`${values.maxHeavyJobs} at once`} /> : null}
+      {values ? <Fact theme={theme} label="Heavy-job warning" value={`More than ${values.maxHeavyJobs} running; advisory only, never stops jobs`} /> : null}
       <Fact theme={theme} label="Disk checks" value="Free space every 10 seconds; folder sizes only when you ask (Workspaces)" />
       {values ? <Fact theme={theme} label="Browser links last" value={formatMinutes(values.tunnelMinutes)} /> : null}
       {report ? <Fact theme={theme} label="Memory measured" value={report.memoryBasis === "container" ? "against this container's limit" : "against the whole machine"} /> : null}
@@ -154,7 +162,7 @@ function TechnicalDetails({ theme, hostId, verdict, report }: { theme: Theme; ho
       {verdict ? <Fact theme={theme} label="Last checked" value={new Date(verdict.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })} /> : null}
       <Fact theme={theme} label="Stop log" value="$PASEO_HOME/daemon-link/actions.jsonl" />
       <Fact theme={theme} label="Summary for other plugins" value="$PASEO_HOME/daemon-link/host-summary.json" />
-      <Meta theme={theme}>Change the schedule and limits under Settings → Hosts.</Meta>
+      <Meta theme={theme}>Change the schedule and warning threshold under Settings → Hosts, or use Threshold settings in Processes.</Meta>
     </>
   );
 }
@@ -195,7 +203,7 @@ export function OverviewTab({ theme, compact, hostId, verdict, report, devServer
           {memory ? <StatusLine theme={theme} label="Memory" value={`${formatBytes(memory.used)} of ${formatBytes(memory.limit)}`} tone={shareTone(memory.percent)} action={{ label: "Processes", onPress: () => go("processes") }} /> : null}
           {verdict?.disk ? <StatusLine theme={theme} label="Disk" value={`${formatSize(verdict.disk.freeBytes)} free`} tone={verdict.disk.level === "critical" ? "danger" : verdict.disk.level === "warning" ? "warning" : "success"} hint={`${Math.round(verdict.disk.percent)}% used`} action={{ label: "Workspaces", onPress: () => go("workspaces") }} /> : null}
           {/* 0.14.0: four rows at most; heavy jobs only when there are some. */}
-          {jobs && (jobs.count > 0 || !verdict?.disk) ? <StatusLine theme={theme} label="Heavy jobs" value={`${jobs.count} of ${jobs.limit}`} tone={jobs.count > jobs.limit ? "warning" : "success"} hint={`builds, tests and dev servers running now; ${jobs.limit} at once is the limit`} /> : null}
+          {jobs && (jobs.count > 0 || !verdict?.disk) ? <StatusLine theme={theme} label="Heavy jobs" value={`${jobs.count} running`} tone={jobs.count > jobs.limit ? "warning" : "success"} hint={`Warns above ${jobs.limit} running; this warning never stops jobs`} action={{ label: "Review", onPress: () => go("processes") }} /> : null}
           <StatusLine theme={theme} label="Dev servers" value={devServers ? `${devServers} running` : "None running"} tone={devServers ? "success" : "neutral"} hint={liveLinks ? `${liveLinks} browser link${liveLinks === 1 ? "" : "s"} open` : null} action={{ label: "Workspaces", onPress: () => go("workspaces") }} />
           {watched.length ? <StatusLine theme={theme} label="Watched services" value={watchedNow.value} tone={watchedNow.tone} /> : null}
         </View>
@@ -226,7 +234,7 @@ export function OverviewTab({ theme, compact, hostId, verdict, report, devServer
           <Checks theme={theme} checks={checks} />
         </AccordionItem>
         {sync}
-        <AccordionItem theme={theme} compact={compact} icon="SlidersHorizontal" title="Technical details" summary="How often it checks, the limits, and where it writes">
+        <AccordionItem theme={theme} compact={compact} icon="SlidersHorizontal" title="Technical details" summary="How often it checks, warning thresholds, and where it writes">
           <TechnicalDetails theme={theme} hostId={hostId} verdict={verdict} report={report} />
         </AccordionItem>
       </Accordion>

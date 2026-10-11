@@ -8,6 +8,7 @@ import { watchId, watchSuggestions, watchTarget, watchUrlProblem } from "../shar
 import { TUNNEL_MINUTES, TUNNEL_MINUTES_DEFAULT, formatMinutes, isTunnelMinutes } from "../shared/tunnel-lease";
 
 import { HousekeepingSettingsSection } from "./housekeeping";
+import { HeavyJobThresholdSelect } from "./heavy-job-settings";
 
 type Ready = Extract<SettingsState<typeof hostsSettings.schema>, { status: "ready" }>;
 
@@ -20,8 +21,6 @@ const DURATIONS: ReadonlyArray<{ label: string; value: string }> = TUNNEL_MINUTE
   label: `${formatMinutes(minutes).replace(" min", " minutes").replace(/ h$/, minutes === 60 ? " hour" : " hours")}${minutes === TUNNEL_MINUTES_DEFAULT ? " (default)" : ""}`,
   value: String(minutes),
 }));
-
-const JOB_LIMITS: ReadonlyArray<{ label: string; value: string }> = [2, 3, 4, 6, 8, 12, 16].map((n) => ({ label: `${n} at once${n === 4 ? " (default)" : ""}`, value: String(n) }));
 
 function statusError(text: string): string | null {
   if (!text.trim()) return null;
@@ -134,16 +133,9 @@ function HostsControls({ settings }: { settings: Ready }) {
           />
         </SettingsCard>
       </SettingsSection>
-      <SettingsSection title="Heavy processes" info="Builds, tests, type checks, installs and dev servers running at once. Going over the limit is flagged in Hosts and on the sidebar dot. This limit only flags crowding. The memory guard and live Housekeeping have separate controls.">
+      <SettingsSection title="Heavy processes" info="Builds, tests, type checks, installs and dev servers running at once. Counts above the warning threshold are flagged in Hosts and on the sidebar dot. The warning never stops anything. Memory guard and live Housekeeping have separate controls.">
         <SettingsCard>
-          <SettingsSelect<string>
-            label="Heavy jobs at once"
-            hint="On an 8-core host, 4 keeps builds from slowing each other down."
-            value={String(settings.values.maxHeavyJobs)}
-            options={JOB_LIMITS.some((option) => option.value === String(settings.values.maxHeavyJobs)) ? JOB_LIMITS : [...JOB_LIMITS, { label: `${settings.values.maxHeavyJobs} at once`, value: String(settings.values.maxHeavyJobs) }]}
-            disabled={settings.saving}
-            onValueChange={(value) => save({ maxHeavyJobs: Number(value) })}
-          />
+          <HeavyJobThresholdSelect value={settings.values.maxHeavyJobs} disabled={settings.saving} onChange={(maxHeavyJobs) => save({ maxHeavyJobs })} />
           <SettingsSwitch
             label="Stop a runaway automatically when memory is nearly full"
             hint="Off by default. When memory has been nearly full for over a minute, Hosts stops the biggest job it would let you stop by hand: verified as started from a live Paseo daemon; a workspace folder alone never qualifies. Never Paseo itself, an agent, a terminal's shell or a database. It's logged, and the sidebar dot tells you."
