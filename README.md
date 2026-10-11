@@ -8,7 +8,7 @@ OmniRoute. See every dev server running on a host, press **Open**, and it appear
 Pair two Paseo hosts for a private local URL, or save an SSH forward. Receive selected Git projects
 with a preview and history.
 
-Supports Paseo 0.7 through 0.11 (current releases need 0.8 or newer; see
+Supports Paseo 0.7 through 0.11 (current releases need 0.9 or newer; see
 [Paseo compatibility](#paseo-compatibility)).
 
 The plugin is **Daemon Link**; its sidebar entry is **Hosts**, matching Paseo's host terminology.
@@ -455,16 +455,23 @@ No project permission or transfer is enabled by installing or updating the plugi
 
 ![Processes: a runaway type check, memory near the limit, the heaviest processes.](docs/screenshots/processes.png)
 
-Runaways come first, each with the decision it needs; then the load (memory against the container's
-limit or the machine, CPU, heavy jobs against your limit); then the list. Show **Everything**,
-**Heavy jobs** (each job with everything it started, added together) or what **Can stop here**; sort
-by CPU, memory, age or name; search by name, workspace, folder or PID. Press a row for its command,
-parent and folder.
+Runaways have a separate attention banner, followed by load and a flat process table. Memory sorts
+highest first by default; each numeric header starts descending and toggles on another press.
+Name starts ascending. Search names, redacted commands, workspace/chat labels, folders and PIDs;
+filter by heavy jobs, stoppable/protected processes, known/no chat or attention. Filtering and sorting
+cover the whole sampled list before pagination. Heavy jobs use totals for everything they started.
+Unknown readings stay last. Open a process name for its command, parent and folder.
 
-**Which chat tagged it.** Processes are grouped by workspace, then chat. Each tagged job shows
-**Tagged by chat** with its title and workspace, including detached jobs and builds outside project
+**Which chat tagged it.** The workspace/chat column shows attribution on every row. Each tagged job
+shows **Tagged by chat** with its title and workspace, including detached jobs and builds outside project
 folders. **Open chat** opens that chat on hosts with native navigation; older apps keep the title.
 Workspaces groups **Running here** by chat too. Tags are labels, not proof of origin. Unknown attribution stays unknown.
+
+**Disk tables.** Workspaces shows project/path, status, disk use, reclaimable space and running-job
+count. Search its last report or filter by status; total disk use starts highest first. Build folders,
+shared caches and temporary entries also have size/name sorting and search, with cache group/type
+filters. These controls never trigger a disk scan. Partial measurements and shared bytes stay
+labelled. On narrow screens each row stacks labelled cells and keeps its actions visible.
 
 **What can be stopped.** Processes owned by the daemon's OS user, including detached chat jobs and
 jobs started outside Paseo. Outside jobs get an extra warning: "This wasn't started by Paseo. Make
@@ -478,7 +485,10 @@ bundles stay protected too. Only the agent CLI itself is protected; its dev serv
 intentionally stoppable. Paseo descendant protection covers internal workers and plugin hosts, never agents' work.
 Each protected row explains why without opening its details.
 
-**How a stop works.** Select one or more rows and press **Stop**. A sheet lists exactly what will stop,
+**How a stop works.** Use **Stop…** directly on a row, or select several rows and press **Stop**.
+A missing or archived chat never removes manual Stop from an otherwise eligible process. Selection
+uses the signed process identity, so sorting cannot select a different job and PID reuse clears it.
+A sheet lists exactly what will stop,
 children included, and anything that won't, with why. Confirming asks each process to exit; anything
 still running 10 seconds later is stopped forcefully. Every rule is re-checked against a fresh read at
 the moment of each signal. Signed identities include the executable path as well as PID, user, start time and argv
@@ -547,7 +557,8 @@ manifest schema rejects that key, so a 0.8 host should stay on 0.12.0. Paseo 0.7
 `>=0.8.0`: the 0.11 screen, sidebar row, status dot and popover, the 0.10
 external-link opener and settings read/subscribe, and button-style composer chips are each detected at
 runtime, and older apps get exactly what 0.9 drew. No plugin file imports an SDK path that Paseo 0.9.1
-can't build (a test checks this).
+can't build. Compatibility tests compile and register both entries using pinned Paseo 0.9.0 and
+0.11.1 runtimes, without installing the plugin into a live daemon.
 
 Before 0.10.0, it required Paseo 0.8 or newer. Version 0.5.0 moved to the 0.8 runtime layout: `index.client.tsx`
 and `index.server.ts` entries with code under `client/`, `server/`, and `shared/`, and

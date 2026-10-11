@@ -26,6 +26,26 @@ Private redacted logs rotate, job times survive reloads, and macOS reports unsup
 manual Stop and the optional memory guard keep their protections. The README documents standalone
 retirement, CLI/SDK fallback limits, main-thread priority scope and remaining kernel race windows.
 
+### Find heavy work and stop ordinary jobs without a chat link
+
+Processes now uses a flat, searchable table with visible workspace/chat attribution and Stop on
+each eligible row. Missing or archived chats do not restrict manual Stop; protected processes show
+their reason. The existing confirmation and fresh identity checks remain. Numeric sorts start
+highest first, names alphabetically, and headers toggle direction. Filters and ordering apply before
+pagination, without secretly pinning flagged rows above larger jobs. Heavy jobs keep tree totals.
+
+Workspaces, build folders, shared caches and temporary entries gain search and sorting; workspaces
+also filter by status, caches by group or type. These controls reuse the last report and never start
+a disk scan. Narrow screens stack labelled cells with actions visible. Process selections follow
+signed identities across sorting and clear when a PID is reused.
+
+### Check current Paseo runtimes without changing a live installation
+
+The compatibility check now uses pinned 0.9.0 and 0.11.1 runtimes instead of the obsolete 0.7 entry
+layout. Both entries compile and register their contracts in an isolated environment. Bounded cache
+results now disclose when later folders or entries may remain unexamined; no continuation guarantee
+is implied.
+
 ## 0.17.0
 
 - Label chat tags using cached agent metadata; detached tags are unconfirmed and get a stronger Stop warning.
