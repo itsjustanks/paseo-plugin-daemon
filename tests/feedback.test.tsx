@@ -345,4 +345,15 @@ describe("process chat attribution and outside warning", () => {
     await act(async () => { renderer.unmount(); });
   });
 
+  it("renders the stronger warning for an unverified workspace process", async () => {
+    const warning = "Inside Feature, but Paseo didn't start it";
+    const plan = { graceSeconds: 10, targets: [{ pid: 42, name: "sleep", ok: true, reason: null, rssBytes: 100, cpuPercent: 0, workspaceWarnings: [warning], children: [] }] };
+    const confirm = vi.fn();
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(<StopSheet theme={theme} plan={plan} busy={false} onCancel={() => undefined} onConfirm={confirm} />); });
+    expect(text(renderer.toJSON())).toContain(warning);
+    expect(confirm).not.toHaveBeenCalled();
+    await act(async () => { renderer.unmount(); });
+  });
+
 });

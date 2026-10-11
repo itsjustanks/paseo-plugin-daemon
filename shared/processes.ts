@@ -38,6 +38,7 @@ export const ProcessChatSchema = z.object({
   workspacePath: z.string().nullable(), where: z.string().nullable(),
 });
 export type ProcessChat = z.infer<typeof ProcessChatSchema>;
+export const workspaceProcessWarning = (workspace: string) => `Inside ${workspace}, but Paseo didn't start it`;
 export const taggedProcessWarning = (title: string) => `Tagged as started by chat ${title}, but Paseo can't confirm it`;
 export const OUTSIDE_PASEO_WARNING = "This wasn't started by Paseo. Make sure you don't need it.";
 
@@ -179,6 +180,7 @@ export const StopPlanSchema = z.object({
     cpuPercent: z.number().min(0).nullable(),
     outsidePaseo: z.boolean().optional(),
     tagWarnings: z.array(z.string()).optional(),
+    workspaceWarnings: z.array(z.string()).optional(),
     /** Child processes that will be stopped with it, after the same checks. */
     children: z.array(z.object({ pid: z.number().int(), name: z.string() })),
   })),

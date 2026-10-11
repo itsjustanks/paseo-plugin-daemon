@@ -2,6 +2,7 @@ import type { ActionResult } from "../shared/contracts";
 import {
   MEMORY_HEAVY_PERCENT,
   taggedProcessWarning,
+  workspaceProcessWarning,
   ReportInputSchema,
   RUNAWAY_CPU_SECONDS,
   STOP_GRACE_SECONDS,
@@ -23,7 +24,7 @@ import { formatBytes } from "./heuristics";
 import { classifyJob, helperRole, isPaseoInternal, isPluginHost, isTerminalWorker, paseoRole, programName, type Job } from "./jobs";
 import type { Clock, PlatformAdapter, RawProcess } from "./platform";
 import { systemClock } from "./platform";
-import { hashArgv } from "./redaction";
+import { hashArgv, redactSecrets } from "./redaction";
 import { ProcessGuard, type KillFn } from "./safety";
 import { isAgentTool, type ProjectScope } from "./scope";
 import { programProtection, protectsDescendants } from "./process-protection";
@@ -44,7 +45,7 @@ import { homedir } from "node:os";
  *     shell (close the terminal);
  *  5. never a database or system service (postgres, redis, sshd, …);
  *  6. same-user jobs may be stopped after asking, with a stronger warning
- *     when neither a workspace root nor daemon ancestry confirms Paseo started it.
+ *     when live daemon ancestry cannot confirm Paseo started it. Workspace location is not origin.
  *     macOS system executables and GUI bundles remain protected.
  *
  * A stop sends SIGTERM to the process and its eligible children, then, after
@@ -103,7 +104,7 @@ export class ProcessManager {
     this.guard = new ProcessGuard({
       adapter: options.adapter, uid: options.uid, selfPid: this.selfPid, kill: options.kill, clock: this.clock,
       alwaysProtected: this.daemonPid > 1 ? [this.daemonPid] : [],
-      verifiedOrigin: (identity, daemonAncestor) => daemonAncestor || !!this.options.scope?.match({ ...identity, cwd: identity.cwd ?? null }),
+      verifiedOrigin: (_identity, daemonAncestor) => daemonAncestor,
       authorizeProcess: (pid, _descendant, verifiedOnly) => this.authorize(pid, verifiedOnly),
     });
   }
@@ -128,7 +129,7 @@ export class ProcessManager {
     const ancestors = this.chain(raw, byPid);
     const project = this.options.scope?.match(raw, ports) ?? null;
     const place = project ? describeOwner("project", project.workspace ? `${project.name} · ${project.workspace}` : project.name, project.name, project.workspace) : null;
-    const startedByPaseo = raw.ppid === this.daemonPid || ancestors.some((row) => row.pid === this.daemonPid);
+    const startedByPaseo = ancestors.some((row) => row.pid === this.daemonPid);
     const deny = (owner: ProcessRow["owner"], reason: string): Decision => ({ stoppable: false, reason, owner });
     // A browser's or desktop app's helpers all share its name; their role tells them apart.
     const role = helperRole(raw.argv);
@@ -154,7 +155,7 @@ export class ProcessManager {
   }
 
   private outsidePaseo(raw: RawProcess, byPid: ReadonlyMap<number, RawProcess>): boolean {
-    return !this.options.scope?.match(raw) && raw.ppid !== this.daemonPid && !this.chain(raw, byPid).some((row) => row.pid === this.daemonPid);
+    return !this.chain(raw, byPid).some((row) => row.pid === this.daemonPid);
   }
 
   /** The guard's per-process check at action time: a fresh read, then the same rules. */
@@ -307,17 +308,23 @@ export class ProcessManager {
 
   // --------------------------------------------------------------- actions
 
-  private async names(): Promise<Map<number, { name: string; rssBytes: number; cpuPercent: number | null; owner: string | null; outsidePaseo: boolean; tagWarning: string | null }>> {
+  private async names(): Promise<Map<number, { name: string; rssBytes: number; cpuPercent: number | null; owner: string | null; outsidePaseo: boolean; tagWarning: string | null; workspaceWarning: string | null }>> {
     if (this.options.scope) await this.options.scope.refresh(true).catch(() => undefined);
     this.options.collector.invalidate();
     const base = await this.options.collector.collect();
     const byPid = new Map(base.details.map((detail) => [detail.raw.pid, detail.raw]));
-    return new Map(base.details.map((detail) => [detail.raw.pid, {
-      name: programName(detail.raw.argv, detail.view.name), rssBytes: detail.raw.rssBytes, cpuPercent: detail.view.cpuPercent,
-      owner: this.decide(detail, byPid, detail.view.ports).owner.label,
-      outsidePaseo: this.outsidePaseo(detail.raw, byPid) && !this.options.scope?.agent(detail.raw.agentId),
-      tagWarning: this.outsidePaseo(detail.raw, byPid) && this.options.scope?.agent(detail.raw.agentId) ? taggedProcessWarning(this.options.scope.agent(detail.raw.agentId)!.title) : null,
-    }]));
+    return new Map(base.details.map((detail) => {
+      const unverified = this.outsidePaseo(detail.raw, byPid);
+      const workspace = this.options.scope?.match(detail.raw);
+      const chat = this.options.scope?.agent(detail.raw.agentId);
+      return [detail.raw.pid, {
+        name: programName(detail.raw.argv, detail.view.name), rssBytes: detail.raw.rssBytes, cpuPercent: detail.view.cpuPercent,
+        owner: this.decide(detail, byPid, detail.view.ports).owner.label,
+        outsidePaseo: unverified && !workspace && !chat,
+        tagWarning: unverified && !workspace && chat ? taggedProcessWarning(chat.title) : null,
+        workspaceWarning: unverified && workspace ? workspaceProcessWarning(redactSecrets(workspace.workspace ?? workspace.name, HOME)) : null,
+      }];
+    }));
   }
 
   /** The ask-first list: what each token would stop, children included, or why it would be refused. */
@@ -335,6 +342,7 @@ export class ProcessManager {
       targets.push({
         pid: plan.pid, name: known?.name ?? "Process", ok: true, reason: null, rssBytes: known?.rssBytes ?? 0, cpuPercent: known?.cpuPercent ?? null,
         outsidePaseo: !!known?.outsidePaseo || plan.children.some((child) => names.get(child)?.outsidePaseo),
+        workspaceWarnings: [...new Set([known?.workspaceWarning, ...plan.children.map((child) => names.get(child)?.workspaceWarning)].filter((warning): warning is string => !!warning))],
         tagWarnings: [...new Set([known?.tagWarning, ...plan.children.map((child) => names.get(child)?.tagWarning)].filter((warning): warning is string => !!warning))],
         children: plan.children.map((child) => ({ pid: child, name: names.get(child)?.name ?? "process" })),
       });
@@ -413,7 +421,7 @@ export class ProcessManager {
    */
   async autoStopBiggest(minPercent: number, confirm: () => Promise<boolean>): Promise<AutoStop | null> {
     this.options.collector.invalidate();
-    // The project list comes through the daemon, which may be starved right now: without it only Paseo-started jobs qualify.
+    // Location and tags never authorize automation: only live daemon ancestry qualifies.
     if (this.options.scope) await Promise.race([this.options.scope.refresh(true).catch(() => undefined), new Promise((resolve) => { const timer = setTimeout(resolve, 5000); (timer as { unref?: () => void }).unref?.(); })]);
     const base = await this.options.collector.collect();
     const byPid = new Map(base.details.map((detail) => [detail.raw.pid, detail.raw]));

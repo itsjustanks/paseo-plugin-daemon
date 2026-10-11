@@ -183,34 +183,63 @@ describe("process decisions and grouping", () => {
     expect(kills).not.toHaveBeenCalled();
   });
 
-  it("never automatically stops a detached tag-only process, but allows a workspace-root job", async () => {
+  it("refuses automatic Stop for a PPID-1 process inside a registered workspace", async () => {
     const { manager, adapter, kills } = await setup();
-    adapter.processes = [proc({ pid: 42, cwd: "/tmp/clone", agentId: ID, rssBytes: 30 * 1024 ** 3 })];
+    adapter.processes = [proc({ pid: 42, ppid: 1, cwd: "/home/alice/app", agentId: ID, rssBytes: 30 * 1024 ** 3 })];
+    const row = (await manager.report({}, async () => [])).processes[0]!;
+    expect(row).toMatchObject({ stoppable: true, outsidePaseo: true });
+    expect(await manager.autoStopBiggest(25, async () => true)).toBeNull();
+    expect((await manager.guard.stopTree(row.actionToken!, true)).result.ok).toBe(false);
+    expect(kills).not.toHaveBeenCalled();
+  });
+
+  it("warns before manually stopping a workspace process without daemon ancestry", async () => {
+    const { manager, adapter, kills } = await setup();
+    adapter.processes = [proc({ pid: 42, ppid: 1, cwd: "/home/alice/app" })];
+    const row = (await manager.report({}, async () => [])).processes[0]!;
+    const target = (await manager.preview([row.actionToken!])).targets[0]!;
+    expect(target).toMatchObject({ ok: true, workspaceWarnings: ["Inside Feature, but Paseo didn't start it"] });
+    expect(kills).not.toHaveBeenCalled();
+    expect((await manager.stop([row.actionToken!])).results[0]?.ok).toBe(true);
+    expect(kills).toHaveBeenCalledWith(42, "SIGTERM");
+  });
+
+  it("does not trust a missing daemon ancestor", async () => {
+    const { manager, adapter, kills } = await setup();
+    adapter.processes = [proc({ pid: 42, ppid: 100, cwd: "/home/alice/app", rssBytes: 30 * 1024 ** 3 })];
     expect(await manager.autoStopBiggest(25, async () => true)).toBeNull();
     expect(kills).not.toHaveBeenCalled();
-    adapter.processes[0]!.cwd = "/home/alice/app";
-    expect(await manager.autoStopBiggest(25, async () => true)).toMatchObject({ pid: 42 });
-    expect(kills).toHaveBeenCalledWith(42, "SIGTERM");
+  });
+
+  it.each(["claude", "/Applications/Paseo.app/Contents/Resources/codex"])("keeps %s CLI children stoppable while protecting the CLI", async (cli) => {
+    const { manager, adapter, kills } = await setup();
+    adapter.processes = [proc({ pid: 100, argv: ["Paseo Daemon"] }), proc({ pid: 42, ppid: 100, argv: [cli] }), proc({ pid: 43, ppid: 42, argv: ["node", "build.js"], cwd: "/tmp/clone" })];
+    const rows = (await manager.report({}, async () => [])).processes;
+    expect(rows.find((row) => row.pid === 42)).toMatchObject({ stoppable: false, actionToken: null });
+    const child = rows.find((row) => row.pid === 43)!;
+    expect(child).toMatchObject({ stoppable: true, outsidePaseo: false });
+    expect((await manager.stop([child.actionToken!])).results[0]?.ok).toBe(true);
+    expect(kills.mock.calls).toEqual([[43, "SIGTERM"]]);
   });
 
   it("has no one-second signal authorization cache", async () => {
     const { manager, adapter, kills } = await setup();
-    adapter.processes = [proc({ pid: 42, ppid: 100 })];
-    const row = (await manager.report({}, async () => [])).processes[0]!;
+    adapter.processes = [proc({ pid: 42, ppid: 100 }), proc({ pid: 100, argv: ["Paseo Daemon"] })];
+    const row = (await manager.report({}, async () => [])).processes.find((row) => row.pid === 42)!;
     expect((await manager.preview([row.actionToken!])).targets[0]?.ok).toBe(true);
     adapter.processes[0]!.executable = "/opt/postgresql/bin/postgres";
     expect((await manager.stop([row.actionToken!])).results[0]?.ok).toBe(false);
     expect(kills).not.toHaveBeenCalled();
   });
 
-  it("rechecks automatic workspace origin after all awaited tree reads", async () => {
+  it("rechecks live daemon ancestry after all awaited tree reads", async () => {
     const { manager, adapter, kills } = await setup();
-    adapter.processes = [proc({ pid: 42, cwd: "/home/alice/app", agentId: ID, rssBytes: 30 * 1024 ** 3 })];
+    adapter.processes = [proc({ pid: 42, ppid: 100, cwd: "/home/alice/app", agentId: ID, rssBytes: 30 * 1024 ** 3 }), proc({ pid: 100, argv: ["Paseo Daemon"] })];
     const readTree = adapter.readTree.bind(adapter);
     let reads = 0;
     adapter.readTree = async () => {
       const rows = await readTree();
-      if (++reads === 2) adapter.processes[0]!.cwd = "/tmp/clone";
+      if (++reads === 2) adapter.processes[0]!.ppid = 1;
       return rows;
     };
     expect(await manager.autoStopBiggest(25, async () => true)).toBeNull();

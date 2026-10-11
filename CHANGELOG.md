@@ -6,8 +6,14 @@
 - Protect by executable identity and protected service ancestry, including renamed databases and their workers.
 - Bind signed actions and grace records to executable paths, and re-read exact identities after all policy/tree
   awaits before every signal. No signal authorization cache.
-- Keep automatic memory stops limited to verified daemon descendants or workspace roots; cap environment reads at
-  64 KB, with 16 Linux readers and a sample deadline.
+- Automatic memory stops require live daemon ancestry only. Workspace location and chat tags never prove origin;
+  manual Stop warns "Inside <workspace>, but Paseo didn't start it" when ancestry is unverified.
+- Re-read the Mac executable after cwd and final process reads as well as before them; refuse executable changes.
+- Cover database, queue, search, container, proxy, OS and network service families using real executable basenames.
+- Protect only the agent CLI itself. Its dev servers, builds and scripts are intentionally stoppable. Paseo
+  descendant protection means internal workers and plugin hosts, never an agent's work; terminal shells remain
+  protected while jobs launched from them stay eligible.
+- Cap environment reads at 64 KB, with 16 Linux readers and a sample deadline.
 - Group Processes by workspace then chat, and Running here by chat. Open chat uses native navigation when available.
 - Allow reviewed Stop for same-user jobs outside Paseo, with an extra warning and inline protection reasons.
 - Keep system services, Mac system programs and desktop apps protected, alongside all existing process guards.

@@ -23,8 +23,26 @@ const executableWords = (process: Program) => [process.executable ?? "", process
 export function isAgentTool(process: Program): boolean {
   return executableWords(process).some((word) => /^(codex|claude|opencode|aider|gemini|copilot|goose|cursor-agent)(?:\.[cm]?js)?$/.test(word));
 }
-export function isInfrastructure(process: Pick<RawProcess, "executable" | "comm">): boolean {
-  return [process.executable?.split("/").pop()?.replace(/ \(deleted\)$/, ""), process.comm].some((word) => /^(postgres|postmaster|redis-server|mongod|mysqld|sshd|systemd|cloudflared|paseo|agent-browser)(?:[ .-]|$)/.test(word?.toLowerCase() ?? ""));
+// Only OS executable identity selects a service family. Runtime argv can then
+// identify the service hosted by that runtime; argv never impersonates an exe.
+const INFRASTRUCTURE_EXECUTABLES = new Set([
+  "postgres", "postmaster", "mysqld", "mariadbd", "redis-server", "valkey-server", "keydb-server",
+  "mongod", "mongos", "memcached", "clickhouse", "clickhouse-server", "etcd", "consul", "nomad", "vault",
+  "rabbitmq", "rabbitmq-server", "elasticsearch", "opensearch", "kafka", "zookeeper", "minio", "influxd",
+  "cassandra", "neo4j", "couchdb", "meilisearch", "typesense-server", "qdrant", "chroma", "ollama",
+  "dockerd", "containerd", "podman", "colima", "limactl", "nginx", "httpd", "caddy", "traefik", "haproxy",
+  "sshd", "launchd", "cron", "crond", "rsyslogd", "tailscaled", "cloudflared", "1password", "1password-ssh-agent",
+  "1passwordsshagent", "op-ssh-agent", "paseo", "agent-browser",
+]);
+const JAVA_SERVICE_MAIN = /^(?:org\.elasticsearch\.bootstrap\.Elasticsearch|org\.opensearch\.bootstrap\.OpenSearch|kafka\.Kafka|org\.apache\.kafka\.|org\.apache\.zookeeper\.server\.|org\.apache\.cassandra\.service\.CassandraDaemon|org\.neo4j\.(?:server|cli)\.)/;
+export function isInfrastructure(process: Pick<RawProcess, "executable" | "argv">): boolean {
+  if (!process.executable?.startsWith("/")) return false;
+  const executable = process.executable.split("/").pop()!.replace(/ \(deleted\)$/, "").toLowerCase();
+  if (INFRASTRUCTURE_EXECUTABLES.has(executable) || /^(?:systemd|containerd-shim|qemu-system)/.test(executable)) return true;
+  if (executable === "beam.smp") return process.argv.some((arg) => /rabbit/i.test(arg));
+  if (executable === "java") return process.argv.some((arg) => JAVA_SERVICE_MAIN.test(arg));
+  if (executable === "op") return process.argv.some((arg, i) => /^(?:--)?ssh-agent$/.test(arg) || (arg === "ssh" && process.argv[i + 1] === "agent"));
+  return false;
 }
 
 /**

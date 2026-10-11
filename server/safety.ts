@@ -325,11 +325,12 @@ export class ProcessGuard {
         if (visited.has(parent)) return null;
         visited.add(parent);
         // The daemon starts agents and jobs; its other protected components do not.
-        if (this.alwaysProtected.includes(parent)) { daemonAncestor = true; break; }
         const ancestor = await this.adapter.readIdentity(parent);
-        if (!ancestor || ancestor.uid !== this.uid || protectsDescendants(ancestor, this.adapter.platform)) return null;
+        if (!ancestor || ancestor.uid !== this.uid) return null;
         const ancestorRow = byPid.get(parent);
         if (!ancestorRow || ancestorRow.uid !== ancestor.uid || ancestorRow.startId !== ancestor.startId || ancestorRow.ppid !== ancestor.ppid) return null;
+        if (this.alwaysProtected.includes(parent)) { daemonAncestor = true; break; }
+        if (protectsDescendants(ancestor, this.adapter.platform)) return null;
         parent = ancestor.ppid;
       }
       if (parent && parent > 1 && !daemonAncestor) return null;

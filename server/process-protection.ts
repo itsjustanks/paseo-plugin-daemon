@@ -17,10 +17,17 @@ export function programProtection(process: Program, platform: "linux" | "darwin"
   return null;
 }
 
-/** Agent CLIs may start jobs. Protected services and plugin components may not. */
+/**
+ * Agent CLIs themselves are protected, but their dev servers, builds and scripts
+ * are intentionally stoppable. Paseo descendant protection covers its internal
+ * workers and plugin hosts, never an agent's work. Terminal workers protect the
+ * interactive shell via the direct-parent rule; jobs launched from it stay eligible.
+ */
 export function protectsDescendants(process: Program, platform: "linux" | "darwin"): boolean {
-  if (isTerminalWorker(process)) return false;
-  return isInfrastructure(process) || isPaseoInternal(process) || isPluginHost(process)
+  if (isInfrastructure(process) || isPluginHost(process)) return true;
+  // A bundled agent executable is still an agent, even inside Paseo.app.
+  if (isAgentTool({ ...process, argv: [] }) || isTerminalWorker(process)) return false;
+  return isPaseoInternal(process)
     || !!(process.executable && (/\.app(?:\/|$)/i.test(process.executable)
       || (platform === "darwin" && /^\/(?:System|Library\/Apple|usr\/libexec|usr\/sbin|sbin)(?:\/|$)/.test(process.executable))));
 }

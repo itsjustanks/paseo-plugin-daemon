@@ -139,3 +139,29 @@ describe("macOS executable identity", () => {
     expect(result).toMatchObject({ processes: [], warnings: [expect.stringContaining("deadline exceeded")] });
   });
 });
+
+
+describe("macOS exec race", () => {
+  it.each(["comm", "lsof"])("refuses exec into sshd during the macOS cwd lookup (%s)", async (source) => {
+    let executable = "/bin/sleep", armed = false;
+    const exec = async (file: string, args: readonly string[]) => {
+      if (file === "ps" && args.includes("comm=")) return source === "comm" ? executable : "worker";
+      if (file === "ps" && args.includes(PS_FORMAT)) return "42 1 1000 S 100 0:00 0:01 Sat Oct 10 12:00:00 2026 /bin/sleep 60";
+      if (file === "lsof" && args.includes("txt")) return `p42\nn${executable}`;
+      if (file === "lsof" && args.includes("cwd")) { if (armed) executable = "/usr/sbin/sshd"; return "p42\nn/tmp"; }
+      return "";
+    };
+    const adapter = new DarwinAdapter({ exec });
+    const initial = (await adapter.readIdentity(42))!;
+    expect(initial.executable).toBe("/bin/sleep");
+    const kill = vi.fn();
+    const guard = new ProcessGuard({ adapter, uid: 1000, selfPid: 200, kill });
+    const token = guard.mint(initial, initial.argvHash);
+    armed = true;
+    expect((await guard.stop(token)).ok).toBe(false);
+    expect(executable).toBe("/usr/sbin/sshd");
+    expect(kill).not.toHaveBeenCalled();
+    executable = "/bin/sleep";
+    await expect(adapter.readIdentity(42)).rejects.toThrow("process identity changed during read");
+  });
+});

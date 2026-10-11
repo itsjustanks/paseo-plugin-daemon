@@ -382,22 +382,31 @@ export class DarwinAdapter implements PlatformAdapter {
     }
     const row = parsePsOutput(out).find((r) => r.pid === pid);
     if (!row) return null;
-    const comm = (await this.exec("ps", ["-ww", "-o", "comm=", "-p", String(pid)])).trim();
-    const executable = comm.startsWith("/") ? comm : parseMacExecutables(await this.exec("lsof", ["-a", "-p", String(pid), "-d", "txt", "-F", "pn"])).get(pid) ?? null;
+    const before = await this.executableIdentity(pid);
     const cwd = parseLsofCwd(await this.exec("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-F", "n"]).catch(() => ""));
-    // Re-read the start identity after the executable and cwd lookups as well.
     const finalRow = parsePsOutput(await this.exec("ps", ["-o", PS_FORMAT, "-p", String(pid), "-ww"])).find((r) => r.pid === pid);
     if (!finalRow) return null;
-    if (finalRow.lstart !== row.lstart || finalRow.uid !== row.uid || finalRow.command !== row.command) throw new Error("process identity changed during read");
+    // macOS exposes no atomic exe/argv/start read here. Bracket every other
+    // awaited read with executable identity reads, and reject an exec in between.
+    const after = await this.executableIdentity(pid);
+    if (!before.executable || before.executable !== after.executable || before.comm !== after.comm
+      || finalRow.lstart !== row.lstart || finalRow.uid !== row.uid || finalRow.command !== row.command) throw new Error("process identity changed during read");
+    const argv = finalRow.command ? finalRow.command.split(" ") : [];
     return {
-      cwd, executable, comm, argv: row.command ? row.command.split(" ") : [],
-      pid: row.pid,
+      cwd, executable: after.executable, comm: after.comm, argv,
+      pid: finalRow.pid,
       ppid: finalRow.ppid,
-      uid: row.uid,
-      startId: row.lstart,
-      argvHash: hashArgv(row.command ? row.command.split(" ") : []),
-      state: mapState(row.state),
+      uid: finalRow.uid,
+      startId: finalRow.lstart,
+      argvHash: hashArgv(argv),
+      state: mapState(finalRow.state),
     };
+  }
+
+  private async executableIdentity(pid: number): Promise<{ comm: string; executable: string | null }> {
+    const comm = (await this.exec("ps", ["-ww", "-o", "comm=", "-p", String(pid)])).trim();
+    const executable = comm.startsWith("/") ? comm : parseMacExecutables(await this.exec("lsof", ["-a", "-p", String(pid), "-d", "txt", "-F", "pn"])).get(pid) ?? null;
+    return { comm, executable };
   }
 
   /** Whole table, every user, with lstart so descendants can be re-verified. Rejects on failure. */

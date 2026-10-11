@@ -368,11 +368,14 @@ Workspaces groups **Running here** by chat too. Tags are labels, not proof of or
 **What can be stopped.** Processes owned by the daemon's OS user, including detached chat jobs and
 jobs started outside Paseo. Outside jobs get an extra warning: "This wasn't started by Paseo. Make
 sure you don't need it." Detached tag-only jobs warn: "Tagged as started by chat <title>, but Paseo can't confirm
-it". The normal warning applies only to verified daemon descendants or workspace-root jobs. Never Paseo itself
+it". Workspace jobs without verified ancestry warn: "Inside <workspace>, but Paseo didn't start it". The normal
+warning applies only to verified daemon descendants. Never Paseo itself
 (daemon, supervisor, plugin hosts, terminal workers),
 anything a plugin started, an agent CLI (open its chat), an interactive terminal's shell, a database,
 a system service or its children, init, or another user's/root process. On Mac, system executables and desktop app
-bundles stay protected too. Each protected row explains why without opening its details.
+bundles stay protected too. Only the agent CLI itself is protected; its dev servers, builds and scripts are
+intentionally stoppable. Paseo descendant protection covers internal workers and plugin hosts, never agents' work.
+Each protected row explains why without opening its details.
 
 **How a stop works.** Select one or more rows and press **Stop**. A sheet lists exactly what will stop,
 children included, and anything that won't, with why. Confirming asks each process to exit; anything
@@ -386,7 +389,7 @@ answering, with **Restart** (see the [changelog](CHANGELOG.md) for exactly how i
 and stopped). Memory runaways show **Stop** beside them even when their row isn't on this page. With
 the optional memory guard on, Hosts stops the biggest eligible Paseo job once memory has been
 nearly full for over a minute, through the same checks, and logs it as an automatic stop. Only verified daemon
-descendants or workspace-root jobs qualify; detached tag-only and outside-Paseo processes never do.
+descendants qualify; workspace location and chat tags alone never qualify.
 
 ### Overview and the quick health check
 
