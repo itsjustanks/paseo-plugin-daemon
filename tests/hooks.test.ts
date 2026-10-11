@@ -7,6 +7,7 @@ import { closeWorkspaceTunnels, hostsSettingsFile, readHostsSettings, registerHo
 import type { Snapshot } from "../shared/contracts";
 import type { Tunnel } from "../shared/link";
 import { HOSTS_SETTINGS_DEFAULTS } from "../shared/settings";
+import { HOUSEKEEPING_DEFAULTS } from "../shared/housekeeping";
 
 const tunnel = (id: string, port: number, state: Tunnel["state"] = "connected"): Tunnel => ({ id, port, state, message: "", createdAt: Date.now(), expiresAt: Date.now() + 60_000, url: null });
 const process_ = (pid: number, cwd: string | null, ports: number[]) => ({ pid, cwd, ports }) as unknown as Snapshot["processes"][number];
@@ -62,16 +63,21 @@ describe("readHostsSettings", () => {
     expect(await readHostsSettings(file)).toEqual(HOSTS_SETTINGS_DEFAULTS);
     await writeFile(file, JSON.stringify({ version: 1, values: { closeTunnelsOnArchive: false, panelScope: "host" } }));
     // A version 1 document is migrated in place: old values kept, new switches default on.
-    expect(await readHostsSettings(file)).toEqual({ closeTunnelsOnArchive: false, panelScope: "host", snapshotIntervalSeconds: 30, backgroundHealthChecks: true, showComposerPill: true, tunnelMinutes: 120, maxHeavyJobs: 4, autoStopRunaways: false, watchedServices: [] });
+    expect(await readHostsSettings(file)).toEqual({ closeTunnelsOnArchive: false, panelScope: "host", snapshotIntervalSeconds: 30, backgroundHealthChecks: true, showComposerPill: true, tunnelMinutes: 120, maxHeavyJobs: 4, autoStopRunaways: false, watchedServices: [], housekeeping: HOUSEKEEPING_DEFAULTS });
     // A version 2 document (0.7.0 and 0.8.0) keeps every saved value and only gains the link duration.
     await writeFile(file, JSON.stringify({ version: 2, values: { closeTunnelsOnArchive: false, panelScope: "host", backgroundHealthChecks: false, snapshotIntervalSeconds: 45 } }));
-    expect(await readHostsSettings(file)).toEqual({ closeTunnelsOnArchive: false, panelScope: "host", snapshotIntervalSeconds: 45, backgroundHealthChecks: false, showComposerPill: true, tunnelMinutes: 120, maxHeavyJobs: 4, autoStopRunaways: false, watchedServices: [] });
+    expect(await readHostsSettings(file)).toEqual({ closeTunnelsOnArchive: false, panelScope: "host", snapshotIntervalSeconds: 45, backgroundHealthChecks: false, showComposerPill: true, tunnelMinutes: 120, maxHeavyJobs: 4, autoStopRunaways: false, watchedServices: [], housekeeping: HOUSEKEEPING_DEFAULTS });
     await writeFile(file, JSON.stringify({ version: 3, values: { tunnelMinutes: 480 } }));
     expect(await readHostsSettings(file)).toEqual({ ...HOSTS_SETTINGS_DEFAULTS, tunnelMinutes: 480 });
-    for (const raw of ["not json", JSON.stringify({ version: 6, values: {} }), JSON.stringify({ version: "1", values: {} }), JSON.stringify({ version: 1, values: { snapshotIntervalSeconds: 1 } }), JSON.stringify({ version: 3, values: { tunnelMinutes: 45 } })]) {
+    for (const raw of ["not json", JSON.stringify({ version: 7, values: {} }), JSON.stringify({ version: "1", values: {} }), JSON.stringify({ version: 1, values: { snapshotIntervalSeconds: 1 } }), JSON.stringify({ version: 3, values: { tunnelMinutes: 45 } })]) {
       await writeFile(file, raw);
       expect((await readHostsSettings(file)).closeTunnelsOnArchive).toBe(false);
+      // Unreadable settings never mean live Housekeeping: the fallback is preview.
+      expect((await readHostsSettings(file)).housekeeping.dryRun).toBe(true);
     }
+    // 0.17.0's version 5 document keeps its values; Housekeeping arrives on, in preview.
+    await writeFile(file, JSON.stringify({ version: 5, values: { autoStopRunaways: true, maxHeavyJobs: 6 } }));
+    expect(await readHostsSettings(file)).toEqual({ ...HOSTS_SETTINGS_DEFAULTS, autoStopRunaways: true, maxHeavyJobs: 6, housekeeping: { ...HOUSEKEEPING_DEFAULTS, enabled: true, dryRun: true } });
     expect(await readHostsSettings(dir)).toMatchObject({ closeTunnelsOnArchive: false });
     expect(hostsSettingsFile("/x", "daemon-link")).toBe(join("/x", "plugin-settings", "daemon-link", "hosts.json"));
   });

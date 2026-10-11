@@ -12,6 +12,8 @@ import { PathDetails, PathLabel } from "./paths";
 import { StopProcess, StuckPlugins } from "./guard";
 import type { HealthIssue } from "../shared/health";
 
+import { HousekeepingSection } from "./housekeeping";
+
 type Theme = PluginTheme;
 export type Say = (message: { text: string; tone: Tone } | null) => void;
 type Filter = "all" | "jobs" | "stoppable";
@@ -322,7 +324,7 @@ export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChang
       ? <Banner theme={theme} tone="danger" title="This host's processes couldn't be read"><Note theme={theme}>{query.error instanceof Error ? query.error.message : String(query.error)}</Note><Row><Button theme={theme} label="Try again" onPress={() => void query.refetch()} /></Row></Banner>
       : <View style={{ padding: SPACE.section, alignItems: "center" }}><ActivityIndicator color={theme.colors.accent} /></View>;
   }
-  if (!data.supported) return <Banner theme={theme} tone="neutral" title="Not available on this host">{data.warnings.map((warning) => <Note key={warning} theme={theme}>{warning}</Note>)}</Banner>;
+  if (!data.supported) return <><HousekeepingSection theme={theme} hostId={hostId} compact={compact} /><Banner theme={theme} tone="neutral" title="Not available on this host">{data.warnings.map((warning) => <Note key={warning} theme={theme}>{warning}</Note>)}</Banner></>;
 
   const toggle = (pid: number) => setSelected((previous) => { const next = new Set(previous); if (next.has(pid)) next.delete(pid); else next.add(pid); return next; });
   const chosen = [...selected].filter((pid) => rows.some((row) => row.pid === pid && row.stoppable));
@@ -337,6 +339,7 @@ export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChang
       ) : null}
       <RunawayBanner theme={theme} report={data} say={say} onDone={() => { onChanged?.(); void query.refetch(); }} onJobs={() => { setFilter("jobs"); setLimit(PAGE); }} />
       <LoadCard theme={theme} report={data} />
+      <HousekeepingSection theme={theme} hostId={hostId} compact={compact} />
       <Card theme={theme} title={filter === "jobs" ? "Heavy jobs" : "Heaviest processes"} icon="ListOrdered" subtitle={filter === "jobs" ? "Each job with everything it started, added together" : SORTED[sort]}>
         <Pills<Filter> theme={theme} label="Show" items={FILTERS} value={filter} onChange={(next) => { setFilter(next); setLimit(PAGE); }} />
         <Pills<ReportSort> theme={theme} label="Sort" items={SORTS} value={sort} onChange={setSort} />
@@ -382,7 +385,7 @@ export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChang
           <RecentStops theme={theme} entries={data.recentActions} />
         </AccordionItem>
         <AccordionItem theme={theme} compact={compact} icon="ShieldCheck" title="What can be stopped here" summary="Your own jobs, after a warning; protected programs explain why">
-          <Note theme={theme}>Your own processes can be stopped after a warning. Processes started outside Paseo get an extra warning. Paseo itself, its plugins, agent programs, terminal shells, databases, system services and Mac desktop apps stay protected. Nothing is stopped without asking, unless you turn on the memory guard in Settings → Hosts.</Note>
+          <Note theme={theme}>Your own processes can be stopped after a warning. Processes started outside Paseo get an extra warning. Paseo itself, its plugins, agent programs, terminal shells, databases, system services and Mac desktop apps stay protected. Manual stops ask first. The optional memory guard and confirmed live Housekeeping can stop eligible jobs automatically; Housekeeping has a narrow exception for browsers owned by finished chats.</Note>
           <Meta theme={theme}>A stop asks the process to finish first and forces it only if it is still running after the grace period. Each one is logged, without command lines (where: Overview → Technical details).</Meta>
         </AccordionItem>
       </Accordion>

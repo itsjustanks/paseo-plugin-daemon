@@ -7,6 +7,8 @@ import { SNAPSHOT_INTERVAL_MAX, SNAPSHOT_INTERVAL_MIN, WATCHED_SERVICES_MAX, hos
 import { watchId, watchSuggestions, watchTarget, watchUrlProblem } from "../shared/watch";
 import { TUNNEL_MINUTES, TUNNEL_MINUTES_DEFAULT, formatMinutes, isTunnelMinutes } from "../shared/tunnel-lease";
 
+import { HousekeepingSettingsSection } from "./housekeeping";
+
 type Ready = Extract<SettingsState<typeof hostsSettings.schema>, { status: "ready" }>;
 
 const SCOPES: ReadonlyArray<{ label: string; value: PanelScope }> = [
@@ -132,7 +134,7 @@ function HostsControls({ settings }: { settings: Ready }) {
           />
         </SettingsCard>
       </SettingsSection>
-      <SettingsSection title="Heavy processes" info="Builds, tests, type checks, installs and dev servers running at once. Going over the limit is flagged in Hosts and on the sidebar dot. Nothing is stopped automatically unless you turn on the memory guard below.">
+      <SettingsSection title="Heavy processes" info="Builds, tests, type checks, installs and dev servers running at once. Going over the limit is flagged in Hosts and on the sidebar dot. This limit only flags crowding. The memory guard and live Housekeeping have separate controls.">
         <SettingsCard>
           <SettingsSelect<string>
             label="Heavy jobs at once"
@@ -144,7 +146,7 @@ function HostsControls({ settings }: { settings: Ready }) {
           />
           <SettingsSwitch
             label="Stop a runaway automatically when memory is nearly full"
-            hint="Off by default. When memory has been nearly full for over a minute, Hosts stops the biggest job it would let you stop by hand: started from Paseo or inside a project, never Paseo itself, an agent, a terminal's shell or a database. It's logged, and the sidebar dot tells you."
+            hint="Off by default. When memory has been nearly full for over a minute, Hosts stops the biggest job it would let you stop by hand: verified as started from a live Paseo daemon; a workspace folder alone never qualifies. Never Paseo itself, an agent, a terminal's shell or a database. It's logged, and the sidebar dot tells you."
             value={settings.values.autoStopRunaways}
             disabled={settings.saving}
             onValueChange={(autoStopRunaways) => save({ autoStopRunaways })}
@@ -179,7 +181,7 @@ function HostsControls({ settings }: { settings: Ready }) {
   );
 }
 
-export function HostsSettings({ theme }: PluginSurfaceProps) {
+export function HostsSettings({ theme, host }: PluginSurfaceProps) {
   const settings = useSettings(hostsSettings);
   const style = useMemo(() => ({ color: theme.colors.foreground }), [theme]);
   const muted = useMemo(() => ({ color: theme.colors.foregroundMuted }), [theme]);
@@ -198,6 +200,7 @@ export function HostsSettings({ theme }: PluginSurfaceProps) {
   return (
     <>
       <HostsControls key={settings.revision} settings={settings} />
+      <HousekeepingSettingsSection theme={theme} hostId={host.id} />
       {settings.saveError ? <Text accessibilityRole="alert" style={style}>{settings.saveError}</Text> : null}
     </>
   );
