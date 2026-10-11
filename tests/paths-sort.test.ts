@@ -42,7 +42,7 @@ describe("friendlyPath", () => {
 
 const row = (over: Partial<ProcessRow>): ProcessRow => ({ pid: 1, name: "node", rssBytes: 0, cpuPercent: 0, ageSeconds: 0, flags: [], tree: { count: 1, cpuPercent: 0, rssBytes: 0 }, ...over } as ProcessRow);
 
-describe("Processes: highest first, flagged pinned, stable", () => {
+describe("Processes: global resource order, stable", () => {
   const rows = [
     row({ pid: 5, name: "zeta", rssBytes: 100, cpuPercent: 90 }),
     row({ pid: 4, name: "alpha", rssBytes: 100, cpuPercent: 10 }),
@@ -50,14 +50,14 @@ describe("Processes: highest first, flagged pinned, stable", () => {
     row({ pid: 2, name: "runaway", rssBytes: 10, cpuPercent: 99, flags: [{ code: "cpu-runaway", text: "x" }] }),
     row({ pid: 6, name: "alpha", rssBytes: 100, cpuPercent: 10 }),
   ];
-  it("memory (the default): flagged first, then by memory, ties by name then PID", () => {
-    expect([...rows].sort(order("memory", false)).map((item) => item.pid)).toEqual([2, 3, 5, 4, 6]);
+  it("memory (the default): by memory, CPU then name and PID", () => {
+    expect([...rows].sort(order("memory", false)).map((item) => item.pid)).toEqual([3, 5, 4, 6, 2]);
   });
-  it("CPU: flagged first, then by CPU", () => {
+  it("CPU: by CPU, regardless of flags", () => {
     expect([...rows].sort(order("cpu", false)).map((item) => item.pid)).toEqual([2, 5, 4, 6, 3]);
   });
   it("the same rows in any starting order sort the same", () => {
-    expect([...rows].reverse().sort(order("memory", false)).map((item) => item.pid)).toEqual([2, 3, 5, 4, 6]);
+    expect([...rows].reverse().sort(order("memory", false)).map((item) => item.pid)).toEqual([3, 5, 4, 6, 2]);
   });
 });
 

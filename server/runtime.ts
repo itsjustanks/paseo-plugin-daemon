@@ -25,10 +25,23 @@ import { formatSize } from "../shared/disk";
 import { friendlyPath } from "../shared/paths";
 import { homeRelative } from "../shared/redaction";
 import type { AskContext } from "../shared/ask";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { isWithin, type ClearItem, type DiskJob, type DiskPlan, type DiskReport, type WorkspaceUsage } from "../shared/disk";
 import { DiskCleaner, DiskTokens, defaultTmpRoots } from "./disk-clear";
 import { JOURNAL_PROBLEM, QuarantineInventory } from "./disk-quarantine";
+import { lstat, realpath } from "node:fs/promises";
+import { homedir } from "node:os";
+import { STANDALONE_LOCK, type HousekeepingSettings } from "../shared/housekeeping";
+import { Housekeeper, readMachine } from "./housekeeping";
+import { ProcReader } from "./housekeeping-procs";
+import { CliOwners, runInspect } from "./housekeeping-owners";
+import { takeLock } from "./housekeeping-lock";
+import { privateOwnedProfile } from "./housekeeping-files";
+import { HousekeepingLog } from "./housekeeping-log";
+import { PROFILE_DIR } from "./housekeeping-plan";
+import { ChildGroup } from "./disk-children";
+import { quarantineAndRemove } from "./disk-remove";
+import { setPriority } from "node:os";
 
 /** A disk report or ask waits this long for the registry or a process snapshot, then uses what it has. */
 export const REPORT_READ_MS = 5000;
@@ -47,6 +60,37 @@ export interface RuntimeOptions {
   log?: ActionLog;
   /** Tests pass false to keep the check loop and the paseo command out of the way. */
   guard?: boolean;
+  /** Tests pass false: Housekeeping is then constructed as unsupported and never starts. */
+  housekeeping?: boolean;
+  /** 0.18.0: Housekeeping's own settings, fresh, or null when they can't be read. */
+  readHousekeeping?: () => Promise<HousekeepingSettings | null>;
+}
+
+/**
+ * Paseo's workspaces from the `paseo` command, for Housekeeping's daily cache
+ * trim when no Paseo session has been bound yet (the loop starts at load,
+ * before anyone opens Hosts). Tolerant of shape; only absolute folders count.
+ */
+export function parseWorkspaceList(stdout: string): Array<{ name: string; directory: string; status: string | null; devServers: string[] }> | null {
+  let value: unknown;
+  try { value = JSON.parse(stdout); } catch { return null; }
+  const rows = Array.isArray(value) ? value : value && typeof value === "object" && Array.isArray((value as { workspaces?: unknown }).workspaces) ? (value as { workspaces: unknown[] }).workspaces : null;
+  return rows ? housekeepingWorkspaces(rows) : null;
+}
+
+/** Retains unknown service state for automation, unlike display-oriented workspace summaries. */
+export function housekeepingWorkspaces(rows: unknown[]): Array<{ name: string; directory: string; status: string | null; devServers: string[] }> {
+  const out: Array<{ name: string; directory: string; status: string | null; devServers: string[] }> = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const record = row as Record<string, unknown>;
+    if (record.archivingAt || record.archivedAt || record.Archived === true) continue;
+    const directory = [record.workspaceDirectory, record.directory, record.cwd, record.Cwd, record.Directory].find((item) => typeof item === "string" && item.startsWith("/")) as string | undefined;
+    if (!directory) continue;
+    const name = [record.name, record.title, record.Name, record.Title].find((item) => typeof item === "string" && item.trim()) as string | undefined;
+    out.push({ name: (name ?? directory.split("/").pop() ?? "workspace").slice(0, 80), directory, status: typeof record.status === "string" ? record.status : typeof record.Status === "string" ? record.Status : null, devServers: Array.isArray(record.scripts) ? record.scripts.filter((s) => s?.lifecycle === "running").map(() => "Running service") : ["Service state unknown"] });
+  }
+  return out;
 }
 
 /** The Processes tab on a platform the monitor can't read: an honest, empty report. */
@@ -135,6 +179,57 @@ export function createRuntime(options: RuntimeOptions = {}) {
       readyAfter: async (pluginId, since) => { await loop.pollLog(); return (loop.logState.lastReady(pluginId) ?? 0) > since; },
     });
   }
+  // 0.18.0: Housekeeping. Linux only; elsewhere it is constructed so its status can say so, and never starts.
+  const hkUid = monitor.internals?.uid ?? (typeof process.getuid === "function" ? process.getuid() : -1);
+  const hkPlaces = { home: homedir(), paseoHome: disk?.places.paseoHome ?? (process.env.PASEO_HOME || join(homedir(), ".paseo")), stateDir: disk?.places.stateDir ?? join(homedir(), ".paseo", "daemon-link"), tmpRoots: disk?.tmpRoots ?? defaultTmpRoots() };
+  const hkCli = new PaseoCli();
+  const housekeeper = new Housekeeper({
+    platform: options.housekeeping === false ? "unsupported" as NodeJS.Platform : process.platform,
+    uid: hkUid,
+    selfPid: process.pid,
+    readSettings: options.readHousekeeping ?? (async () => (await readSettings().catch(() => null))?.housekeeping ?? null),
+    procs: new ProcReader(hkUid),
+    owners: new CliOwners(hkCli),
+    lock: (signal) => takeLock(join(homedir(), STANDALONE_LOCK), hkUid, signal),
+    log: new HousekeepingLog(),
+    workspaces: async (signal) => {
+      const registered = await bounded(scope.workspaceDescriptors(true).catch(() => null), 20_000);
+      if (registered) return housekeepingWorkspaces(registered);
+      const file = await hkCli.resolve().catch(() => null);
+      if (!file || signal.aborted) return null;
+      const result = await runInspect(file, ["workspace", "ls", "--json"], 15_000, signal);
+      return result.code === 0 ? parseWorkspaceList(result.stdout) : null;
+    },
+    places: hkPlaces,
+    helpersDir: "/tmp",
+    privateProfile: (path) => privateOwnedProfile(path, hkUid),
+    removeProfile: async (path, finalCheck, signal) => {
+      if (!PROFILE_DIR.test(path)) return { ok: false, why: "it isn't an agent-browser profile" };
+      if ((await realpath("/tmp").catch(() => null)) !== "/tmp") return { ok: false, why: "/tmp is a link on this host" };
+      const stat = await lstat(path).catch(() => null);
+      if (!stat) return { ok: false, why: "it was already gone" };
+      if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== hkUid || (stat.mode & 0o077) !== 0) return { ok: false, why: "it isn't a plain folder of this user" };
+      const checked = async (currentPath: string) => {
+        const current = await lstat(currentPath).catch(() => null);
+        if (!current || current.dev !== stat.dev || current.ino !== stat.ino || !current.isDirectory() || current.isSymbolicLink() || current.uid !== hkUid || (current.mode & 0o077) !== 0) return "the private profile changed";
+        return finalCheck(currentPath);
+      };
+      const group = new ChildGroup();
+      const stop = () => group.killAll();
+      signal.addEventListener("abort", stop, { once: true });
+      if (signal.aborted) stop();
+      try {
+        const removed = await quarantineAndRemove(path, { dev: stat.dev, ino: stat.ino, bytes: 0 }, {
+          group, checks: { credentials: false, topSource: false, layout: null }, deadline: Date.now() + 5 * 60_000, finalCheck: (quarantine) => checked(join(quarantine, basename(path))), mutationCheck: checked,
+          ...(disk ? { inventory: disk.inventory } : {}),
+        });
+        return { ok: removed.ok, why: removed.error ?? null };
+      } finally { signal.removeEventListener("abort", stop); }
+    },
+    renice: (tid, nice) => setPriority(tid, nice),
+    kill: (pid, signal) => { process.kill(pid, signal); },
+    machine: () => readMachine(),
+  });
   const unavailable = (pluginId: string): RestartOutcome => ({ ok: false, outcome: "refused", message: "Plugin restarts aren't available on this host.", steps: [], pluginId });
   /** The registry for a disk report or ask: at most REPORT_READ_MS, else the last list it gave. */
   let lastWorkspaces: WorkspaceInfo[] = [];
@@ -291,7 +386,7 @@ export function createRuntime(options: RuntimeOptions = {}) {
     return [...ports.values()];
   }, transfers);
   return {
-    links, peers, monitor: { ...monitor, stop: monitorStop, forceStop: monitorForceStop }, transfers, scope, processes, log, guard, plugins, disk: diskApi,
+    links, peers, monitor: { ...monitor, stop: monitorStop, forceStop: monitorForceStop }, transfers, scope, processes, log, guard, plugins, disk: diskApi, housekeeper,
     watch: new WatchChecker(),
     withContext<T>(context: PluginHandlerContext, action: () => T): T { scope.bind(context.paseo); return action(); },
   };

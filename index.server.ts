@@ -21,6 +21,7 @@ import { ArchivedWorkspaces } from "./server/archived";
 import { homedir } from "node:os";
 import { guardState, pluginRestart, pluginRestartStatus } from "./shared/guard";
 import { diskClear, diskClearStatus, diskLeftoverDismiss, diskPreview, diskReport } from "./shared/disk";
+import { housekeepingStatus, type HousekeepingSettings } from "./shared/housekeeping";
 
 type SettingsHandle = { read?: () => Promise<{ status: string; values?: unknown }>; subscribe?: (listener: () => void) => () => void } | undefined;
 
@@ -39,10 +40,26 @@ function settingsReader(handle: SettingsHandle): () => Promise<HostsSettings> {
   };
 }
 
+/**
+ * Housekeeping's settings, fresh for every decision (0.18.0). A daemon that
+ * can't answer, or a document that doesn't parse, is null: Housekeeping then
+ * waits and changes nothing. Older daemons read the stored file, where any
+ * failure falls back to the defaults, which are preview (no changes).
+ */
+function housekeepingReader(handle: SettingsHandle): () => Promise<HousekeepingSettings | null> {
+  if (typeof handle?.read !== "function") return async () => (await readHostsSettings()).housekeeping;
+  return async () => {
+    const state = await handle.read!();
+    if (state.status !== "ready") return null;
+    const parsed = HostsSettingsSchema.safeParse(state.values);
+    return parsed.success ? parsed.data.housekeeping : null;
+  };
+}
+
 export default function contribute(server: PluginServerContext) {
   const handle = server.registerSettings(hostsSettings) as SettingsHandle;
   const readSettings = settingsReader(handle);
-  const runtime = createRuntime({ readSettings });
+  const runtime = createRuntime({ readSettings, readHousekeeping: housekeepingReader(handle) });
   const removeHooks = registerHooks(server, runtime, readSettings);
   // One cached verdict per host; pills and panels read it instead of probing.
   // 0.15.0: Paseo's workspace.archived hook (newer servers; looked up at runtime). Recording is instant and never throws.
@@ -52,8 +69,10 @@ export default function contribute(server: PluginServerContext) {
   const health = new HealthChecker({ runtime, readSettings, onVerdict: summaryWriter(), guard: runtime.guard ? () => runtime.guard!.state() : undefined, archived });
   // 0.13.0: the check loop starts now, not on the first app visit: it matters most when the daemon is too busy to answer.
   runtime.guard?.start();
+  // 0.18.0: Housekeeping starts with the plugin (Linux), in preview until the person confirms live mode.
+  runtime.housekeeper.start();
   // 0.10+: a settings change (say, a new watched service) is checked at once, not on the next tick.
-  const unsubscribe = typeof handle?.subscribe === "function" ? handle.subscribe(() => { if (health.current()) void health.check(undefined, true).catch(() => undefined); }) : () => {};
+  const unsubscribe = typeof handle?.subscribe === "function" ? handle.subscribe(() => { void runtime.housekeeper.settingsChanged().catch(() => undefined); if (health.current()) void health.check(undefined, true).catch(() => undefined); }) : () => {};
   // Refresh (a user action) reads the project registry fresh; polling reuses its 60-second cache.
   server.handle(hostHealth, (input, context) => runtime.withContext(context, async () => {
     if (input.refresh === true) await runtime.scope.refresh(true).catch(() => undefined);
@@ -84,6 +103,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(diskClear, ({ tokens }, context) => runtime.withContext(context, async () => runtime.disk.clear(tokens)));
   server.handle(diskClearStatus, async () => runtime.disk.status());
   server.handle(diskLeftoverDismiss, async ({ id }) => runtime.disk.dismissLeftover(id));
+  server.handle(housekeepingStatus, async () => runtime.housekeeper.status());
   server.handle(watchSuggestions, async () => ({ suggestions: await suggestions((await readSettings().catch(() => HOSTS_SETTINGS_DEFAULTS)).watchedServices) }));
   server.handle(sync.syncStatus, (_input, context) => runtime!.withContext(context, async () => {
     await runtime!.scope.refresh(); return { projects: runtime!.scope.status().projects.map((p) => ({ id: p.id, name: p.name })), history: await runtime!.transfers.history(), grants: await runtime!.peers.projectGrants() };
@@ -113,5 +133,5 @@ export default function contribute(server: PluginServerContext) {
   server.handle(peer.peerServices, ({ id }, context) => runtime.withContext(context, () => runtime.peers.services(id)));
   server.handle(peer.peerForward, ({ id, port }, context) => runtime.withContext(context, () => runtime.peers.forward(id, port)));
   server.handle(peer.peerDisconnect, ({ id }, context) => runtime.withContext(context, () => runtime.peers.disconnect(id)));
-  return async () => { removeHooks(); if (typeof offArchived === "function") offArchived(); unsubscribe(); health.close(); runtime.guard?.close(); await runtime.disk.close().catch(() => undefined); runtime.processes.close(); await Promise.all([runtime.links.close(), runtime.peers.close(), runtime.transfers.close()]); };
+  return async () => { await runtime.housekeeper.close().catch(() => undefined); removeHooks(); if (typeof offArchived === "function") offArchived(); unsubscribe(); health.close(); runtime.guard?.close(); await runtime.disk.close().catch(() => undefined); runtime.processes.close(); await Promise.all([runtime.links.close(), runtime.peers.close(), runtime.transfers.close()]); };
 }

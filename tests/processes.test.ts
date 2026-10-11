@@ -115,6 +115,22 @@ describe("process report", () => {
     expect(result.projectsVerified).toBe(false);
   });
 
+  it("filters and sorts the whole sample before bounded pagination in both directions", async () => {
+    const { report, kills } = await setup();
+    const all = await report({ sort: "memory", direction: "desc" });
+    const page = await report({ sort: "memory", direction: "desc", limit: 2, offset: 1 });
+    expect(page.processes.map((row) => row.pid)).toEqual(all.processes.slice(1, 3).map((row) => row.pid));
+    const ascending = await report({ sort: "memory", direction: "asc", limit: 2 });
+    expect(ascending.processes.map((row) => row.rssBytes)).toEqual(all.processes.map((row) => row.rssBytes).sort((a, b) => a - b).slice(0, 2));
+    for (const filter of ["protected", "stoppable", "no-chat", "jobs"] as const) {
+      const full = await report({ filter });
+      const first = await report({ filter, limit: 1 });
+      expect(first.matched).toBe(full.processes.length);
+      expect(first.processes.map((row) => row.pid)).toEqual(full.processes.slice(0, 1).map((row) => row.pid));
+    }
+    expect(kills).toEqual([]);
+  });
+
   it("counts heavy jobs once per tree and flags more than the limit, without stopping anything", async () => {
     const { report, kills } = await setup({ maxHeavyJobs: 2 });
     const result = await report();

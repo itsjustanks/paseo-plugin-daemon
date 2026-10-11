@@ -8,7 +8,7 @@ OmniRoute. See every dev server running on a host, press **Open**, and it appear
 Pair two Paseo hosts for a private local URL, or save an SSH forward. Receive selected Git projects
 with a preview and history.
 
-Supports Paseo 0.7 through 0.11 (current releases need 0.8 or newer; see
+Supports Paseo 0.7 through 0.11 (current releases need 0.9 or newer; see
 [Paseo compatibility](#paseo-compatibility)).
 
 The plugin is **Daemon Link**; its sidebar entry is **Hosts**, matching Paseo's host terminology.
@@ -40,13 +40,15 @@ an isolated preview: no real accounts, host addresses, project names, credential
   check loop that runs every 10 seconds even when Paseo is closed. Stop or Ask an agent sits beside
   it. An optional guard (off by default) stops the biggest stoppable job when memory stays nearly
   full for over a minute.
-- **Disk usage, and an agent to clean up.** Free space at a glance (the sidebar dot warns at 85%
+- **Disk usage and reviewed cleanup.** Free space at a glance (the sidebar dot warns at 85%
   full), every Paseo workspace by size with its status and what looks safe to clear, and shared
-  caches and temporary files by size. Hosts deletes nothing: "Ask an agent to clean this up" hands an
-  agent the exact list and the checks to do (nothing in use, nothing unsaved, never .git, .env files,
-  agents' history or Paseo's data) before it deletes anything. A workspace's own Hosts tab speaks up
+  caches and temporary files by size. Delete offers only verified tool-managed workspace folders,
+  behind a warning listing exactly what will go. Shared caches, temporary folders and ambiguous
+  contents use "Ask an agent to clean this up" with the list and checks to perform. A workspace's
+  own Hosts tab speaks up
   when 500 MB or more of it looks safe to clear (or the disk is 85% full), the chip under the message
-  box appears at 95% full, and the Hosts attachments include a Disk report.
+  box appears at 95% full, and the Hosts attachments include a Disk report. Linux Housekeeping
+  separately offers automatic cleanup after its live-mode confirmation; it starts in preview.
 - **Stuck plugins, restarted in one press.** When a Paseo plugin stops answering ("Activity isn't
   answering (12 timeouts in 10 min)"), Paseo can't add, update or reload plugins. Restart reloads just
   that plugin; if Paseo is stuck on it, Hosts stops only that plugin's own process and reloads it. The
@@ -264,15 +266,114 @@ Center. Settings are saved per host and shared by every client of that host.
 | Link duration | 2 hours | How long Open keeps a new browser link alive, and what each Extend adds (15 min–8 h). |
 | Close browser links on archive | On | Archiving a workspace stops browser links that point at its dev servers. |
 | Heavy jobs at once | 4 | More builds, tests and dev servers than this is flagged; nothing stops on its own. |
-| Stop a runaway automatically… | Off | Memory nearly full for a minute: stop the biggest job you could stop. |
+| Stop a runaway automatically… | Off | Memory nearly full for a minute: stop an eligible job with verified origin. |
 | Watched services | None | Health URLs elsewhere (http/https, no secrets), checked at most every 30 s. |
 
 Archive cleanup and background health checks run on the daemon, so they work even when no app is
 connected. Cleanup only stops temporary browser links; the dev server itself keeps running. If the
 saved settings file cannot be read, cleanup is skipped rather than guessed. Settings saved by 0.6.0
-through 0.9.0 are migrated in place: every value you chose is kept and new settings take their
+through 0.17.0 are migrated in place: every value you chose is kept and new settings take their
 defaults. Defaults are safe on a shared team daemon: nothing is published, paired or stopped until
-someone presses a button (or turns on the memory guard).
+someone presses a button, enables the memory guard, or confirms live Housekeeping.
+
+### Housekeeping (0.18.0, Linux only)
+
+**Processes → Housekeeping** is a small, folded row. Open it for free RAM, 1-minute load, each job's
+last run, and the latest 20 redacted results and reasons. It starts enabled **in preview**, including
+when upgrading an existing host. Preview records decisions and audit state; it does not change
+processes, caches, browser profiles or helper scripts. Turn off **Preview only** to review the live-mode
+warning. Cancel is the default; only **Turn on live Housekeeping** authorizes automation. The same
+controls, schedules and numeric limits live in **Settings → Hosts → Housekeeping**, per selected host.
+
+Live mode works while the app is closed. Its default schedules are:
+
+- Every minute, lower matching builds/tests to nice 10 and agent Chrome processes to nice 5. Only
+  the daemon's OS user, only increases to nice, never Paseo, plugin hosts or agent CLIs. Linux nice
+  is per thread: only the main PID is changed; existing worker threads keep their priorities.
+- Every hour, individually authorize leftover Chrome/session processes, agent-browser daemons,
+  crash reporters and old orphaned `supabase db query` processes. Each needs its own `PASEO_AGENT_ID`
+  and a fresh matching Paseo answer: closed, or validated archived status with an archive timestamp.
+  Running/initializing, open idle, unknown, failed and timed-out lookups refuse. Age alone never
+  authorizes a stop. A Supabase query also needs parent PID 1 and age over the configured limit.
+- Send TERM to all independently authorized targets, wait three seconds once, then KILL only the
+  same verified survivors that still qualify. Each signal checks fresh settings, owner, ancestors,
+  executable and process identity. A delivered signal is logged as requested until exit is verified.
+  A complete fresh scan must prove a browser profile unused before its checked removal.
+- Daily, trim old owned regular, single-link Turbo cache files directly in registered workspaces'
+  `.turbo/cache`. Only Turbo hash/archive or metadata names; no recursive cache walks, symlinks,
+  source or credential names. Workspace state must explicitly be idle, with no running services or
+  cache-using builds. Fresh registry and broad active-use checks precede each batch of at most 16 files. Every unlink
+  still checks fresh policy/cancellation, the path chain, inode and age. Any same-user process
+  working inside that workspace, including custom or unknown jobs, keeps its cache.
+- Every minute, restore missing `/tmp/gate.sh` and `/tmp/heavy-run.sh` from the supplied scripts,
+  exclusively, without replacing any file or link. A failed creation can leave a partial file;
+  it is reported and preserved if cancellation or replacement prevents safe cleanup. These gates
+  help only commands that choose to call them; they do not enforce a host-wide job cap themselves.
+
+| Housekeeping setting | Default | Allowed values |
+| --- | --- | --- |
+| `housekeeping.enabled` | `true` | On/off |
+| `housekeeping.dryRun` | `true` | Preview/live; live requires UI confirmation |
+| `housekeeping.reniceIntervalMinutes` | `1` | 1–60 minutes |
+| `housekeeping.reapIntervalMinutes` | `60` | 5–1440 minutes |
+| `housekeeping.turboIntervalHours` | `24` | 1–168 hours |
+| `housekeeping.browserMaxAgeHours` | `6` | 1–168; reporting only, never ownership authority |
+| `housekeeping.stuckQueryMaxHours` | `2` | 1–72 |
+| `housekeeping.turboCacheMaxDays` | `7` | 1–365 |
+| `housekeeping.heavyNice` | `10` | 1–19 |
+| `housekeeping.browserNice` | `5` | 1–19 |
+
+The existing **memory guard** (`autoStopRunaways`, off by default) is separate and unchanged. It
+requires verified live Paseo daemon ancestry; being inside a workspace alone never qualifies.
+
+Schedules are elapsed intervals from the last completed pass, checked once a minute; the first pass
+is due on load. Changing any Housekeeping setting cancels the current cycle. Helpers stay on a
+one-minute check. Blocked, failed or cancelled passes retry on the next beat. The UI offers presets
+within these ranges and preserves any existing valid value.
+
+Manual Stop and its existing protections are unchanged. Only Housekeeping's individually authorized
+finished-chat browser family has the narrow automated browser exception.
+
+**Hand over from the standalone scripts.** Hosts holds the actual
+`~/.local/state/agent-housekeeper.lock` flock descriptor for the entire cycle, including the grace
+wait and file work. If busy it says **Standalone housekeeper active** and stays passive. Missing
+`flock`, unsafe paths and failed checks also refuse; there is no unlocked fallback. To retire the
+standalone housekeeper on a chosen host, remove its launch/guard block from `~/.bashrc`, identify and
+stop that specific process by PID, then remove `~/.local/bin/agent-housekeeper` and
+`~/.local/bin/reap-stale-agent-procs`. Keep the lock path and shared gate helpers. Hosts takes over
+on its next cycle after the standalone releases the lock. Do not use pattern-based `pkill -f`.
+
+**Limits and API workarounds.** The background loop asks the daemon's resolved Paseo CLI with fixed
+argv (`inspect <id> --json`), bounded lookups and no shell, because callback SDK sessions are not a
+background owner-lookup API. Paseo 0.11.1 archives idle records; a matching ID plus `Archived: true`
+and a valid `ArchivedAt` distinguishes them from live idle chats. Cache discovery first uses fresh
+SDK workspace descriptors, falling back to `paseo workspace ls --json`. That CLI omits workspace
+and service state in 0.11.1, so its rows can be discovered but cannot authorize trimming. Unknown
+state never defaults to idle. Temporary/protected roots, unreadable process paths and incomplete
+scans refuse. Profile deletion is limited to plain, owned folders with no group/other permissions;
+its complete non-use proof covers this OS user's processes, including unknown programs and unreadable
+same-user paths. Foreign-user paths are never inspected; their presence (including root PID 1) alone
+does not block this private-profile boundary. Privileged/root access is outside that boundary.
+
+The loop never overlaps itself. Policy changes cancel the current cycle; no stale thresholds are
+used. Shutdown invalidates authority immediately, waits up to ten seconds, and keeps the lock until
+pending work settles. The final process read/syscall and final path check/unlink retain ordinary
+kernel race windows; Node offers no pidfd or inode-conditional unlink API. A 45-second cycle action
+budget aborts authority; an outstanding read may settle later while the lock stays held. Jobs are
+bounded to 256 priority changes and TERM targets and 64 owner lookups per scan. Cache work considers
+at most 16 workspaces, 1024 metadata entries per folder, 2048 metadata entries total and 256 candidates
+per cycle. Activity is checked per 16-candidate batch (at most 31 batch checks across 16 workspaces),
+while policy/cancellation and inode checks run per unlink. A new job can start within that bounded
+batch window; the next batch refuses. There is no continuation cursor yet: later passes can revisit
+the same first workspaces or entries, leaving later ones unexamined indefinitely. A scan-limit result
+says so; use Workspaces for manual inspection of the rest. Refused, skipped and partial results are
+reported; a count never proves an exit or delete.
+
+Audit files are private (0600) under `$PASEO_HOME/daemon-link`: `housekeeping.jsonl` rotates at 600
+results to retain 500; `housekeeping-state.json` keeps job timestamps across reloads. Reads are
+bounded to 1 MiB, text is redacted on write and read, and the panel shows only 20 results. Audit and
+lock bookkeeping still occur in preview. On macOS and other unsupported platforms, Housekeeping
+starts no timers and performs none of its process or filesystem work.
 
 ### Browser links: how long they live
 
@@ -354,16 +455,23 @@ No project permission or transfer is enabled by installing or updating the plugi
 
 ![Processes: a runaway type check, memory near the limit, the heaviest processes.](docs/screenshots/processes.png)
 
-Runaways come first, each with the decision it needs; then the load (memory against the container's
-limit or the machine, CPU, heavy jobs against your limit); then the list. Show **Everything**,
-**Heavy jobs** (each job with everything it started, added together) or what **Can stop here**; sort
-by CPU, memory, age or name; search by name, workspace, folder or PID. Press a row for its command,
-parent and folder.
+Runaways have a separate attention banner, followed by load and a flat process table. Memory sorts
+highest first by default; each numeric header starts descending and toggles on another press.
+Name starts ascending. Search names, redacted commands, workspace/chat labels, folders and PIDs;
+filter by heavy jobs, stoppable/protected processes, known/no chat or attention. Filtering and sorting
+cover the whole sampled list before pagination. Heavy jobs use totals for everything they started.
+Unknown readings stay last. Open a process name for its command, parent and folder.
 
-**Which chat tagged it.** Processes are grouped by workspace, then chat. Each tagged job shows
-**Tagged by chat** with its title and workspace, including detached jobs and builds outside project
+**Which chat tagged it.** The workspace/chat column shows attribution on every row. Each tagged job
+shows **Tagged by chat** with its title and workspace, including detached jobs and builds outside project
 folders. **Open chat** opens that chat on hosts with native navigation; older apps keep the title.
 Workspaces groups **Running here** by chat too. Tags are labels, not proof of origin. Unknown attribution stays unknown.
+
+**Disk tables.** Workspaces shows project/path, status, disk use, reclaimable space and running-job
+count. Search its last report or filter by status; total disk use starts highest first. Build folders,
+shared caches and temporary entries also have size/name sorting and search, with cache group/type
+filters. These controls never trigger a disk scan. Partial measurements and shared bytes stay
+labelled. On narrow screens each row stacks labelled cells and keeps its actions visible.
 
 **What can be stopped.** Processes owned by the daemon's OS user, including detached chat jobs and
 jobs started outside Paseo. Outside jobs get an extra warning: "This wasn't started by Paseo. Make
@@ -377,7 +485,10 @@ bundles stay protected too. Only the agent CLI itself is protected; its dev serv
 intentionally stoppable. Paseo descendant protection covers internal workers and plugin hosts, never agents' work.
 Each protected row explains why without opening its details.
 
-**How a stop works.** Select one or more rows and press **Stop**. A sheet lists exactly what will stop,
+**How a stop works.** Use **Stop…** directly on a row, or select several rows and press **Stop**.
+A missing or archived chat never removes manual Stop from an otherwise eligible process. Selection
+uses the signed process identity, so sorting cannot select a different job and PID reuse clears it.
+A sheet lists exactly what will stop,
 children included, and anything that won't, with why. Confirming asks each process to exit; anything
 still running 10 seconds later is stopped forcefully. Every rule is re-checked against a fresh read at
 the moment of each signal. Signed identities include the executable path as well as PID, user, start time and argv
@@ -446,7 +557,8 @@ manifest schema rejects that key, so a 0.8 host should stay on 0.12.0. Paseo 0.7
 `>=0.8.0`: the 0.11 screen, sidebar row, status dot and popover, the 0.10
 external-link opener and settings read/subscribe, and button-style composer chips are each detected at
 runtime, and older apps get exactly what 0.9 drew. No plugin file imports an SDK path that Paseo 0.9.1
-can't build (a test checks this).
+can't build. Compatibility tests compile and register both entries using pinned Paseo 0.9.0 and
+0.11.1 runtimes, without installing the plugin into a live daemon.
 
 Before 0.10.0, it required Paseo 0.8 or newer. Version 0.5.0 moved to the 0.8 runtime layout: `index.client.tsx`
 and `index.server.ts` entries with code under `client/`, `server/`, and `shared/`, and

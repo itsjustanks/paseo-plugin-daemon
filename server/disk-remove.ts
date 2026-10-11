@@ -101,6 +101,8 @@ export interface RemoveDeps {
    * rm, from a fresh snapshot: a reason to put it back, or null to go ahead.
    */
   finalCheck?: (quarantined: string) => Promise<string | null>;
+  /** Optional automation authority, checked before each destructive stage. Audit/rollback writes remain allowed. */
+  mutationCheck?: (currentPath: string) => Promise<string | null>;
 }
 
 /** Quarantine, verify, look for .env/.git, then rm. `expected` is the inode the checks approved. */
@@ -109,6 +111,8 @@ export async function quarantineAndRemove(target: string, expected: { dev: numbe
   const kind = await (deps.flavour ?? rmFlavour)();
   if (!kind) return refuse("This system's rm can't promise to stay on one disk, so Hosts doesn't delete anything here.");
   if (deps.deadline - Date.now() < 10_000) return refuse("The time for this clear ran out before it got here, so it was left.");
+  const initialBlock = await deps.mutationCheck?.(target);
+  if (initialBlock) return refuse(initialBlock);
   let quarantine: string;
   try { quarantine = await mkdtemp(join(dirname(target), ".hosts-quarantine-")); } catch { return refuse("It couldn't be moved aside to clear, so it was left."); }
   const q = await lstat(quarantine).catch(() => null);
@@ -120,6 +124,8 @@ export async function quarantineAndRemove(target: string, expected: { dev: numbe
   const entry: QuarantineEntry = { quarantine, original: target, name: basename(target), dev: expected.dev, ino: expected.ino, bytes: expected.bytes, at: Date.now(), stage: "moving" };
   // "moving", written before the rename: a crash from here on is found on the next load (stages: disk-quarantine.ts).
   try { await deps.inventory?.add(entry); } catch { await rmdir(quarantine).catch(() => undefined); return refuse("Hosts couldn't record the move, so it left it alone."); }
+  const moveBlock = await deps.mutationCheck?.(target);
+  if (moveBlock) { await rmdir(quarantine).catch(() => undefined); await deps.inventory?.done(quarantine).catch(() => undefined); return refuse(moveBlock); }
   try { await rename(target, moved); } catch { await rmdir(quarantine).catch(() => undefined); await deps.inventory?.done(quarantine).catch(() => undefined); return refuse("It couldn't be moved aside to clear, so it was left."); }
   const putBack = async (error: string): Promise<DeleteResult> => {
     // Never replaces anything: if something now sits at the original place, the item stays set aside and listed.
@@ -145,6 +151,8 @@ export async function quarantineAndRemove(target: string, expected: { dev: numbe
   // Recorded before rm starts: if Hosts stops mid-delete, the next load says "may be incomplete", never "restored".
   try { await deps.inventory?.removing?.(quarantine); } catch { return putBack("Hosts couldn't record the delete, so it was put back."); }
   await deps.beforeRemove?.(moved);
+  const removeBlock = await deps.mutationCheck?.(moved);
+  if (removeBlock) return putBack(removeBlock);
   const left = deps.deadline - Date.now();
   if (left < 5000) return putBack("The time for this clear ran out before it could be removed.");
   const removed = await deps.group.run("rm", rmArgs(kind, quarantine), { timeoutMs: left });

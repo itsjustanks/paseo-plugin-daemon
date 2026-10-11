@@ -1,5 +1,51 @@
 # Changelog
 
+## 0.18.0 — 2026-10-11
+
+### Keep shared Linux hosts responsive, with a preview before automation
+
+Housekeeping starts enabled in preview, including on existing installs. A small folded section in
+Processes shows preview/live status; expand it for RAM/load, job times, the latest 20 redacted
+results, and on/off and preview controls. Native settings expose bounded schedules, age thresholds
+and priority limits. Live mode needs an explicit confirmation with Cancel focused by default; host changes
+keep status caches separate.
+
+In live mode, the default one-minute schedule lowers matching main-process build/browser priorities and restores
+missing gate helpers exclusively. Hourly cleanup requires fresh finished-chat ownership for every browser,
+crashpad, daemon or old orphan Supabase query; running, open idle and unknown chats refuse. TERM all
+eligible targets, wait three seconds, then re-authorize verified survivors before KILL. Logs separate
+stop requests from verified exits, and profiles need a complete fresh scan proving non-use.
+
+In live mode, daily Turbo trimming checks old owned regular entries only, with fresh registry, explicit idle
+state and broad active-use checks before bounded 16-file batches, with path/inode and policy checks
+before each unlink. A 45-second cycle action budget and bounded metadata/candidate counts keep passes
+small. Private-profile non-use checks cover the same OS user without inspecting foreign processes.
+Every effect checks current policy; changing settings or unloading cancels authority before the cycle releases
+its standalone flock.
+Private redacted logs rotate, job times survive reloads, and macOS reports unsupported. Existing
+manual Stop and the optional memory guard keep their protections. The README documents standalone
+retirement, CLI/SDK fallback limits, main-thread priority scope and remaining kernel race windows.
+
+### Find heavy work and stop ordinary jobs without a chat link
+
+Processes now uses a flat, searchable table with visible workspace/chat attribution and Stop on
+each eligible row. Missing or archived chats do not restrict manual Stop; protected processes show
+their reason. The existing confirmation and fresh identity checks remain. Numeric sorts start
+highest first, names alphabetically, and headers toggle direction. Filters and ordering apply before
+pagination, without secretly pinning flagged rows above larger jobs. Heavy jobs keep tree totals.
+
+Workspaces, build folders, shared caches and temporary entries gain search and sorting; workspaces
+also filter by status, caches by group or type. These controls reuse the last report and never start
+a disk scan. Narrow screens stack labelled cells with actions visible. Process selections follow
+signed identities across sorting and clear when a PID is reused.
+
+### Check current Paseo runtimes without changing a live installation
+
+The compatibility check now uses pinned 0.9.0 and 0.11.1 runtimes instead of the obsolete 0.7 entry
+layout. Both entries compile and register their contracts in an isolated environment. Bounded cache
+results now disclose when later folders or entries may remain unexamined; no continuation guarantee
+is implied.
+
 ## 0.17.0
 
 - Label chat tags using cached agent metadata; detached tags are unconfirmed and get a stronger Stop warning.

@@ -156,18 +156,21 @@ in the sidebar or workspace panel. Install on both machines for localhost forwar
 No daemon restart or SSH setup is required. If the CLI asks for a daemon password, use the already
 connected app's Settings to install, or authenticate the CLI with your normal daemon password.
 
-The same checkout contains an isolated 0.7 entry and the 0.8 runtime entries. Each loader selects its
-own entry, so users do not choose branches. Compatibility is checked against 0.7.2 and pinned 0.8
-preview compiler source; the final 0.8 release and native mobile rendering still need verification.
+The current plugin requires Paseo 0.9 or newer, with `index.client.tsx` and `index.server.ts` entries.
+`npm run test:compatibility` uses pinned upstream Paseo 0.9.0 and 0.11.1 compilers, evaluates both
+bundles, checks client registrations with and without slash commands, and verifies matching server
+RPCs. It uses isolated settings with automation disabled. This is a compiler and registration smoke
+test; it does not install a plugin or verify native mobile rendering.
 
 ## Version-aware features
 
-| Feature | Paseo 0.7.2 | Paseo 0.8 preview |
+| Feature | Paseo 0.9 | Paseo 0.11 |
 | --- | --- | --- |
 | Pair hosts and open localhost services | Yes | Yes |
 | Daemon Link, temporary HTTPS links, saved SSH forwards | Yes | Yes |
-| Sidebar, workspace panel, Command Center | Yes | Yes |
-| `/daemon-link` workspace composer shortcut | Hidden | Shown when supported |
+| Main navigation | Surface and sidebar item | Native screen and sidebar row |
+| Workspace panel, settings, Command Center | Yes | Yes |
+| `/hosts` workspace composer shortcut | Shown when supported | Shown when supported |
 
 The selected host's entry controls its features. Capability checks are local to that installation;
 switching hosts cannot borrow a newer host's APIs or credentials. Future additions should follow
