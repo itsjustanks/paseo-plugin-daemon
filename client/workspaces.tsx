@@ -1,5 +1,5 @@
 import { chatAttribution, chatGroups } from "../shared/processes";
-import React from "react";
+import React, { useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc } from "@getpaseo/plugin/client";
@@ -12,29 +12,24 @@ import { StopProcess } from "./guard";
 import { AskAgentButton, OpenChatButton } from "./ask";
 import { PathDetails, PathLabel } from "./paths";
 import { friendlyPath } from "../shared/paths";
-import { Accordion, AccordionItem, Button, Card, Disclosure, Divider, ItemTitle, Meta, Note, Row, SectionTitle, SPACE, TYPE, type Tone } from "./kit";
+import { Button, Card, Divider, ItemTitle, Meta, Note, Row, SectionTitle, SPACE, TYPE, type Tone } from "./kit";
+import { nextResourceSort, type ResourceSort } from "../shared/resource-table";
+import { cacheTableRows, itemTableRows, workspaceTableRows, type ItemSort, type WorkspaceSort } from "../shared/disk-tables";
+import { ResourceCells, ResourceHeader, ResourceTable, ResourceToolbar, type ResourceColumn } from "./resource-table";
 import { Meter, type Say } from "./processes";
 
 type Theme = PluginTheme;
 
 /**
- * The Workspaces tab's disk side (0.14.0, read-only): how full the disk is,
- * what each Paseo workspace uses and what of it looks safe to clear, and the
- * shared caches and temporary files by size. Hosts deletes nothing here.
- * Where a Clear button would be there's "Ask an agent to clean this up": the
- * agent gets the exact list with paths and sizes, checks that nothing is in
- * use or unsaved, and then clears it.
- *
- * The check is heavy, so it runs in the background on the daemon, one at a
- * time; this polls while it runs and shows the last answer with its age.
- * Status first, then the list biggest first; folders and paths only appear
- * when a row is opened.
+ * Workspaces combines process attribution with the last measured disk report.
+ * Search, filters and sorting are local and never start another disk scan.
+ * Tool-managed workspace deletion still uses reviewed tokens and confirmation;
+ * shared caches and ambiguous contents retain their Ask an agent action.
  */
 
 export const diskKey = (hostId: string) => ["daemon-link", hostId, "disk"] as const;
 
 const DISK_TONE: Record<DiskSpace["level"], Tone> = { ok: "success", warning: "warning", critical: "danger" };
-const STATE_ICON: Record<WorkspaceUsage["state"], string> = { working: "Bot", waiting: "MessageCircle", failed: "CircleAlert", idle: "Folder", unlinked: "FolderX" };
 /** The one sentence beside every clean-up button. */
 export const AGENT_PROMISE = "An agent will check nothing's in use or unsaved, then clear it. You see the message before it's sent.";
 
@@ -174,7 +169,7 @@ function ItemLine({ theme, item, owner, compact }: { theme: Theme; item: ClearIt
   return (
     <View style={{ gap: SPACE.hair }}>
       <Pressable accessibilityRole="button" accessibilityLabel={`${item.what}, ${size(item.bytes, item.partial)}. ${open ? "Hide" : "Show"} where it is`} onPress={() => setOpen(!open)} style={{ gap: SPACE.hair }}>
-        <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${item.what} · ${size(item.bytes, item.partial)}`}</Text>
+        <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{item.name}</Text>
         <PathLabel theme={theme} compact={compact} label={label} />
         <Meta theme={theme}>{[item.blocked ?? item.cost, shared ? `${formatSize(item.sharedBytes)} of it is shared with pnpm's store, so clearing frees about ${formatSize(frees(item))}` : null].filter(Boolean).join(" · ")}</Meta>
       </Pressable>
@@ -183,7 +178,49 @@ function ItemLine({ theme, item, owner, compact }: { theme: Theme; item: ClearIt
   );
 }
 
-const ITEMS_SHOWN = 6;
+const TABLE_PAGE = 25;
+const WORKSPACE_COLUMNS: readonly ResourceColumn[] = [
+  { id: "name", label: "Workspace / project", weight: 2.5, sortable: true },
+  { id: "state", label: "Status", weight: 1.3 },
+  { id: "disk", label: "Total disk", sortable: true },
+  { id: "reclaimable", label: "Reclaimable", sortable: true },
+  { id: "running", label: "Running", sortable: true },
+  { id: "actions", label: "Actions", weight: 1.2 },
+];
+const ITEM_COLUMNS: readonly ResourceColumn[] = [
+  { id: "name", label: "Name / path", weight: 3, sortable: true },
+  { id: "type", label: "Type / group", weight: 2 },
+  { id: "size", label: "Size", sortable: true },
+  { id: "actions", label: "Actions", weight: 1.5 },
+];
+const OUTPUT_COLUMNS = ITEM_COLUMNS.filter((column) => column.id !== "actions");
+function TablePages({ theme, count, page, onPage }: { theme: Theme; count: number; page: number; onPage(page: number): void }) {
+  return <Row><Meta theme={theme}>{`${count ? page * TABLE_PAGE + 1 : 0}–${Math.min(count, (page + 1) * TABLE_PAGE)} of ${count}`}</Meta>
+    {page > 0 ? <Button theme={theme} label="Previous page" onPress={() => onPage(page - 1)} /> : null}
+    {(page + 1) * TABLE_PAGE < count ? <Button theme={theme} label="Next page" onPress={() => onPage(page + 1)} /> : null}
+  </Row>;
+}
+
+/** Search only the last measured output list; it never initiates a disk check. */
+function BuildOutputList({ theme, items, owner, compact }: { theme: Theme; items: readonly ClearItem[]; owner: string | null; compact: boolean }) {
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<ResourceSort<ItemSort>>({ id: "size", direction: "desc" });
+  const [page, setPage] = useState(0);
+  const rows = itemTableRows(items, search, sort);
+  const shownPage = Math.min(page, Math.max(0, Math.ceil(rows.length / TABLE_PAGE) - 1));
+  return <View style={{ gap: SPACE.sm }}>
+    {items.length > 3 ? <ResourceToolbar theme={theme} label="Search build outputs" search={search} onSearch={(text) => { setSearch(text); setPage(0); }} /> : null}
+    <ResourceTable compact={compact}>{(narrow) => <>
+      <ResourceHeader theme={theme} columns={OUTPUT_COLUMNS} compact={narrow} sort={sort} onSort={(id) => { setSort(nextResourceSort(sort, id as ItemSort)); setPage(0); }} />
+      {rows.slice(shownPage * TABLE_PAGE, (shownPage + 1) * TABLE_PAGE).map((item) => <View key={item.path ?? item.where} style={{ paddingVertical: SPACE.sm }}><ResourceCells theme={theme} columns={OUTPUT_COLUMNS} compact={narrow} cells={{
+        name: <ItemLine theme={theme} item={item} owner={owner} compact={narrow} />,
+        type: <Meta theme={theme}>{item.what}</Meta>, size: <Note theme={theme}>{size(item.bytes, item.partial)}</Note>,
+      }} /></View>)}
+    </>}</ResourceTable>
+    {!rows.length ? <Note theme={theme}>No build outputs match. Clear the search to see the measured folders.</Note> : null}
+    {rows.length > TABLE_PAGE ? <TablePages theme={theme} count={rows.length} page={shownPage} onPage={setPage} /> : null}
+  </View>;
+}
 
 /** One workspace folder: its row's summary says it all; opening shows where, what's in it, and Ask an agent. */
 /** What a workspace is running now (0.16.0), from the same list as Processes: heaviest first, each with ask-first Stop. */
@@ -222,127 +259,130 @@ export function WorkspaceRow({ theme, compact, workspace, checking, processes = 
   theme: Theme; compact: boolean; workspace: WorkspaceUsage; checking: boolean;
   processes?: readonly ProcessRow[]; say?: Say; onDelete?(tokens: string[]): void; job?: DiskJob | null;
 }) {
+  const [open, setOpen] = useState(false);
   const linked = workspace.state !== "unlinked";
   const title = linked ? `${workspace.names[0]}${workspace.names.length > 1 ? ` +${workspace.names.length - 1}` : ""}` : "Not linked to a workspace";
   const label = workspace.names[0] ?? friendlyPath(workspace.folder).label;
-  const summary = [
-    stateWords(workspace.state, workspace.activeAt),
-    workspace.measured === false ? (checking ? "Checking…" : "Size not checked yet") : size(workspace.totalBytes, workspace.partial),
-    processes.length ? `${processes.length} running` : null,
-  ].filter(Boolean).join(" · ");
-  const shown = workspace.items.slice(0, ITEMS_SHOWN), more = workspace.items.slice(ITEMS_SHOWN);
   const tokens = workspace.items.filter((item) => item.safe && item.token).map((item) => item.token!);
   const deletable = workspace.items.filter((item) => item.safe && item.token).reduce((sum, item) => sum + frees(item), 0);
   return (
-    <AccordionItem theme={theme} compact={compact} icon={STATE_ICON[workspace.state]} title={title} summary={summary} tone={workspace.state === "failed" ? "warning" : undefined}>
-      <View style={{ gap: SPACE.xs }}>
-        <Meta theme={theme}>{[stateWords(workspace.state, workspace.activeAt), workspace.branch ? `branch ${workspace.branch}` : null, workspace.project ? `project ${workspace.project}` : null, workspace.worktree ? "a Paseo worktree" : null].filter(Boolean).join(" · ")}</Meta>
-        {workspace.names.length > 1 ? <Meta theme={theme}>{`Used by ${workspace.names.length} workspaces: ${workspace.names.join(", ")}`}</Meta> : null}
-        <PathLabel theme={theme} compact={compact} prefix="Folder " label={friendlyPath(workspace.folder).label} />
-        <PathDetails theme={theme} full={workspace.path ?? workspace.folder} />
-      </View>
-      <View style={{ gap: SPACE.sm }}>
-        <ItemTitle theme={theme}>{processes.length ? `Running here · ${processes.length}` : "Running here"}</ItemTitle>
-        <RunningHere theme={theme} rows={processes} say={say} />
-      </View>
-      <View style={{ gap: SPACE.sm }}>
-        <ItemTitle theme={theme}>{workspace.measured === false ? "Disk" : `Disk · ${size(workspace.totalBytes, workspace.partial)}`}</ItemTitle>
-        {workspace.busy ? <Note theme={theme} tone="warning">{workspace.busy}</Note> : null}
-        {!linked && workspace.worktree ? (
-          <View style={{ gap: SPACE.sm }}>
-            <Note theme={theme}>No Paseo workspace uses this worktree any more, probably because its workspace was archived. It may hold work that isn't pushed, so an agent should check it before it's removed.</Note>
-            <Row><AskAgentButton theme={theme} subject={{ kind: "folder", id: workspace.id }} /></Row>
-          </View>
-        ) : null}
-        {workspace.skipped ? <Meta theme={theme}>The last check ran out of time before it reached this folder. Press Refresh at the top to check again.</Meta> : null}
-        {workspace.items.length ? (
-          <View style={{ gap: SPACE.row }}>
-            {shown.map((item, index) => <ItemLine key={`${item.where}-${index}`} theme={theme} item={item} owner={workspace.names[0] ?? null} compact={compact} />)}
-            {more.length ? (
-              <Disclosure theme={theme} label={`${more.length} more`} quiet>
-                <View style={{ gap: SPACE.row }}>{more.map((item, index) => <ItemLine key={`more-${item.where}-${index}`} theme={theme} item={item} owner={workspace.names[0] ?? null} compact={compact} />)}</View>
-              </Disclosure>
-            ) : null}
-          </View>
-        ) : workspace.measured === false ? (checking ? <Meta theme={theme}>Checking this folder…</Meta> : null) : <Meta theme={theme}>No build files, installed packages or test reports here.</Meta>}
-        {tokens.length && onDelete && !workspace.busy ? (
-          <View style={{ gap: SPACE.xs }}>
-            <Row>
-              <Button theme={theme} label={`Delete ${tokens.length} folder${tokens.length === 1 ? "" : "s"} (${formatSize(deletable)})…`} icon="Trash2" danger accessibilityLabel={`Delete ${tokens.length} build folder${tokens.length === 1 ? "" : "s"} in ${label}. Shows a warning first.`} onPress={() => onDelete(tokens)} />
-              <AskAgentButton theme={theme} subject={{ kind: "cleanup", id: workspace.id }} label="Ask an agent instead" />
-            </Row>
-            <Meta theme={theme}>Shows exactly what goes, checked again just before, and asks first. Only folders a tool makes and manages are deleted; ask an agent about the rest.</Meta>
-          </View>
-        ) : (workspace.clearableBytes > 0 || workspace.items.some((item) => item.askOnly && item.bytes > 0)) && !workspace.busy ? (
-          <View style={{ gap: SPACE.xs }}>
-            <Row><AskAgentButton theme={theme} subject={{ kind: "cleanup", id: workspace.id }} label="Ask an agent to clean this up" /></Row>
-            <Meta theme={theme}>{AGENT_PROMISE}</Meta>
-          </View>
-        ) : null}
-        <ClearResults theme={theme} job={job} workspace={label} />
-      </View>
-    </AccordionItem>
+    <View style={{ borderBottomWidth: 1, borderColor: theme.colors.border, paddingVertical: SPACE.row, gap: SPACE.row }}>
+      <ResourceCells theme={theme} columns={WORKSPACE_COLUMNS} compact={compact} cells={{
+        name: <View style={{ gap: SPACE.xs, minWidth: 0 }}><ItemTitle theme={theme}>{title}</ItemTitle>
+          {workspace.project ? <Meta theme={theme}>{workspace.project}</Meta> : null}
+          <PathLabel theme={theme} compact={compact} label={friendlyPath(workspace.folder).label} />
+        </View>,
+        state: <Meta theme={theme}>{stateWords(workspace.state, workspace.activeAt)}</Meta>,
+        disk: <Note theme={theme}>{workspace.measured === false ? checking ? "Checking…" : "Not checked" : size(workspace.totalBytes, workspace.partial)}</Note>,
+        reclaimable: <Note theme={theme}>{workspace.measured === false ? "Not checked" : size(workspace.clearableBytes, workspace.partial)}</Note>,
+        running: <Note theme={theme}>{String(processes.length)}</Note>,
+        actions: <Row><Button theme={theme} label={open ? "Hide details" : "Details"} accessibilityLabel={`${open ? "Hide details" : "Details"} for ${label}`} onPress={() => setOpen(!open)} /></Row>,
+      }} />
+      {open ? <View style={{ gap: SPACE.row }}>
+        <View style={{ gap: SPACE.xs }}>
+          <Meta theme={theme}>{[stateWords(workspace.state, workspace.activeAt), workspace.branch ? `branch ${workspace.branch}` : null, workspace.project ? `project ${workspace.project}` : null, workspace.worktree ? "a Paseo worktree" : null].filter(Boolean).join(" · ")}</Meta>
+          {workspace.names.length > 1 ? <Meta theme={theme}>{`Used by ${workspace.names.length} workspaces: ${workspace.names.join(", ")}`}</Meta> : null}
+          <PathLabel theme={theme} compact={compact} prefix="Folder " label={friendlyPath(workspace.folder).label} />
+          <PathDetails theme={theme} full={workspace.path ?? workspace.folder} />
+        </View>
+        <View style={{ gap: SPACE.sm }}>
+          <ItemTitle theme={theme}>{processes.length ? `Running here · ${processes.length}` : "Running here"}</ItemTitle>
+          <RunningHere theme={theme} rows={processes} say={say} />
+        </View>
+        <View style={{ gap: SPACE.sm }}>
+          <ItemTitle theme={theme}>{workspace.measured === false ? "Disk" : `Disk · ${size(workspace.totalBytes, workspace.partial)}`}</ItemTitle>
+          {workspace.busy ? <Note theme={theme} tone="warning">{workspace.busy}</Note> : null}
+          {!linked && workspace.worktree ? (
+            <View style={{ gap: SPACE.sm }}>
+              <Note theme={theme}>No Paseo workspace uses this worktree any more, probably because its workspace was archived. It may hold work that isn't pushed, so an agent should check it before it's removed.</Note>
+              <Row><AskAgentButton theme={theme} subject={{ kind: "folder", id: workspace.id }} /></Row>
+            </View>
+          ) : null}
+          {workspace.skipped ? <Meta theme={theme}>The last check ran out of time before it reached this folder. Press Refresh at the top to check again.</Meta> : null}
+          {workspace.items.length ? (
+            <BuildOutputList theme={theme} items={workspace.items} owner={workspace.names[0] ?? null} compact={compact} />
+          ) : workspace.measured === false ? (checking ? <Meta theme={theme}>Checking this folder…</Meta> : null) : <Meta theme={theme}>No build files, installed packages or test reports here.</Meta>}
+          {tokens.length && onDelete && !workspace.busy ? (
+            <View style={{ gap: SPACE.xs }}>
+              <Row>
+                <Button theme={theme} label={`Delete ${tokens.length} folder${tokens.length === 1 ? "" : "s"} (${formatSize(deletable)})…`} icon="Trash2" danger accessibilityLabel={`Delete ${tokens.length} build folder${tokens.length === 1 ? "" : "s"} in ${label}. Shows a warning first.`} onPress={() => onDelete(tokens)} />
+                <AskAgentButton theme={theme} subject={{ kind: "cleanup", id: workspace.id }} label="Ask an agent instead" />
+              </Row>
+              <Meta theme={theme}>Shows exactly what goes, checked again just before, and asks first. Only folders a tool makes and manages are deleted; ask an agent about the rest.</Meta>
+            </View>
+          ) : (workspace.clearableBytes > 0 || workspace.items.some((item) => item.askOnly && item.bytes > 0)) && !workspace.busy ? (
+            <View style={{ gap: SPACE.xs }}>
+              <Row><AskAgentButton theme={theme} subject={{ kind: "cleanup", id: workspace.id }} label="Ask an agent to clean this up" /></Row>
+              <Meta theme={theme}>{AGENT_PROMISE}</Meta>
+            </View>
+          ) : null}
+          <ClearResults theme={theme} job={job} workspace={label} />
+        </View>
+      </View> : null}
+    </View>
   );
 }
 
-const CACHE_ITEMS_SHOWN = 5;
-
-function CacheLine({ theme, item, compact }: { theme: Theme; item: ClearItem; compact: boolean }) {
-  const [open, setOpen] = React.useState(false);
-  return (
-    <View style={{ gap: SPACE.xs }}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.row, flexWrap: "wrap" }}>
-        <Pressable accessibilityRole="button" accessibilityLabel={`${item.name}, ${size(item.bytes, item.partial)}. ${open ? "Hide" : "Show"} where it is`} onPress={() => setOpen(!open)} style={{ flex: 1, minWidth: 200, gap: SPACE.hair }}>
-          <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>{`${item.name} · ${size(item.bytes, item.partial)}`}</Text>
-          <Meta theme={theme}>{item.what}</Meta>
-          <PathLabel theme={theme} compact={compact} label={item.where} />
-        </Pressable>
-        {item.askId ? <AskAgentButton theme={theme} subject={{ kind: "folder", id: item.askId }} /> : null}
-      </View>
-      {open ? <PathDetails theme={theme} full={item.path ?? item.where} /> : null}
-    </View>
-  );
+function CacheLine({ theme, item, group, compact }: { theme: Theme; item: ClearItem; group: string; compact: boolean }) {
+  const [open, setOpen] = useState(false);
+  return <View style={{ borderBottomWidth: 1, borderColor: theme.colors.border, paddingVertical: SPACE.row, gap: SPACE.sm }}>
+    <ResourceCells theme={theme} columns={ITEM_COLUMNS} compact={compact} cells={{
+      name: <View style={{ gap: SPACE.xs, minWidth: 0 }}>
+        <Pressable accessibilityRole="button" accessibilityLabel={`${item.name}. ${open ? "Hide" : "Show"} full path`} onPress={() => setOpen(!open)}><ItemTitle theme={theme}>{item.name}</ItemTitle></Pressable>
+        <PathLabel theme={theme} compact={compact} label={item.where} />
+        {item.blocked ? <Meta theme={theme}>{item.blocked}</Meta> : null}
+      </View>,
+      type: <View><Meta theme={theme}>{item.what}</Meta><Meta theme={theme}>{group}</Meta></View>,
+      size: <View><Note theme={theme}>{size(item.bytes, item.partial)}</Note>{item.sharedBytes > 0 ? <Meta theme={theme}>{`${formatSize(item.sharedBytes)} shared; about ${formatSize(frees(item))} reclaimable`}</Meta> : null}</View>,
+      actions: item.askId ? <Row><AskAgentButton theme={theme} subject={{ kind: "folder", id: item.askId }} /></Row> : <Meta theme={theme}>Ask about shared caches below</Meta>,
+    }} />
+    {open ? <View style={{ gap: SPACE.xs }}><PathDetails theme={theme} full={item.path ?? item.where} /><Meta theme={theme}>{item.cost}</Meta></View> : null}
+  </View>;
 }
 export function CacheList({ theme, groups, compact = false }: { theme: Theme; groups: readonly CacheGroup[]; compact?: boolean }) {
-  if (!groups.length) return <Meta theme={theme}>No shared caches or leftovers were found.</Meta>;
-  return (
-    <View style={{ gap: SPACE.section }}>
-      {groups.map((group) => {
-        const shown = group.items.slice(0, CACHE_ITEMS_SHOWN), more = group.items.slice(CACHE_ITEMS_SHOWN);
-        return (
-          <View key={group.id} style={{ gap: SPACE.row }}>
-            <ItemTitle theme={theme}>{`${group.title} · ${formatSize(group.totalBytes)}${group.items.length > 1 ? ` · ${group.items.length} items` : ""}`}</ItemTitle>
-            {shown.map((item, index) => <CacheLine key={`${item.where}-${index}`} theme={theme} item={item} compact={compact} />)}
-            {more.length ? (
-              <Disclosure theme={theme} label={`${more.length} more`} quiet>
-                <View style={{ gap: SPACE.row }}>{more.map((item, index) => <CacheLine key={`more-${item.where}-${index}`} theme={theme} item={item} compact={compact} />)}</View>
-              </Disclosure>
-            ) : null}
-          </View>
-        );
-      })}
-      <View style={{ gap: SPACE.xs }}>
-        <Row><AskAgentButton theme={theme} subject={{ kind: "cleanup", id: "caches" }} label="Ask an agent to clean these up" /></Row>
-        <Meta theme={theme}>An agent will use npm's and pnpm's own clean commands, check what's still needed or in use, and tell you what it freed. You see the message before it's sent.</Meta>
-      </View>
-    </View>
-  );
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [sort, setSort] = useState<ResourceSort<ItemSort>>({ id: "size", direction: "desc" });
+  const [page, setPage] = useState(0);
+  const rows = cacheTableRows(groups, search, filter, sort);
+  const shownPage = Math.min(page, Math.max(0, Math.ceil(rows.length / TABLE_PAGE) - 1));
+  if (!groups.length) return <Meta theme={theme}>No shared caches or leftovers were found. Refresh checks disk space when you need a new measurement.</Meta>;
+  return <View style={{ gap: SPACE.row }}>
+    <ResourceToolbar theme={theme} label="Search caches and temporary files" search={search} onSearch={(text) => { setSearch(text); setPage(0); }} filter={filter} onFilter={(id) => { setFilter(id); setPage(0); }}
+      filters={[{ id: "all", label: "All groups and types" }, ...groups.map((group) => ({ id: group.id, label: group.title })), ...[...new Set(groups.flatMap((group) => group.items.map((item) => item.what)))].map((type) => ({ id: `type:${type}`, label: type }))]} />
+    <ResourceTable compact={compact}>{(narrow) => <>
+      <ResourceHeader theme={theme} columns={ITEM_COLUMNS} compact={narrow} sort={sort} onSort={(id) => { setSort(nextResourceSort(sort, id as ItemSort)); setPage(0); }} />
+      {rows.slice(shownPage * TABLE_PAGE, (shownPage + 1) * TABLE_PAGE).map(({ group, item }) => <CacheLine key={`${group.id}:${item.path ?? item.where}`} theme={theme} item={item} group={group.title} compact={narrow} />)}
+    </>}</ResourceTable>
+    {!rows.length ? <Note theme={theme}>No measured entries match these filters. Clear the search or choose All groups and types.</Note> : null}
+    <TablePages theme={theme} count={rows.length} page={shownPage} onPage={setPage} />
+    {groups.filter((group) => !group.items.length).map((group) => <Meta key={group.id} theme={theme}>{`${group.title}: ${formatSize(group.totalBytes)} total; no individual entries measured.`}</Meta>)}
+    <Row><AskAgentButton theme={theme} subject={{ kind: "cleanup", id: "caches" }} label="Ask an agent to clean these up" /></Row>
+    <Meta theme={theme}>An agent will use npm's and pnpm's own clean commands, check what's still needed or in use, and tell you what it freed. You see the message before it's sent.</Meta>
+  </View>;
 }
 
-/** The list of workspace rows, biggest first, with a plain heading line. */
+/** Search and sort the last disk report without starting another scan. */
 export function WorkspaceList({ theme, compact, report, processes = [], say, onDelete, job = null }: { theme: Theme; compact: boolean; report: DiskReport | undefined; processes?: readonly ProcessRow[]; say?: Say; onDelete?(tokens: string[]): void; job?: DiskJob | null }) {
-  const rows = report?.workspaces ?? [];
-  if (!rows.length) return null;
-  return (
-    <View style={{ gap: SPACE.sm }}>
-      <SectionTitle theme={theme} icon="FolderTree">Workspaces, biggest first</SectionTitle>
-      <Accordion theme={theme}>
-        {rows.map((workspace) => <WorkspaceRow key={workspace.id} theme={theme} compact={compact} workspace={workspace} checking={report?.scan.state === "running"} processes={runningIn(processes, workspace)} say={say} onDelete={onDelete} job={job} />)}
-      </Accordion>
-    </View>
-  );
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [sort, setSort] = useState<ResourceSort<WorkspaceSort>>({ id: "disk", direction: "desc" });
+  const [page, setPage] = useState(0);
+  const rows = workspaceTableRows(report?.workspaces ?? [], processes, search, filter, sort);
+  const shownPage = Math.min(page, Math.max(0, Math.ceil(rows.length / TABLE_PAGE) - 1));
+  if (!report?.workspaces.length) return null;
+  return <View style={{ gap: SPACE.sm }}>
+    <SectionTitle theme={theme} icon="FolderTree">Workspaces</SectionTitle>
+    <ResourceToolbar theme={theme} label="Search workspaces, projects, branches or paths" search={search} onSearch={(text) => { setSearch(text); setPage(0); }} filter={filter} onFilter={(id) => { setFilter(id); setPage(0); }}
+      filters={[{ id: "all", label: "All statuses" }, ...["working", "waiting", "failed", "idle", "unlinked"].map((id) => ({ id, label: id.charAt(0).toUpperCase() + id.slice(1) }))]} />
+    <ResourceTable compact={compact}>{(narrow) => <>
+      <ResourceHeader theme={theme} columns={WORKSPACE_COLUMNS} compact={narrow} sort={sort} onSort={(id) => { setSort(nextResourceSort(sort, id as WorkspaceSort)); setPage(0); }} />
+      {rows.slice(shownPage * TABLE_PAGE, (shownPage + 1) * TABLE_PAGE).map(({ workspace, processes: running }) => <WorkspaceRow key={workspace.id} theme={theme} compact={narrow} workspace={workspace} checking={report.scan.state === "running"} processes={running} say={say} onDelete={onDelete} job={job} />)}
+    </>}</ResourceTable>
+    {!rows.length ? <Note theme={theme}>No workspaces match. Clear the search or choose All statuses. Search uses the last disk check.</Note> : null}
+    <TablePages theme={theme} count={rows.length} page={shownPage} onPage={setPage} />
+  </View>;
 }
-
 
 /**
  * Follows a clear the person started (0.16.0) and says how it went: a toast

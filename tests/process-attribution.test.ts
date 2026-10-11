@@ -193,6 +193,23 @@ describe("process decisions and grouping", () => {
     expect(kills).not.toHaveBeenCalled();
   });
 
+  it.each([null, ID])("manually stops ordinary no-chat or archived-chat work (%s) with the extra warning", async (agentId) => {
+    const { manager, adapter, kills, api, scope } = await setup();
+    // Simulate archiving: the previously known chat disappears from the live registry.
+    if (agentId) {
+      expect(scope.agent(agentId)).not.toBeNull();
+      api.agents.list.mockResolvedValue({ entries: [], pageInfo: { hasMore: false, nextCursor: null } });
+      await scope.refresh(true);
+    }
+    adapter.processes = [proc({ pid: 42, ppid: 1, cwd: "/tmp/clone", agentId })];
+    const row = (await manager.report({ filter: "no-chat" }, async () => [])).processes[0]!;
+    expect(row).toMatchObject({ chat: null, stoppable: true, outsidePaseo: true });
+    expect((await manager.preview([row.actionToken!])).targets[0]).toMatchObject({ ok: true, outsidePaseo: true });
+    expect(kills).not.toHaveBeenCalled();
+    expect((await manager.stop([row.actionToken!])).results[0]?.ok).toBe(true);
+    expect(kills).toHaveBeenCalledWith(42, "SIGTERM");
+  });
+
   it("warns before manually stopping a workspace process without daemon ancestry", async () => {
     const { manager, adapter, kills } = await setup();
     adapter.processes = [proc({ pid: 42, ppid: 1, cwd: "/home/alice/app" })];

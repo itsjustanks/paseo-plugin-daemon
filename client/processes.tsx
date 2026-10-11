@@ -1,35 +1,43 @@
 import { CancelButton, DangerLine, DestructiveButton, errorText, useCopy, useOnce, Sheet } from "./feedback";
-import React, { useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, Text, TextInput, View } from "react-native";
+import React, { useEffect, useMemo, useState } from "react";
+import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc } from "@getpaseo/plugin/client";
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
-import { OUTSIDE_PASEO_WARNING, chatAttribution, chatGroups, ownerGroup, processDetails, processGroups, processPreview, processReport, processStop, sameness, twinKeys, type ActionLogEntry, type ProcessReport, type ProcessRow, type ReportSort, type StopPlan } from "../shared/processes";
-import { Accordion, AccordionItem, Banner, Button, Card, Chip, Divider, HostIcon, ItemTitle, Meta, Note, QuietLine, RADIUS, Row, SPACE, TYPE, tint, toneColor, type Tone } from "./kit";
+import { OUTSIDE_PASEO_WARNING, chatAttribution, processActionKey, processDetails, processPreview, processReport, processStop, STOP_BATCH_MAX, type ActionLogEntry, type ProcessReport, type ProcessRow, type ReportSort, type StopPlan } from "../shared/processes";
+import { Accordion, AccordionItem, Banner, Button, Card, Divider, HostIcon, ItemTitle, Meta, Note, QuietLine, RADIUS, Row, SPACE, TYPE, tint, toneColor, type Tone } from "./kit";
 import { formatBytes, formatDuration, formatPercent } from "./ui";
 import { AskAgentButton, OpenChatButton } from "./ask";
 import { PathDetails, PathLabel } from "./paths";
 import { StopProcess, StuckPlugins } from "./guard";
+import { nextResourceSort, type ResourceSort } from "../shared/resource-table";
+import { ResourceCells, ResourceHeader, ResourceTable, ResourceToolbar, type ResourceColumn } from "./resource-table";
 import type { HealthIssue } from "../shared/health";
 
 import { HousekeepingSection } from "./housekeeping";
 
 type Theme = PluginTheme;
 export type Say = (message: { text: string; tone: Tone } | null) => void;
-type Filter = "all" | "jobs" | "stoppable";
+type Filter = "all" | "jobs" | "stoppable" | "protected" | "known-chat" | "no-chat" | "attention";
 
 const PAGE = 25;
 const POLL_MS = 5000;
-/** 0.15.0: highest first, memory by default; flagged rows stay pinned on top. */
-const SORTS: ReadonlyArray<{ id: ReportSort; label: string }> = [
-  { id: "memory", label: "Memory" },
-  { id: "cpu", label: "CPU" },
+export const PROCESS_COLUMNS: readonly ResourceColumn[] = [
+  { id: "name", label: "Process / PID", weight: 1.8, sortable: true },
+  { id: "attribution", label: "Workspace / chat", weight: 2 },
+  { id: "memory", label: "Memory", sortable: true },
+  { id: "cpu", label: "CPU", sortable: true },
+  { id: "age", label: "Running", sortable: true },
+  { id: "actions", label: "Actions", weight: 1.4 },
 ];
-const SORTED: Record<ReportSort, string> = { cpu: "Most CPU first", memory: "Most memory first", age: "Running longest first", name: "By name" };
 const FILTERS: ReadonlyArray<{ id: Filter; label: string }> = [
   { id: "all", label: "Everything" },
   { id: "jobs", label: "Heavy jobs" },
   { id: "stoppable", label: "Can stop here" },
+  { id: "protected", label: "Protected" },
+  { id: "known-chat", label: "Known chat" },
+  { id: "no-chat", label: "No chat" },
+  { id: "attention", label: "Needs attention" },
 ];
 const JOB_WORD: Record<NonNullable<ProcessRow["job"]>["kind"], string> = { "dev-server": "Dev server", build: "Build", test: "Tests", typecheck: "Type check", install: "Install" };
 
@@ -117,23 +125,6 @@ function RunawayBanner({ theme, report, say, onDone, onJobs }: { theme: Theme; r
   );
 }
 
-function Pills<Id extends string>({ theme, label, items, value, onChange }: { theme: Theme; label: string; items: ReadonlyArray<{ id: Id; label: string }>; value: Id; onChange(id: Id): void }) {
-  return (
-    <View accessibilityRole="tablist" accessibilityLabel={label} style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: SPACE.sm }}>
-      <Text style={{ ...TYPE.secondary, color: theme.colors.foregroundMuted, width: 56 }}>{label}</Text>
-      {items.map((item) => {
-        const selected = item.id === value;
-        return (
-          <Pressable key={item.id} accessibilityRole="tab" accessibilityLabel={`${label}: ${item.label}`} accessibilityState={{ selected }} onPress={() => onChange(item.id)}
-            style={{ borderRadius: RADIUS.pill, borderWidth: 1, borderColor: selected ? theme.colors.accent : theme.colors.border, backgroundColor: selected ? tint(theme.colors.accent, 0.12) ?? theme.colors.surface2 : "transparent", paddingHorizontal: SPACE.row, paddingVertical: SPACE.xs + SPACE.hair }}>
-            <Text style={{ ...TYPE.secondary, color: selected ? theme.colors.accent : theme.colors.foreground, fontWeight: selected ? "700" : "500" }}>{item.label}</Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
 const CHECK_SIZE = 22;
 
 function Check({ theme, checked, label, onPress }: { theme: Theme; checked: boolean; label: string; onPress(): void }) {
@@ -145,50 +136,40 @@ function Check({ theme, checked, label, onPress }: { theme: Theme; checked: bool
   );
 }
 
-function Stat({ theme, label, value, tone }: { theme: Theme; label: string; value: string; tone?: Tone }) {
-  return (
-    <View style={{ minWidth: 72 }}>
-      <Text style={{ ...TYPE.secondary, color: tone && tone !== "neutral" ? toneColor(theme, tone) : theme.colors.foreground, fontWeight: "600", fontVariant: ["tabular-nums"] }}>{value}</Text>
-      <Text style={{ ...TYPE.small, color: theme.colors.foregroundMuted }}>{label}</Text>
-    </View>
-  );
-}
-
-/** One process: name, what it is, whose it is, its figures; details and the stop control behind a press. */
-export function ProcessItem({ theme, hostId, row, compact, byTree, selected, onSelect, onStop, first, twin }: { theme: Theme; hostId?: string; row: ProcessRow; compact: boolean; byTree: boolean; selected: boolean; onSelect(): void; onStop(): void; first: boolean; twin: boolean }) {
+/** Flat resource row with a visible, ask-first Stop and details kept folded. */
+export function ProcessItem({ theme, hostId, row, compact, byTree, selected, onSelect, onStop, first, busy = false }: { theme: Theme; hostId?: string; row: ProcessRow; compact: boolean; byTree: boolean; selected: boolean; onSelect(): void; onStop(): void; first: boolean; twin: boolean; busy?: boolean }) {
   const [open, setOpen] = useState(false);
   const copy = useCopy();
-  const flagged = row.flags.length > 0;
   const cpu = byTree ? row.tree.cpuPercent : row.cpuPercent;
   const rss = byTree ? row.tree.rssBytes : row.rssBytes;
   const tag = row.job ? JOB_WORD[row.job.kind] : null;
   return (
     <View style={{ borderTopWidth: first ? 0 : 1, borderColor: theme.colors.border, paddingVertical: SPACE.row, gap: SPACE.sm }}>
-      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: SPACE.row }}>
-        {row.stoppable ? <Check theme={theme} checked={selected} label={`Select ${row.name} (PID ${row.pid}) to stop`} onPress={onSelect} /> : <View style={{ width: CHECK_SIZE }} />}
-        <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} accessibilityLabel={`${row.name}, PID ${row.pid}. ${open ? "Hide" : "Show"} details`} onPress={() => setOpen(!open)}
-          style={{ flex: 1, flexDirection: compact ? "column" : "row", alignItems: compact ? "stretch" : "center", gap: SPACE.sm }}>
-          <View style={{ flex: 1, gap: SPACE.hair, minWidth: 0 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: SPACE.sm }}>
-              <ItemTitle theme={theme}>{row.name}</ItemTitle>
-              {row.owner.project ? <Chip theme={theme} label={ownerGroup(row.owner)} tone="neutral" /> : null}
-              {tag ? <Chip theme={theme} label={byTree && row.tree.count > 1 ? `${tag} · ${row.tree.count} processes` : tag} tone={flagged ? "warning" : "neutral"} /> : flagged ? <Chip theme={theme} label="Needs attention" tone="warning" /> : null}
-            </View>
-            <Meta theme={theme}>{row.owner.label}{row.ports.length ? ` · ${row.ports.map((port) => `:${port}`).join(" ")}` : ""}{twin ? ` · PID ${row.pid}` : ""}</Meta>
-            <Meta theme={theme}>{chatAttribution(row)}</Meta>
-            {!row.stoppable ? <Text style={{ ...TYPE.secondary, color: theme.colors.foreground }}>{row.protectedReason ?? "It can't be stopped here."}</Text> : null}
-            {row.flags.map((flag) => <Text key={flag.code} style={{ ...TYPE.secondary, color: toneColor(theme, "warning") }}>{flag.text}</Text>)}
+      <ResourceCells theme={theme} columns={PROCESS_COLUMNS} compact={compact} cells={{
+        name: <View style={{ flexDirection: "row", gap: SPACE.sm, minWidth: 0 }}>
+          {row.stoppable && row.actionToken ? <Check theme={theme} checked={selected} label={`Select ${row.name} (PID ${row.pid}) to stop`} onPress={onSelect} /> : null}
+          <View style={{ flex: 1, minWidth: 0, gap: SPACE.xs }}>
+            <Pressable accessibilityRole="button" accessibilityState={{ expanded: open }} accessibilityLabel={`${row.name}, PID ${row.pid}. ${open ? "Hide" : "Show"} details`} onPress={() => setOpen(!open)}>
+              <ItemTitle theme={theme}>{row.name}</ItemTitle><Meta theme={theme}>{`PID ${row.pid}`}</Meta>
+            </Pressable>
+            {tag ? <Meta theme={theme}>{byTree && row.tree.count > 1 ? `${tag} · ${row.tree.count} processes` : tag}</Meta> : null}
+            {row.ports.length ? <Meta theme={theme}>{row.ports.map((port) => `:${port}`).join(" ")}</Meta> : null}
+            {row.flags.map((flag) => <Text key={flag.code} style={{ ...TYPE.small, color: toneColor(theme, "warning") }}>{flag.text}</Text>)}
           </View>
-          <View style={{ flexDirection: "row", gap: SPACE.row, flexWrap: "wrap" }}>
-            <Stat theme={theme} label="CPU" value={cpu === null ? "…" : formatPercent(cpu)} tone={row.hotSeconds >= 120 ? "warning" : undefined} />
-            <Stat theme={theme} label="Memory" value={formatBytes(rss)} tone={row.flags.some((flag) => flag.code === "memory-heavy") ? "warning" : undefined} />
-            <Stat theme={theme} label="Running" value={formatDuration(row.ageSeconds)} />
-          </View>
-        </Pressable>
-      </View>
-      {row.chat ? <Row><OpenChatButton theme={theme} agentId={row.chat.id} hostId={hostId} /></Row> : null}
+        </View>,
+        attribution: <View style={{ gap: SPACE.xs, minWidth: 0 }}>
+          <Meta theme={theme}>{row.owner.project ? ownerGroup(row.owner) : row.owner.label}</Meta>
+          <Meta theme={theme}>{chatAttribution(row)}</Meta>
+          {row.chat ? <Row><OpenChatButton theme={theme} agentId={row.chat.id} hostId={hostId} /></Row> : null}
+        </View>,
+        memory: <Note theme={theme}>{formatBytes(rss)}</Note>,
+        cpu: <Note theme={theme}>{cpu === null ? "Measuring…" : formatPercent(cpu)}</Note>,
+        age: <Note theme={theme}>{formatDuration(row.ageSeconds)}</Note>,
+        actions: row.stoppable ? <Row><Button theme={theme} label="Stop…" icon="OctagonX" danger busy={busy} disabled={!row.actionToken || busy} accessibilityLabel={`Stop ${row.name} (PID ${row.pid})…`} onPress={onStop} /></Row>
+          : <Meta theme={theme}>{row.protectedReason ?? "Protected: it can't be stopped here."}</Meta>,
+      }} />
       {open ? (
-        <View style={{ paddingLeft: CHECK_SIZE + SPACE.row, gap: SPACE.sm }}>
+        <View style={{ paddingLeft: compact ? 0 : CHECK_SIZE + SPACE.row, gap: SPACE.sm }}>
           <View style={{ backgroundColor: theme.colors.surface0, borderColor: theme.colors.border, borderWidth: 1, borderRadius: RADIUS.control, padding: SPACE.row }}>
             <Text selectable style={{ ...TYPE.mono, color: theme.colors.foreground }}>{row.command}</Text>
           </View>
@@ -197,7 +178,6 @@ export function ProcessItem({ theme, hostId, row, compact, byTree, selected, onS
           {row.cwdPath ?? row.cwd ? <PathDetails theme={theme} full={(row.cwdPath ?? row.cwd)!} /> : null}
           <Row>
             {row.flags.length ? <AskAgentButton theme={theme} subject={{ kind: "process", pid: row.pid }} /> : null}
-            {row.stoppable ? <Button theme={theme} label="Stop…" icon="OctagonX" danger accessibilityLabel={`Stop ${row.name} (PID ${row.pid})…`} onPress={onStop} /> : null}
             <Button theme={theme} label="Copy details" icon="Copy" accessibilityLabel={`Copy details of ${row.name} (PID ${row.pid})`} onPress={() => void copy(processDetails(row), "Details copied")} />
           </Row>
         </View>
@@ -267,10 +247,6 @@ export function StopSheet({ theme, plan, busy, onCancel, onConfirm }: { theme: T
   );
 }
 
-function HostIconOrDot({ theme, name }: { theme: Theme; name: string }) {
-  return HostIcon ? <HostIcon name={name} size={16} color={theme.colors.foregroundMuted} /> : null;
-}
-
 /** "node ×3, esbuild" */
 export function summarizeNames(names: readonly string[]): string {
   const counts = new Map<string, number>();
@@ -284,27 +260,30 @@ export function summarizeNames(names: readonly string[]): string {
  */
 export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChanged }: { theme: Theme; compact: boolean; hostId: string; say: Say; issues?: readonly HealthIssue[]; onChanged?: () => void }) {
   const report = useRpc(processReport), preview = useRpc(processPreview), stop = useRpc(processStop);
-  const [sort, setSort] = useState<ReportSort>("memory");
+  const [sort, setSort] = useState<ResourceSort<ReportSort>>({ id: "memory", direction: "desc" });
   const [filter, setFilter] = useState<Filter>("all");
   const [search, setSearch] = useState("");
-  const [limit, setLimit] = useState(PAGE);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [offset, setOffset] = useState(0);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [plan, setPlan] = useState<StopPlan | null>(null);
   const [planTokens, setPlanTokens] = useState<string[]>([]);
   const closePlan = () => { setPlan(null); setPlanTokens([]); };
-  const input = useMemo(() => ({ sort, filter, query: search.trim(), limit, offset: 0 }), [sort, filter, search, limit]);
+  const input = useMemo(() => ({ sort: sort.id, direction: sort.direction, filter, query: search.trim(), limit: PAGE, offset }), [sort, filter, search, offset]);
   const query = useQuery({ queryKey: [...processesKey(hostId), input], queryFn: () => report(input), refetchInterval: POLL_MS, placeholderData: keepPreviousData, retry: 1 });
   const data = query.data;
-  const rows = data?.processes ?? [];
+  const rows = query.isPlaceholderData ? [] : data?.processes ?? [];
+
+  useEffect(() => {
+    const tokens = new Set(data?.processes.filter((row) => row.stoppable).map((row) => row.actionToken));
+    setSelected((current) => [...current].every((token) => tokens.has(token)) ? current : new Set([...current].filter((token) => tokens.has(token))));
+  }, [data]);
 
   const ask = useMutation({
-    mutationFn: async (pids: number[]) => {
-      const tokens = rows.filter((row) => pids.includes(row.pid) && row.actionToken).map((row) => row.actionToken!);
-      if (tokens.length === 0) throw new Error("Those processes have changed. Refresh and try again.");
-      setPlanTokens(tokens);
-      return preview({ tokens });
+    mutationFn: async (tokens: string[]) => {
+      if (!tokens.length || tokens.length > STOP_BATCH_MAX) throw new Error(`Select up to ${STOP_BATCH_MAX} processes.`);
+      return { plan: await preview({ tokens }), tokens };
     },
-    onSuccess: setPlan,
+    onSuccess: ({ plan, tokens }) => { setPlanTokens(tokens); setPlan(plan); },
     onError: (error) => say({ text: errorText(error), tone: "danger" }),
   });
   const confirm = useMutation({
@@ -326,10 +305,14 @@ export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChang
   }
   if (!data.supported) return <><HousekeepingSection theme={theme} hostId={hostId} compact={compact} /><Banner theme={theme} tone="neutral" title="Not available on this host">{data.warnings.map((warning) => <Note key={warning} theme={theme}>{warning}</Note>)}</Banner></>;
 
-  const toggle = (pid: number) => setSelected((previous) => { const next = new Set(previous); if (next.has(pid)) next.delete(pid); else next.add(pid); return next; });
-  const chosen = [...selected].filter((pid) => rows.some((row) => row.pid === pid && row.stoppable));
+  const toggle = (token: string) => setSelected((previous) => {
+    const next = new Set(previous);
+    if (next.has(token)) next.delete(token); else if (next.size < STOP_BATCH_MAX) next.add(token);
+    return next;
+  });
+  const chosen = [...selected].filter((token) => rows.some((row) => row.actionToken === token && row.stoppable));
   const byTree = filter === "jobs";
-  const twins = twinKeys(rows);
+  const resetPage = () => { setOffset(0); setSelected(new Set()); };
   return (
     <>
       {issues.some((issue) => issue.code === "plugin-stuck") ? (
@@ -337,46 +320,29 @@ export function ProcessesTab({ theme, compact, hostId, say, issues = [], onChang
           <StuckPlugins theme={theme} issues={issues} say={say} onDone={() => { onChanged?.(); void query.refetch(); }} />
         </Banner>
       ) : null}
-      <RunawayBanner theme={theme} report={data} say={say} onDone={() => { onChanged?.(); void query.refetch(); }} onJobs={() => { setFilter("jobs"); setLimit(PAGE); }} />
+      <RunawayBanner theme={theme} report={data} say={say} onDone={() => { onChanged?.(); void query.refetch(); }} onJobs={() => { setFilter("jobs"); resetPage(); }} />
       <LoadCard theme={theme} report={data} />
       <HousekeepingSection theme={theme} hostId={hostId} compact={compact} />
-      <Card theme={theme} title={filter === "jobs" ? "Heavy jobs" : "Heaviest processes"} icon="ListOrdered" subtitle={filter === "jobs" ? "Each job with everything it started, added together" : SORTED[sort]}>
-        <Pills<Filter> theme={theme} label="Show" items={FILTERS} value={filter} onChange={(next) => { setFilter(next); setLimit(PAGE); }} />
-        <Pills<ReportSort> theme={theme} label="Sort" items={SORTS} value={sort} onChange={setSort} />
-        <TextInput accessibilityLabel="Search processes" value={search} onChangeText={(text) => { setSearch(text); setLimit(PAGE); }} placeholder="Search by name, chat, workspace, folder or PID" placeholderTextColor={theme.colors.foregroundMuted} autoCapitalize="none" autoCorrect={false}
-          style={{ ...TYPE.body, color: theme.colors.foreground, backgroundColor: theme.colors.surface0, borderColor: theme.colors.border, borderWidth: 1, borderRadius: RADIUS.control, paddingHorizontal: SPACE.row, paddingVertical: SPACE.sm + SPACE.hair }} />
+      <Card theme={theme} title={filter === "jobs" ? "Heavy jobs" : "Processes"} icon="ListOrdered" subtitle={filter === "jobs" ? "Each job with everything it started, added together" : "Your processes, sorted across the whole host"}>
+        <ResourceToolbar theme={theme} label="Search processes" search={search} onSearch={(text) => { setSearch(text); resetPage(); }} filters={FILTERS} filter={filter} onFilter={(next) => { setFilter(next as Filter); resetPage(); }} />
+        {query.isFetching ? <Row><ActivityIndicator size="small" color={theme.colors.accent} /><Meta theme={theme}>Updating processes…</Meta></Row> : null}
+        {query.error ? <Note theme={theme} tone="warning">{`Couldn't update processes: ${errorText(query.error)}`}</Note> : null}
         {chosen.length ? (
           <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: SPACE.sm, padding: SPACE.row, borderRadius: RADIUS.control, backgroundColor: tint(theme.colors.statusDanger, 0.07) ?? theme.colors.surface2 }}>
             <Text style={{ ...TYPE.body, color: theme.colors.foreground, flex: 1, minWidth: 160 }}>{`${chosen.length} selected`}</Text>
             <Button theme={theme} label="Clear" onPress={() => setSelected(new Set())} />
-            <Button theme={theme} label={`Stop ${chosen.length} selected…`} icon="OctagonX" danger busy={ask.isPending} onPress={() => ask.mutate(chosen)} />
+            <Button theme={theme} label={`Stop ${chosen.length} selected…`} icon="OctagonX" danger busy={ask.isPending} disabled={ask.isPending || plan !== null} onPress={() => ask.mutate(chosen)} />
           </View>
         ) : null}
-        {rows.length === 0 ? (
-          <Note theme={theme}>{search ? `Nothing matches "${search}".` : filter === "jobs" ? "No builds, tests, type checks, installs or dev servers are running." : filter === "stoppable" ? "Nothing here can be stopped right now." : "No processes."}</Note>
-        ) : (
-          // 0.16.0: under their project or workspace, so where each one runs is clear at a glance.
-          <View style={{ gap: SPACE.row }}>
-            {processGroups(rows).map((group) => (
-              <View key={group.title} style={{ gap: SPACE.xs }}>
-                <View accessibilityRole="header" style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm, flexWrap: "wrap", paddingTop: SPACE.sm }}>
-                  <HostIconOrDot theme={theme} name={group.title === "Paseo itself" ? "Network" : group.title === "Not in a workspace" ? "Monitor" : "FolderTree"} />
-                  <Text style={{ ...TYPE.item, color: theme.colors.foreground }}>{group.title}</Text>
-                  <Meta theme={theme}>{`${group.rows.length} · ${formatBytes(group.rssBytes)}`}</Meta>
-                </View>
-                {chatGroups(group.rows).map((chat) => (
-                  <View key={chat.id} style={{ gap: SPACE.xs }}>
-                    <ItemTitle theme={theme}>{chat.title}</ItemTitle>
-                    {chat.rows.map((row, index) => <ProcessItem key={`${row.pid}-${row.name}`} hostId={hostId} theme={theme} row={row} compact={compact} byTree={byTree} first={index === 0} twin={twins.has(sameness(row))} selected={selected.has(row.pid)} onSelect={() => toggle(row.pid)} onStop={() => ask.mutate([row.pid])} />)}
-                  </View>
-                ))}
-              </View>
-            ))}
-          </View>
-        )}
+        <ResourceTable compact={compact}>{(narrow) => <>
+          <ResourceHeader theme={theme} columns={PROCESS_COLUMNS} compact={narrow} sort={sort} onSort={(id) => { setSort(nextResourceSort(sort, id as ReportSort)); resetPage(); }} />
+          {!rows.length && !query.isPlaceholderData ? <Note theme={theme}>{`No processes match these filters${search ? ` and "${search}"` : ""}. Try Everything or clear the search.`}</Note> : null}
+          {rows.map((row, index) => <ProcessItem key={processActionKey(row)} hostId={hostId} theme={theme} row={row} compact={narrow} byTree={byTree} first={index === 0} twin={false} selected={selected.has(processActionKey(row))} onSelect={() => row.actionToken && toggle(row.actionToken)} busy={ask.isPending || plan !== null} onStop={() => row.actionToken && ask.mutate([row.actionToken])} />)}
+        </>}</ResourceTable>
         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: SPACE.sm }}>
-          <Meta theme={theme}>{`${rows.length} of ${data.matched}${data.matched !== data.total ? ` matching (${data.total} in all)` : ""} · updated ${new Date(data.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`}</Meta>
-          {data.matched > rows.length ? <Button theme={theme} label="Show more" onPress={() => setLimit(limit + PAGE)} /> : null}
+          <Meta theme={theme}>{`${rows.length ? offset + 1 : 0}–${offset + rows.length} of ${data.matched}${data.matched !== data.total ? ` matching (${data.total} in all)` : ""} · updated ${new Date(data.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`}</Meta>
+          {offset > 0 ? <Button theme={theme} label="Previous page" disabled={query.isPlaceholderData} onPress={() => { setOffset(Math.max(0, offset - PAGE)); setSelected(new Set()); }} /> : null}
+          {data.matched > offset + PAGE ? <Button theme={theme} label="Next page" disabled={query.isPlaceholderData} onPress={() => { setOffset(offset + PAGE); setSelected(new Set()); }} /> : null}
         </View>
       </Card>
       {!data.projectsVerified ? <QuietLine theme={theme} icon="ShieldAlert">Paseo projects aren't verified on this host right now, so some workspace and chat names may be missing. Stop still checks every protection rule.</QuietLine> : null}

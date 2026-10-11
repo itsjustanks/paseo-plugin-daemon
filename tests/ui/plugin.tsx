@@ -7,6 +7,7 @@ const peer = { id: "7b5dccce-8405-4681-8278-466501de93c0", label: "Development s
 let forwards: { id: string; peerId: string; remotePort: number; localPort: number }[] = [];
 import { createPortal } from "react-dom";
 import { HOUSEKEEPING_DEFAULTS } from "../../shared/housekeeping";
+import { matchesProcess, processOrder } from "../../shared/processes";
 import { composeAskMessage } from "../../shared/ask";
 const params = new URLSearchParams(location.search);
 const empty = params.has("empty"), failed = params.has("error"), unverified = params.has("unverified"), tunnelFail = params.has("tunnelfail"), busy = params.has("busy"), mac = params.has("mac");
@@ -44,8 +45,8 @@ let settings: any = { closeTunnelsOnArchive: true, panelScope: "workspace", snap
 const GB = 1024 ** 3, MB = 1024 ** 2;
 /** Fixture processes for the Processes tab: a fleet container (or a Mac with ?mac); ?busy adds a runaway and a crowd of jobs. */
 const owner = (kind: string, label: string, project: string | null = null, workspace: string | null = null) => ({ kind, label, project, workspace });
-const prow = (pid: number, name: string, extra: any = {}) => ({ pid, ppid: 1, name, command: name, cwd: "~/projects/website", state: "sleeping", cpuPercent: 1, cpuSustained: 1, hotSeconds: 0, rssBytes: 80 * MB, memoryPercent: 1, ageSeconds: 3600, ports: [], job: null, jobRoot: false, tree: { count: 1, cpuPercent: 1, rssBytes: 80 * MB }, owner: owner("other", "Outside Paseo"), flags: [], stoppable: false, protectedReason: "Started outside Paseo and outside your Paseo projects, so it can only be viewed here.", actionToken: null, ...extra });
-const stoppable = { stoppable: true, protectedReason: null, actionToken: "synthetic-action" };
+const prow = (pid: number, name: string, extra: any = {}) => ({ pid, ppid: 1, name, command: name, cwd: "~/projects/website", state: "sleeping", cpuPercent: 1, cpuSustained: 1, hotSeconds: 0, rssBytes: 80 * MB, memoryPercent: 1, ageSeconds: 3600, ports: [], job: null, jobRoot: false, tree: { count: 1, cpuPercent: 1, rssBytes: 80 * MB }, owner: owner("other", "Outside Paseo"), flags: [], stoppable: !extra.protectedReason, protectedReason: null, actionToken: extra.protectedReason ? null : `synthetic-action-${pid}`, outsidePaseo: true, ...extra });
+const stoppable = { stoppable: true, protectedReason: null };
 const website = owner("project", "Website · main", "Website", "main"), api = owner("project", "API service · fix-auth", "API service", "fix-auth");
 const fixtureChat = (api = false) => ({ id: api ? "00000000-0000-4000-8000-000000000005" : "00000000-0000-4000-8000-000000000004", title: api ? "Test the API service" : "Build the Website", status: "running", workspaceId: api ? "ws-api-fixture" : "ws-fixture", workspace: api ? "fix-auth" : "main", project: api ? "API service" : "Website", workspacePath: api ? "/home/fixture/projects/api" : "/home/fixture/projects/website", where: api ? "API service · fix-auth" : "Website · main" });
 function processRows() {
@@ -65,12 +66,8 @@ function processRows() {
 let actions: any[] = busy ? [{ at: Date.now() - 600_000, action: "stop", source: "processes", pid: 4211, name: "next", owner: "Website · main", status: "signaled", signaled: 3, message: "" }, { at: Date.now() - 590_000, action: "auto-force-stop", source: "processes", pid: 4211, name: "next", owner: "Website · main", status: "signaled", signaled: 1, message: "" }] : [];
 function report(input: any) {
   let rows = processRows();
-  if (input.filter === "jobs") rows = rows.filter((row) => row.jobRoot);
-  if (input.filter === "stoppable") rows = rows.filter((row) => row.stoppable);
-  const q = (input.query || "").toLowerCase();
-  if (q) rows = rows.filter((row) => `${row.name} ${row.owner.label} ${row.pid}`.toLowerCase().includes(q));
-  const key = input.sort === "memory" ? (row: any) => -row.rssBytes : input.sort === "age" ? (row: any) => -row.ageSeconds : input.sort === "name" ? null : (row: any) => -(row.cpuPercent ?? 0);
-  rows.sort(key ? (a, b) => key(a) - key(b) : (a, b) => a.name.localeCompare(b.name));
+  rows = rows.filter((row) => matchesProcess(row, input));
+  rows.sort(processOrder(input.sort ?? "memory", input.filter === "jobs", input.direction));
   const limitBytes = 7.33 * GB, used = busy ? 6.9 * GB : 3.1 * GB;
   const container = mac ? null : { memoryLimitBytes: limitBytes, memoryUsedBytes: used, memoryPercent: Math.round((used / limitBytes) * 1000) / 10, cpuLimitCores: null, cpuCoresUsed: busy ? 5.4 : 1.2, cpuPercent: busy ? 67 : 15, psiMemorySome10: 0, psiCpuSome10: 0, oomKills: 0, pressure: busy ? "critical" : "normal", reasons: busy ? ["using 94% of this container's 7.3 GB memory limit"] : [] };
   const runaways = busy ? [
@@ -155,8 +152,12 @@ const stub = async (name: string, input: any) => {
     return { title: port ? "storybook on :6006 stopped" : "tsc is stuck at full CPU", text, workspaceId: "ws-fixture", workspaceName: "main", outputFrom: port ? "the terminal \"storybook\"" : null };
   }
   if (name === "daemon-link.terminal.open") return { ok: true, message: "Opened a terminal in ~/projects/website, in main.", workspaceId: "ws-fixture", terminalId: "term-1" };
-  if (name === "daemon-link.processes.preview") return { graceSeconds: 10, targets: processRows().filter((row) => row.stoppable).slice(0, input.tokens.length).map((row) => ({ pid: row.pid, name: row.name, ok: true, reason: null, rssBytes: row.rssBytes, cpuPercent: row.cpuPercent, children: row.tree.count > 1 ? Array.from({ length: row.tree.count - 1 }, (_, i) => ({ pid: row.pid + i + 1, name: i === 0 ? "node" : "esbuild" })) : [] })) };
-  if (name === "daemon-link.processes.stop") { actions = [{ at: Date.now(), action: "stop", source: "processes", pid: 4402, name: "tsc", owner: "Website · main", status: "signaled", signaled: 1, message: "" }, ...actions]; return { escalateAfterSeconds: 10, results: [{ pid: 4402, name: "tsc", ok: true, status: "signaled", signaled: 1, message: "Asked tsc to stop. Anything still running in 10 seconds is stopped forcefully." }] }; }
+  if (name === "daemon-link.processes.preview") return { graceSeconds: 10, targets: processRows().filter((row) => row.stoppable && input.tokens.includes(row.actionToken)).map((row) => ({ pid: row.pid, name: row.name, ok: true, reason: null, rssBytes: row.rssBytes, cpuPercent: row.cpuPercent, outsidePaseo: row.outsidePaseo, children: row.tree.count > 1 ? Array.from({ length: row.tree.count - 1 }, (_, i) => ({ pid: row.pid + i + 1, name: i === 0 ? "node" : "esbuild" })) : [] })) };
+  if (name === "daemon-link.processes.stop") {
+    const targets = processRows().filter((row) => row.stoppable && input.tokens.includes(row.actionToken));
+    actions = [...targets.map((row) => ({ at: Date.now(), action: "stop", source: "processes", pid: row.pid, name: row.name, owner: row.owner.label, status: "signaled", signaled: 1, message: "" })), ...actions];
+    return { escalateAfterSeconds: 10, results: targets.map((row) => ({ pid: row.pid, name: row.name, ok: true, status: "signaled", signaled: 1, message: `Asked ${row.name} to stop. Anything still running in 10 seconds is stopped forcefully.` })) };
+  }
   if (name === "daemon-link.processes.log") return { entries: actions };
   if (name === "daemon-link.watch.suggestions") return { suggestions: settings.watchedServices.length || mac ? [] : [{ name: "OmniRoute (AI Router)", url: "http://10.0.0.9:20128/api/health/ping", source: "ai-router", why: "The AI Router plugin on this daemon sends every request through it." }] };
   if (name === "settings.hosts.read") return { status: "ready", revision: String(revision), values: settings };

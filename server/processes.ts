@@ -1,6 +1,8 @@
 import type { ActionResult } from "../shared/contracts";
 import {
   MEMORY_HEAVY_PERCENT,
+  matchesProcess,
+  processOrder,
   taggedProcessWarning,
   workspaceProcessWarning,
   ReportInputSchema,
@@ -11,7 +13,6 @@ import {
   type ProcessReport,
   type ProcessRow,
   type ReportInput,
-  type ReportSort,
   type Runaway,
   type StopOutcome,
   type StopPlan,
@@ -236,14 +237,8 @@ export class ProcessManager {
 
     const roots = rows.filter((row) => row.jobRoot);
     const runaways = this.runaways(base, rows, roots, limit, growthByPid);
-    const query = input.query.trim().toLowerCase();
-    const matched = rows.filter((row) => {
-      if (input.filter === "jobs" && !row.jobRoot) return false;
-      if (input.filter === "stoppable" && !row.stoppable) return false;
-      if (!query) return true;
-      return [row.name, row.command, row.cwd ?? "", row.owner.label, row.chat?.title ?? "", row.chat?.workspace ?? "", row.job?.label ?? "", String(row.pid)].some((text) => text.toLowerCase().includes(query));
-    });
-    matched.sort(order(input.sort, input.filter === "jobs"));
+    const matched = rows.filter((row) => matchesProcess(row, input));
+    matched.sort(order(input.sort, input.filter === "jobs", input.direction));
     const page = matched.slice(input.offset, input.offset + input.limit).map((row) => {
       if (!row.stoppable) return row;
       const raw = byPid.get(row.pid)!;
@@ -459,23 +454,8 @@ function capitalise(text: string): string {
   return text ? `${text[0]!.toUpperCase()}${text.slice(1)}.` : "";
 }
 
-/**
- * Highest first (0.15.0), and stable: anything flagged (a runaway, a memory
- * hog, a pressure driver) stays pinned on top, then the chosen figure from
- * high to low, then name and PID, so rows don't jump between refreshes.
- */
-export function order(sort: ReportSort, byTree: boolean): (a: ProcessRow, b: ProcessRow) => number {
-  const cpu = (row: ProcessRow) => (byTree ? row.tree.cpuPercent : row.cpuPercent) ?? -1;
-  const rss = (row: ProcessRow) => (byTree ? row.tree.rssBytes : row.rssBytes);
-  const pinned = (a: ProcessRow, b: ProcessRow) => Number(b.flags.length > 0) - Number(a.flags.length > 0);
-  const tie = (a: ProcessRow, b: ProcessRow) => a.name.localeCompare(b.name) || a.pid - b.pid;
-  switch (sort) {
-    case "cpu": return (a, b) => pinned(a, b) || cpu(b) - cpu(a) || rss(b) - rss(a) || tie(a, b);
-    case "age": return (a, b) => pinned(a, b) || b.ageSeconds - a.ageSeconds || tie(a, b);
-    case "name": return (a, b) => pinned(a, b) || tie(a, b);
-    default: return (a, b) => pinned(a, b) || rss(b) - rss(a) || cpu(b) - cpu(a) || tie(a, b);
-  }
-}
+/** Public alias retained for consumers of the existing sort helper. */
+export const order = processOrder;
 
 const HOME = homedir();
 const rootsFor = (match: { name: string; path: string; workspace: string | null } | null) => (match ? [{ name: match.workspace ?? match.name, root: match.path }] : []);

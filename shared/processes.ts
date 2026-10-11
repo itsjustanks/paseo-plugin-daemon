@@ -1,6 +1,7 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 import { ActionResultSchema, ContainerSnapshotSchema, PressureStateSchema } from "./contracts";
+import { compareResource, matchesResource, type SortDirection } from "./resource-table";
 import { RUNAWAY_SHARE_PERCENT } from "./guard";
 
 /**
@@ -123,9 +124,10 @@ export type ReportSort = z.infer<typeof ReportSortSchema>;
 
 export const ReportInputSchema = z.object({
   sort: ReportSortSchema.default("memory"),
+  direction: z.enum(["asc", "desc"]).optional(),
   query: z.string().max(120).default(""),
   /** "jobs": heavy job roots only; "stoppable": only what can be stopped here. */
-  filter: z.enum(["all", "jobs", "stoppable"]).default("all"),
+  filter: z.enum(["all", "jobs", "stoppable", "protected", "known-chat", "no-chat", "attention"]).default("all"),
   limit: z.number().int().min(1).max(REPORT_LIMIT_MAX).default(25),
   offset: z.number().int().min(0).max(4096).default(0),
 });
@@ -271,3 +273,27 @@ export function chatGroups(rows: readonly ProcessRow[]): { id: string; title: st
 export function chatAttribution(row: Pick<ProcessRow, "chat">): string {
   return row.chat ? `Tagged by chat ${row.chat.title}${row.chat.workspace || row.chat.where ? ` · ${row.chat.workspace ?? row.chat.where}` : ""}` : "No chat identified";
 }
+
+/** Flat, global ordering with deterministic ties; heavy jobs use whole-tree measurements. */
+export function processOrder(sort: ReportSort, byTree: boolean, direction: SortDirection = sort === "name" ? "asc" : "desc"): (a: ProcessRow, b: ProcessRow) => number {
+  const cpu = (row: ProcessRow) => byTree ? row.tree.cpuPercent : row.cpuPercent;
+  const rss = (row: ProcessRow) => byTree ? row.tree.rssBytes : row.rssBytes;
+  const value = (row: ProcessRow) => sort === "name" ? row.name : sort === "age" ? row.ageSeconds : sort === "cpu" ? cpu(row) : rss(row);
+  return (a, b) => compareResource(value(a), value(b), direction)
+    || (sort === "memory" ? compareResource(cpu(a), cpu(b), "desc") : sort === "cpu" ? compareResource(rss(a), rss(b), "desc") : 0)
+    || a.name.localeCompare(b.name) || a.pid - b.pid;
+}
+
+/** Filter the complete bounded sample before sorting and taking a page. */
+export function matchesProcess(row: ProcessRow, input: Pick<ReportInput, "filter" | "query">): boolean {
+  if (input.filter === "jobs" && !row.jobRoot) return false;
+  if (input.filter === "stoppable" && !row.stoppable) return false;
+  if (input.filter === "protected" && row.stoppable) return false;
+  if (input.filter === "known-chat" && !row.chat) return false;
+  if (input.filter === "no-chat" && row.chat) return false;
+  if (input.filter === "attention" && !row.flags.length) return false;
+  return matchesResource(input.query ?? "", [row.name, row.command, row.cwd, row.cwdPath, row.where, row.owner.label, row.owner.project, row.owner.workspace, row.chat?.title, row.chat?.workspace, row.chat?.project, row.job?.label, String(row.pid)]);
+}
+
+/** An action selection holds the signed identity seen by the user, never just a reusable PID. */
+export const processActionKey = (row: ProcessRow) => row.actionToken ?? `protected:${row.pid}:${row.name}`;
