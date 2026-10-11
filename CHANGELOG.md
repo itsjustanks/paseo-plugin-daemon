@@ -10,13 +10,13 @@ results, and on/off and preview controls. Native settings expose bounded schedul
 and priority limits. Live mode needs an explicit confirmation with Cancel focused by default; host changes
 keep status caches separate.
 
-By default, every minute it lowers matching main-process build/browser priorities and restores missing gate
-helpers exclusively. Hourly cleanup requires fresh finished-chat ownership for every browser,
+In live mode, the default one-minute schedule lowers matching main-process build/browser priorities and restores
+missing gate helpers exclusively. Hourly cleanup requires fresh finished-chat ownership for every browser,
 crashpad, daemon or old orphan Supabase query; running, open idle and unknown chats refuse. TERM all
 eligible targets, wait three seconds, then re-authorize verified survivors before KILL. Logs separate
 stop requests from verified exits, and profiles need a complete fresh scan proving non-use.
 
-By default, daily Turbo trimming checks old owned regular entries only, with fresh registry, explicit idle
+In live mode, daily Turbo trimming checks old owned regular entries only, with fresh registry, explicit idle
 state and broad active-use checks before bounded 16-file batches, with path/inode and policy checks
 before each unlink. A 45-second cycle action budget and bounded metadata/candidate counts keep passes
 small. Private-profile non-use checks cover the same OS user without inspecting foreign processes.

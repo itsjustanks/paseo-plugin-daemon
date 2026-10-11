@@ -8,6 +8,8 @@ let forwards: { id: string; peerId: string; remotePort: number; localPort: numbe
 import { createPortal } from "react-dom";
 import { HOUSEKEEPING_DEFAULTS } from "../../shared/housekeeping";
 import { matchesProcess, processOrder } from "../../shared/processes";
+import { DiskReportSchema } from "../../shared/disk";
+import { clearItem, workspaceUsage } from "../resource-table-fixtures";
 import { composeAskMessage } from "../../shared/ask";
 const params = new URLSearchParams(location.search);
 const empty = params.has("empty"), failed = params.has("error"), unverified = params.has("unverified"), tunnelFail = params.has("tunnelfail"), busy = params.has("busy"), mac = params.has("mac");
@@ -95,6 +97,20 @@ const stub = async (name: string, input: any) => {
     return { state, enabled: settings.housekeeping.enabled, dryRun: settings.housekeeping.dryRun, message: state === "unsupported" ? "Housekeeping works on Linux hosts. This daemon runs on macOS, so it does nothing here." : state === "passive" ? "Standalone housekeeper active: Hosts stays passive." : state === "blocked" ? "The process table couldn't be read completely, so nothing was closed." : state === "off" ? "Housekeeping is off." : state === "preview" ? "Preview: logs what it would tidy. Nothing on this host is changed until you confirm live mode." : "Tidying this host. Running, open idle and unknown chats stay protected.", lastRuns: Object.fromEntries(["renice", "reap", "turbo", "helpers"].map((job) => [job, empty ? null : { at: Date.now() - 60000, outcome: settings.housekeeping.dryRun ? "preview" : "done", summary: job === "reap" ? "Kept an open idle chat's browser." : "Checked; see recent results." }])), actions: empty || mac ? [] : [{ at: Date.now() - 60000, job: "reap", outcome: "kept", what: "agent-browser daemon (PID 5001)", why: "Its chat is idle, so it was left alone" }, { at: Date.now() - 60000, job: "renice", outcome: "preview", what: "3 builds and tests", why: "Would lower main-process priority to nice 10" }], machine: mac ? null : { freeBytes: 6 * GB, totalBytes: 8 * GB, basis: "container", load1: 2.45, cores: 8 }, checkedAt: Date.now() };
   }
   (window as any).__fixtureCalls.push({ name, input });
+  if (name === "daemon-link.disk.report") return DiskReportSchema.parse({
+    disks: [{ label: "This computer's disk", totalBytes: 100 * GB, usedBytes: 65 * GB, freeBytes: 35 * GB, percent: 65, level: "ok", sentence: null }], scan: { state: empty ? "never" : "done", startedAt: null, finishedAt: empty ? null : Date.now() - 60000, done: empty ? 0 : 3, total: 3, partial: false, message: null },
+    workspaces: empty ? [] : [
+      workspaceUsage({ id: "website", names: ["main"], folder: "~/projects/website", path: "/home/fixture/projects/website", totalBytes: 8 * GB, clearableBytes: 0, state: "working", busy: "A chat and dev server are running here.", items: [clearItem({ name: "node_modules", where: "~/projects/website/node_modules", bytes: 3 * GB, blocked: "Workspace is in use" })] }),
+      workspaceUsage({ id: "api", names: ["fix-auth"], project: "API service", folder: "~/projects/api", path: "/home/fixture/projects/api", totalBytes: 3 * GB, clearableBytes: 0, state: "working", branch: "fix-auth", busy: "A dev server is running here.", items: [] }),
+      workspaceUsage({ id: "docs", names: ["docs"], project: "Documentation", folder: "~/projects/docs", path: "/home/fixture/projects/docs", totalBytes: 2 * GB, clearableBytes: GB, items: [clearItem({ name: "node_modules", what: "Installed packages", where: "~/projects/docs/node_modules", bytes: GB, safe: true, token: "fixture-delete-docs" })] }),
+    ], caches: empty ? [] : [
+      { id: "packages", title: "Package downloads", totalBytes: 4 * GB, items: [clearItem({ name: "pnpm store", where: "~/.local/share/pnpm/store", bytes: 4 * GB, sharedBytes: 2 * GB, partial: true })] },
+      { id: "temporary", title: "Temporary files", totalBytes: 2 * GB, items: [clearItem({ name: "old-build", what: "Temporary", where: "/tmp/old-build", bytes: 2 * GB, askId: "fixture-temp" })] },
+    ], clearableBytes: GB, warnings: [],
+  });
+  if (name === "daemon-link.disk.preview") return { items: [{ workspace: "docs", where: "node_modules", path: "/home/fixture/projects/docs/node_modules", what: "Installed packages", cost: "Run the package install again.", bytes: GB, ok: true, reason: null }], bytes: GB, count: 1, checkedAt: Date.now() };
+  if (name === "daemon-link.disk.clear-status") return { state: "idle", freedBytes: 0, results: [], message: null };
+  if (name === "daemon-link.disk.clear") throw new Error("Deletion is disabled in this fictional preview.");
   if (name.startsWith("daemon-link.sync.") && failed) throw new Error("Source host is unavailable. Keep both plugins running and retry.");
   if (name === "daemon-link.sync.status") return { projects, grants: empty ? [] : [grant], history };
   if (name === "daemon-link.sync.projects") return { projects: empty ? [] : projects };

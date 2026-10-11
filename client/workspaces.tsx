@@ -182,9 +182,9 @@ const TABLE_PAGE = 25;
 const WORKSPACE_COLUMNS: readonly ResourceColumn[] = [
   { id: "name", label: "Workspace / project", weight: 2.5, sortable: true },
   { id: "state", label: "Status", weight: 1.3 },
-  { id: "disk", label: "Total disk", sortable: true },
-  { id: "reclaimable", label: "Reclaimable", sortable: true },
-  { id: "running", label: "Running", sortable: true },
+  { id: "disk", label: "Total disk", sortable: true, compactInline: true },
+  { id: "reclaimable", label: "Reclaimable", sortable: true, compactInline: true },
+  { id: "running", label: "Running", sortable: true, compactInline: true },
   { id: "actions", label: "Actions", weight: 1.2 },
 ];
 const ITEM_COLUMNS: readonly ResourceColumn[] = [

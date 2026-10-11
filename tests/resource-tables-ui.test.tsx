@@ -12,6 +12,8 @@ vi.mock("@getpaseo/plugin/client", () => ({
   usePaseo: () => null,
 }));
 vi.mock("@getpaseo/plugin/client/react-native", () => ({ Icon: () => null, useToast: undefined, copyText: undefined, Modal: undefined }));
+// Housekeeping has its own settings/RPC tests; these tests exercise table actions only.
+vi.mock("../client/housekeeping", () => ({ HousekeepingSection: () => null }));
 vi.mock("react-native", async () => {
   const React = await import("react");
   const make = (name: string) => (props: Record<string, unknown>) => React.createElement(name, props, props.children as React.ReactNode);

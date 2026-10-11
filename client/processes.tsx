@@ -4,7 +4,7 @@ import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 import { useRpc } from "@getpaseo/plugin/client";
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
-import { OUTSIDE_PASEO_WARNING, chatAttribution, processActionKey, processDetails, processPreview, processReport, processStop, STOP_BATCH_MAX, type ActionLogEntry, type ProcessReport, type ProcessRow, type ReportSort, type StopPlan } from "../shared/processes";
+import { OUTSIDE_PASEO_WARNING, chatAttribution, ownerGroup, processActionKey, processDetails, processPreview, processReport, processStop, STOP_BATCH_MAX, type ActionLogEntry, type ProcessReport, type ProcessRow, type ReportSort, type StopPlan } from "../shared/processes";
 import { Accordion, AccordionItem, Banner, Button, Card, Divider, HostIcon, ItemTitle, Meta, Note, QuietLine, RADIUS, Row, SPACE, TYPE, tint, toneColor, type Tone } from "./kit";
 import { formatBytes, formatDuration, formatPercent } from "./ui";
 import { AskAgentButton, OpenChatButton } from "./ask";
@@ -25,9 +25,9 @@ const POLL_MS = 5000;
 export const PROCESS_COLUMNS: readonly ResourceColumn[] = [
   { id: "name", label: "Process / PID", weight: 1.8, sortable: true },
   { id: "attribution", label: "Workspace / chat", weight: 2 },
-  { id: "memory", label: "Memory", sortable: true },
-  { id: "cpu", label: "CPU", sortable: true },
-  { id: "age", label: "Running", sortable: true },
+  { id: "memory", label: "Memory", sortable: true, compactInline: true },
+  { id: "cpu", label: "CPU", sortable: true, compactInline: true },
+  { id: "age", label: "Running", sortable: true, compactInline: true },
   { id: "actions", label: "Actions", weight: 1.4 },
 ];
 const FILTERS: ReadonlyArray<{ id: Filter; label: string }> = [
