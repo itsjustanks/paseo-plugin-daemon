@@ -425,13 +425,15 @@ export class Housekeeper {
       return { outcome: "blocked", summary: "Paseo's workspaces couldn't be read, so no cache was touched." };
     }
     const seen = new Set<string>();
-    const workspaces = list.filter((item) => !seen.has(item.directory) && seen.add(item.directory)).slice(0, Math.min(MAX_WORKSPACES, 16));
+    const registered = list.filter((item) => !seen.has(item.directory) && seen.add(item.directory));
+    const workspaces = registered.slice(0, Math.min(MAX_WORKSPACES, 16));
+    let limited = registered.length > workspaces.length;
     const table = await this.deps.procs.scan(signal);
     if (!table.complete) return { outcome: "blocked", summary: "Couldn't read every process to see which caches are in use, so none was trimmed." };
     const roots = list.map((item) => item.directory);
     let files = 0, bytes = 0, folders = 0, pending = 0, budget = 256, scanBudget = MAX_CACHE_SCAN_PER_CYCLE;
     for (const workspace of workspaces) {
-      if (signal.aborted || budget <= 0 || scanBudget <= 0) break;
+      if (signal.aborted || budget <= 0 || scanBudget <= 0) { limited = true; break; }
       const cache = await turboCacheDir(workspace.directory, this.deps.places, this.deps.uid, roots);
       if ("why" in cache) {
         if (cache.why !== "none") await this.previewOnce("turbo", `why:${workspace.directory}`, { what: `Turborepo cache in ${workspace.name}`, why: `${cache.why}, so it was left alone` });
@@ -451,6 +453,7 @@ export class Housekeeper {
       };
       if (workspace.status !== "idle" || workspace.devServers.length || (preview && !(await available()))) { pending++; await this.log({ job: "turbo", outcome: "kept", what: `Turborepo cache in ${workspace.name}`, why: "Its workspace or cache use couldn't be confirmed idle, so it was left for next time" }); continue; }
       const result = await trimCache(cache, this.deps.uid, this.now(), settings.turboCacheMaxDays, { preview, signal, mayAct: () => this.mayAct(signal), batchAvailable: available, budget, scanBudget, now: this.now });
+      limited ||= result.truncated;
       scanBudget -= result.scanned;
       if (result.stopped) pending++;
       if (!result.candidates) continue;
@@ -464,9 +467,10 @@ export class Housekeeper {
       if (result.removed) { files += result.removed; bytes += result.bytes; folders++; }
       await this.log({ job: "turbo", outcome: result.removed ? "done" : result.stopped ? "skipped" : "kept", what, why: result.removed ? `Deleted ${plural(result.removed, "entry", "entries")} older than ${settings.turboCacheMaxDays} days${result.stopped ? `; then stopped: ${result.stopped}` : ""}` : result.stopped ?? "The entries changed before they could be deleted, so they were left", count: result.removed, bytes: result.bytes });
     }
-    if (!files) return { outcome: pending ? "blocked" : preview ? "preview" : "done", summary: pending ? "Pending: workspace activity must be freshly verified idle before old caches can be trimmed." : "No old cache entries were eligible in this bounded pass." };
+    const limitNote = limited ? " Scan limit reached; later passes may revisit the same folders or entries. Use Workspaces to inspect the rest." : "";
+    if (!files) return { outcome: pending ? "blocked" : preview ? "preview" : "done", summary: (pending ? "Pending: workspace activity must be freshly verified idle before old caches can be trimmed." : "No old cache entries were eligible in this bounded pass.") + limitNote };
     const where = `${formatSize(bytes)} in ${plural(folders, "workspace")}`;
-    return preview ? { outcome: "preview", summary: `Would delete ${plural(files, "old cache entry", "old cache entries")} (${where}).` } : { outcome: "done", summary: `Deleted ${plural(files, "old cache entry", "old cache entries")} (${where}).` };
+    return preview ? { outcome: "preview", summary: `Would delete ${plural(files, "old cache entry", "old cache entries")} (${where}).${limitNote}` } : { outcome: "done", summary: `Deleted ${plural(files, "old cache entry", "old cache entries")} (${where}).${limitNote}` };
   }
 
   // -------------------------------------------------------------- status

@@ -101,7 +101,7 @@ export async function trimCache(cache: CacheDir, uid: number, now: number, maxDa
   const { entries, truncated, scanned } = await listCache(cache.dir, options.scanBudget, options.signal);
   const plan = planTurbo(entries, now, maxDays, uid).remove as Array<CacheEntry & { dev: number; ino: number }>;
   const candidates = plan.slice(0, Math.min(options.budget, MAX_DELETES_PER_RUN));
-  const result: TrimResult = { removed: 0, bytes: 0, candidates: candidates.length, truncated, scanned, stopped: null };
+  const result: TrimResult = { removed: 0, bytes: 0, candidates: candidates.length, truncated: truncated || plan.length > candidates.length, scanned, stopped: null };
   if (options.preview || !candidates.length) { result.bytes = candidates.reduce((sum, entry) => sum + entry.size, 0); return result; }
   const remove = options.remove ?? unlink;
   for (const [index, entry] of candidates.entries()) {

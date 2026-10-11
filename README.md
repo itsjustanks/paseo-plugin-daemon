@@ -40,13 +40,15 @@ an isolated preview: no real accounts, host addresses, project names, credential
   check loop that runs every 10 seconds even when Paseo is closed. Stop or Ask an agent sits beside
   it. An optional guard (off by default) stops the biggest stoppable job when memory stays nearly
   full for over a minute.
-- **Disk usage, and an agent to clean up.** Free space at a glance (the sidebar dot warns at 85%
+- **Disk usage and reviewed cleanup.** Free space at a glance (the sidebar dot warns at 85%
   full), every Paseo workspace by size with its status and what looks safe to clear, and shared
-  caches and temporary files by size. Hosts deletes nothing: "Ask an agent to clean this up" hands an
-  agent the exact list and the checks to do (nothing in use, nothing unsaved, never .git, .env files,
-  agents' history or Paseo's data) before it deletes anything. A workspace's own Hosts tab speaks up
+  caches and temporary files by size. Delete offers only verified tool-managed workspace folders,
+  behind a warning listing exactly what will go. Shared caches, temporary folders and ambiguous
+  contents use "Ask an agent to clean this up" with the list and checks to perform. A workspace's
+  own Hosts tab speaks up
   when 500 MB or more of it looks safe to clear (or the disk is 85% full), the chip under the message
-  box appears at 95% full, and the Hosts attachments include a Disk report.
+  box appears at 95% full, and the Hosts attachments include a Disk report. Linux Housekeeping
+  separately offers automatic cleanup after its live-mode confirmation; it starts in preview.
 - **Stuck plugins, restarted in one press.** When a Paseo plugin stops answering ("Activity isn't
   answering (12 timeouts in 10 min)"), Paseo can't add, update or reload plugins. Restart reloads just
   that plugin; if Paseo is stuck on it, Hosts stops only that plugin's own process and reloads it. The
@@ -362,8 +364,10 @@ bounded to 256 priority changes and TERM targets and 64 owner lookups per scan. 
 at most 16 workspaces, 1024 metadata entries per folder, 2048 metadata entries total and 256 candidates
 per cycle. Activity is checked per 16-candidate batch (at most 31 batch checks across 16 workspaces),
 while policy/cancellation and inode checks run per unlink. A new job can start within that bounded
-batch window; the next batch refuses. Remaining cache entries wait for a later scheduled pass. Refused,
-skipped and partial results are reported; a count never proves an exit or delete.
+batch window; the next batch refuses. There is no continuation cursor yet: later passes can revisit
+the same first workspaces or entries, leaving later ones unexamined indefinitely. A scan-limit result
+says so; use Workspaces for manual inspection of the rest. Refused, skipped and partial results are
+reported; a count never proves an exit or delete.
 
 Audit files are private (0600) under `$PASEO_HOME/daemon-link`: `housekeeping.jsonl` rotates at 600
 results to retain 500; `housekeeping-state.json` keeps job timestamps across reloads. Reads are

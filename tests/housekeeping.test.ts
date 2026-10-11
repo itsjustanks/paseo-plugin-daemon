@@ -36,6 +36,13 @@ async function setup(rows: HkProcess[] = []) {
 const build = (pid: number) => proc({ pid, exe: "/usr/bin/node", argv: ["node", "typescript/bin/tsc"] });
 
 describe("housekeeping cycle authority", () => {
+  it("reports that a bounded workspace pass can leave later folders unexamined", async () => {
+    const f = await setup(); f.settings = { ...HOUSEKEEPING_DEFAULTS };
+    f.deps.workspaces = async () => Array.from({ length: 17 }, (_, i) => ({ name: `project-${i}`, directory: join(f.dir, `project-${i}`), status: "idle", devServers: [] }));
+    const hk = new Housekeeper(f.deps); await hk.tick();
+    expect((await hk.status()).lastRuns.turbo?.summary).toContain("Scan limit reached; later passes may revisit");
+    expect(f.effects).toEqual(["release"]);
+  });
   it("preview records decisions and never renices, signals, deletes or creates helpers", async () => {
     const f = await setup([proc(), build(41)]); f.settings = { ...HOUSEKEEPING_DEFAULTS };
     await rm(join(f.dir, "gate.sh"));
