@@ -12,8 +12,8 @@ vi.mock("node:child_process", () => ({ execFile: (_file: string, _args: string[]
 vi.mock("../server/scope", () => ({ ProjectScope: class { bind = vi.fn(); refresh = f.refresh; match = f.match; workspaceDescriptors = f.descriptors; } }));
 vi.mock("../server/transfers", () => ({ ProjectTransfers: class { close = vi.fn(); } }));
 vi.mock("../server/action-log", () => ({ ActionLog: class { append = vi.fn(); recent = vi.fn().mockResolvedValue([]); } }));
-vi.mock("../server/handlers", () => ({ createMonitorHandlers: () => ({
-  internals: f.unsupported ? null : { uid: 1000, selfPid: 20, parentPid: 10, adapter: { platform: "linux", readIdentity: f.readIdentity }, collector: { collect: f.collect } },
+vi.mock("../server/handlers", () => ({ createMonitorHandlers: (options: any) => ({
+  internals: f.unsupported ? null : { uid: 1000, selfPid: 20, parentPid: 10, adapter: { platform: "linux", readIdentity: f.readIdentity }, collector: { collect: f.collect }, manager: new ProcessManager({ ...options, daemonPid: 10 } as any) },
   snapshot: vi.fn(async () => ({ services: f.services })),
   stop: vi.fn(async () => ({ pid: 42, status: "stopped", signaledCount: 1, message: "Stopped" })),
   forceStop: vi.fn(async () => ({ pid: 42, status: "stopped", signaledCount: 1, message: "Stopped" })),
@@ -65,6 +65,7 @@ vi.mock("../server/housekeeping-files", () => ({ privateOwnedProfile: vi.fn(asyn
 vi.mock("../server/disk-children", () => ({ ChildGroup: class { killAll = f.kill; } }));
 vi.mock("../server/disk-remove", () => ({ quarantineAndRemove: f.remove }));
 
+import { ProcessManager } from "../server/processes";
 import { bounded, createRuntime, parseWorkspaceList } from "../server/runtime";
 
 beforeEach(() => {
