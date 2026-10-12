@@ -3,6 +3,9 @@
 Run the development runtime on a machine that stays on. Your phone is a client; closing your laptop should not
 remove the runtime or its recovery credentials. Prepare recovery before the target stops.
 
+See [feature sources and integration status](feature-sources.md) for adapted code, external references and
+features that are not integrated.
+
 ## Choose a runtime
 
 | Choice | Good fit | What you maintain |

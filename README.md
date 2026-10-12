@@ -24,6 +24,8 @@ an isolated preview: no real accounts, host addresses, project names, credential
 
 ## Headless work in 0.19.0
 
+[Feature sources and integration status](docs/feature-sources.md) maps the supplied references to this release.
+
 Select the always-on **remote host** in Paseo. Under **Processes → Browsers**, watch an existing Agent Browser
 session and select its tab. Workspace table **Watch browser** actions and a workspace's **Agent browsers**
 panel scope the list to a verified workspace. The browser keeps running on the selected host when the viewer

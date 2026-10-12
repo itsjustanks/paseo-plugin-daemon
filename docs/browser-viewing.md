@@ -51,10 +51,9 @@ directory, verified fresh workspace cwd attribution, changing background-tab scr
 tab, and a usable browser after viewer detach. Unit fixtures cover Linux and Darwin endpoint parsing,
 freshness, timeout cleanup, redaction and lifetime.
 
-The parent also verified the frozen browser patch with isolated synthetic Agent Browser 0.27.0 sessions on
-Linux: changing capture, preserved active tab, usable browser after detach and owned-resource cleanup passed.
-Its evidence is `rollout/hosts019-linux-browser-result.json` and `cleanup.json` in the separate rollout
-workspace. Physical mobile and actual remote Paseo RPC viewing remain separate validation boundaries.
+An isolated Linux smoke with synthetic Agent Browser 0.27.0 sessions also verified changing capture,
+preserved active tab, a usable browser after detach and owned-resource cleanup. Physical mobile and actual
+remote Paseo RPC viewing remain separate validation boundaries.
 
 Browser transport patterns use the pinned MIT [shared browser
 source](https://github.com/omercnet/paseo-plugins/tree/daed6eb12f4156ca392f71c48e7a9ccca231ae8c/paseo-shared-browser),
