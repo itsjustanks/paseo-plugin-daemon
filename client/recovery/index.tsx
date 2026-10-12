@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { Linking, Text, View } from "react-native";
 import { useRpc, type PluginSurfaceProps } from "@getpaseo/plugin/client";
-import { Button, Field, Note, Row, SPACE, TYPE, Toggle } from "../kit";
+import { Button, Field, Note, Row, SPACE, TYPE, ToggleRow } from "../kit";
 import { CancelButton, Sheet, useOnce } from "../feedback";
 import { PRESET_LABELS, RECOVERY_PROFILE_MAX, RecoveryDetailsSchema, recoveryCancel, recoveryConfirm, recoveryList, recoveryPreview, recoverySave, recoveryTest, recoveryWarning, recoveryActionLabel, type RecoveryAction, type RecoveryDetails, type RecoveryPreview, type RecoveryProfile, type RecoveryResult } from "../../shared/recovery";
 
@@ -76,7 +76,7 @@ function ProfileForm({ theme, initial, busy, onSave, onCancel }: Pick<PluginSurf
     <Row>{(["docker", "systemd"] as const).map(preset => <Button key={preset} theme={theme} label={PRESET_LABELS[preset]} primary={draft.preset === preset} onPress={() => change("preset", preset)} />)}</Row>
     {draft.preset === "docker" ? <Field theme={theme} label="Existing container name" value={draft.container} onChangeText={value => change("container", value)} placeholder="paseo-dev-stack-paseo" />
       : <Field theme={theme} label="Configured systemd unit" value={draft.unit} onChangeText={value => change("unit", value)} placeholder="paseo.service" />}
-    <Toggle theme={theme} label="Use sudo -n on the target" value={draft.sudo} onChange={value => change("sudo", value)} disabled={busy} />
+    <ToggleRow theme={theme} label="Use sudo -n on the target" text="Use sudo -n on the target" value={draft.sudo} onChange={value => change("sudo", value)} disabled={busy} />
     <Note theme={theme}>Enable only with deliberately scoped non-interactive permissions on the target. Root runs directly. Docker worker commands run as the container's paseo user.</Note>
     {error ? <Note theme={theme} tone="danger">{error}</Note> : null}
     <Row><CancelButton theme={theme} disabled={busy} onPress={onCancel} /><Button theme={theme} label="Save connection" primary busy={busy} disabled={busy} onPress={submit} /></Row>

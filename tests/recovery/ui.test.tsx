@@ -69,6 +69,9 @@ describe("recovery native UI contracts", () => {
   });
   it("saves offline without asking for passwords or key contents", async () => {
     rpc.profiles = []; await mount(); await click("Add connection");
+    const sudoLabel = "Use sudo -n on the target";
+    expect(renderer.root.findAll(n => (n.type as unknown) === "Text" && n.children.includes(sudoLabel))).toHaveLength(1);
+    expect(press(sudoLabel).props.accessibilityState.checked).toBe(false);
     await act(async () => { input("Connection name").props.onChangeText("New fixture"); input("Target hostname or SSH alias").props.onChangeText("offline.example.test"); });
     await click("Save connection"); expect(handler("save")).toHaveBeenCalledOnce(); expect(handler("test")).not.toHaveBeenCalled();
     expect(handler("save").mock.calls[0][0]).toMatchObject({ schemaVersion: 1, expectedRevision: 0, details: { hostname: "offline.example.test", auth: { kind: "config" } } });
