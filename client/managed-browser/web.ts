@@ -265,4 +265,3 @@ export function setBrowserCanvasCursor(node: unknown, cursor: BrowserCursor | nu
     (node as BrowserCanvasNode).style.cursor = cursor ?? "default";
   }
 }
-

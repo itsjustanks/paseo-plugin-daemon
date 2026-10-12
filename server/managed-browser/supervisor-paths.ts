@@ -33,4 +33,3 @@ export function resolveSupervisorPaths(
     lock: join(root, "startup.lock"),
   };
 }
-
