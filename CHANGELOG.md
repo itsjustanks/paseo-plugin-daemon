@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.21.0 — unreleased
+## 0.21.0 — 2026-10-12
 
 - Added a full-height workspace Browser with shared tabs, navigation, real input and server-enforced
   human priority for its injected workspace MCP. Opening is explicit; remote lifetime survives clients.

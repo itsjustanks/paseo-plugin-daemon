@@ -26,6 +26,7 @@ Assets live under `$PASEO_HOME/plugin-data/daemon-link/browser/.runtime-<uuid>`,
 private CLI configuration, sockets and tickets remain Hosts-owned. These are same-user isolation and
 authority boundaries, not an OS sandbox against arbitrary same-user code. On macOS, Chrome Crashpad
 can still use its OS user-data path outside the private runtime; private HOME does not confine it.
+The inherited agent-browser Linux launcher uses `--no-sandbox`; no Chromium OS sandbox is claimed.
 Keep old asset versions while
 their processes use them; automatic reclamation is intentionally deferred. Interrupted preparation may
 leave `prepare.lock`; verify no preparation is running before removing that owned lock.
@@ -38,7 +39,7 @@ Preparation temporarily needs archives, dependency cache and both old/new runtim
 
 Preparation targets macOS arm64 and Linux x64/glibc. Node's macOS minimum is 13.5; Linux requires kernel
 4.18+, glibc 2.28+ and libstdc++ GLIBCXX_3.4.25, plus Chrome's shared libraries. No system packages are
-installed. Linux live acceptance remains a separate canary gate. Other architectures, Windows, musl and
+installed. Isolated Linux x64 acceptance passed as described below. Other architectures, Windows, musl and
 display/Xvfb provisioning are outside this release's preparation support.
 
 ## Transport and input boundaries
@@ -55,7 +56,7 @@ reconciled automatically; no cleanup guarantee is made for an archive event the 
 
 The full suite passed 1,717 tests with 13 skips; unchanged function coverage floor 85% passed at 85.48%.
 Real 0.11.1/0.11.2 compilers and private bootstrap tests passed under exact Node 22.23.2. Three real Mac
-Chromium smokes passed; two Linux-only smokes were skipped. Loopback Node 22 bridge to Node 24 supervisor
+Chromium smokes passed; two Linux-only smokes were skipped on Mac. Loopback Node 22 bridge to Node 24 supervisor
 and MCP verified navigation, tabs, human priority and stale-agent rejection. Physical keyboard input through
 the actual managed UI delivered Hello exactly once, with trusted key/input events. Desktop and 390px web
 layouts were inspected. Synthetic pagehide stopped captures and preserved the runtime. Scoped independent
@@ -64,7 +65,14 @@ UI and plugin RPC acceptance at 390px and 1440px: visible control labels, acquir
 viewport resize and changing frames, with no horizontal document overflow. Five focused control-label
 tests also passed after the full suite; the full suite was not repeated for that label-only change.
 
+Isolated Linux x64 acceptance passed five native browser smokes and eight spawned supervisor/MCP
+checks through the Node 22.23.2 bridge. Verified private versions were Node 24.20.0, agent-browser 0.38.2
+and Chrome for Testing 155.0.8059.39 (revision 1697595). Checks covered explicit startup, changing JPEGs,
+trusted input, human priority, takeover fences, shared-page MCP navigation and private executable paths.
+Owned browser processes, fixture listeners, IPC and marked scratch were cleaned up; the existing Node 22
+daemon remained unchanged. This is isolated runtime acceptance, not production deployment acceptance.
+
 Paste and IME insertion/cancellation have adapter tests, not live OS clipboard/IME acceptance. Touch and
 native compose have ported policy/input/component tests; physical React Native phone interaction remains
-unverified, including native background behavior. Live Linux acceptance remains pending its separate
-reviewer gate. Remote Paseo network latency and live OS clipboard/IME behavior remain unverified.
+unverified, including native background behavior. Remote Paseo network latency and live OS clipboard/IME
+behavior remain unverified.
