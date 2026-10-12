@@ -9,23 +9,23 @@ const daemon = (serverId: string, switchedOn: boolean, peers: { serverId: string
 
 describe("buildDaemonRows", () => {
   it("lists every connected host with its switch and the daemons it can reach", () => {
-    const rows = buildDaemonRows([host("srv_tower", "unRaid"), host("srv_mac", "MacBook")], {
-      daemons: [daemon("srv_tower", true, [peer("srv_mac", "Maxwells-MacBook-Pro-2.local")]), daemon("srv_mac", false)],
+    const rows = buildDaemonRows([host("srv_tower", "Storage host"), host("srv_mac", "MacBook")], {
+      daemons: [daemon("srv_tower", true, [peer("srv_mac", "workstation.example.test")]), daemon("srv_mac", false)],
       failedCount: 0,
     });
     expect(rows).toEqual([
-      { serverId: "srv_tower", label: "unRaid", state: "on", detail: "Shared peers: MacBook" },
+      { serverId: "srv_tower", label: "Storage host", state: "on", detail: "Shared peers: MacBook" },
       { serverId: "srv_mac", label: "MacBook", state: "off", detail: "Off: no links are shared. Previously shared links are not revoked." },
     ]);
   });
 
   it("names a peer the app is not connected to by its hostname", () => {
-    const [row] = buildDaemonRows([host("srv_tower", "unRaid")], { daemons: [daemon("srv_tower", true, [peer("srv_laptop", "laptop.local")])], failedCount: 0 });
+    const [row] = buildDaemonRows([host("srv_tower", "Storage host")], { daemons: [daemon("srv_tower", true, [peer("srv_laptop", "laptop.local")])], failedCount: 0 });
     expect(row.detail).toBe("Shared peers: laptop.local");
   });
 
   it("says when a switched-on daemon has no peers yet", () => {
-    const [row] = buildDaemonRows([host("srv_tower", "unRaid")], { daemons: [daemon("srv_tower", true)], failedCount: 0 });
+    const [row] = buildDaemonRows([host("srv_tower", "Storage host")], { daemons: [daemon("srv_tower", true)], failedCount: 0 });
     expect(row.detail).toBe("Shared peers: none yet. Switch on at least one other daemon.");
   });
 

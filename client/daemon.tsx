@@ -1,3 +1,6 @@
+import { RecoverySection } from "./recovery";
+import { CrossDaemonSection } from "./cross-daemon/section";
+import { BrowserSessions } from "./browser-sessions";
 import { Transfers } from "./transfers";
 import { type PluginSurfaceProps, useRpc, useSettings } from "@getpaseo/plugin/client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -40,7 +43,7 @@ import { Button, Card, Facts, Grid, Notice, StatusPill, TokensProvider, formatBy
  * they fold out under Workspaces (`shared/tabs.ts` maps the old ids).
  */
 /** `params.tab` (and `params.open`) arrive with Paseo 0.11 screens; `initialTab` is for the preview. */
-type DaemonProps = PluginSurfaceProps & { shortcuts?: boolean; params?: Record<string, string>; initialTab?: string };
+type DaemonProps = PluginSurfaceProps & { shortcuts?: boolean; params?: Record<string, string>; initialTab?: string; workspaceId?: string; visible?: boolean; onWatchBrowser?(workspaceId: string): void };
 
 export function DaemonSurface(props: DaemonProps) {
   return <TokensProvider value={useUi(props.theme, props.layout.compact)}><HostsNavigationProvider navigation={props.navigation} hostId={props.host.id}><SayRoot><DaemonBody key={props.host.id} {...props} /></SayRoot></HostsNavigationProvider></TokensProvider>;
@@ -176,7 +179,7 @@ function DaemonBody(props: DaemonProps) {
         sync={<AccordionItem key={foldKey("sync")} theme={theme} compact={layout.compact} icon="FolderSync" title="Copy a project from another computer" summary="Preview its Git history before it arrives (Project Sync)" open={foldOpen("sync")}>
           <Transfers hostId={props.host.id} openPairing={() => go("workspaces", "private", true)} />
         </AccordionItem>} /> : null}
-      {tab === "processes" ? <ProcessesTab theme={theme} compact={layout.compact} hostId={props.host.id} say={setMessage} issues={verdict?.issues ?? []} onChanged={() => void health.refetch()} /> : null}
+      {tab === "processes" ? <ProcessesTab theme={theme} compact={layout.compact} hostId={props.host.id} say={setMessage} issues={verdict?.issues ?? []} onChanged={() => void health.refetch()} browserPanel={<BrowserSessions {...props} workspaceId={props.workspaceId} visible={props.visible} />} /> : null}
       {tab === "help" ? <HelpTab theme={theme} compact={layout.compact} go={toHelp} minutes={formatMinutes(minutes)} shortcuts={!!props.shortcuts} /> : null}
       {tab === "workspaces" && <View style={{ gap: t.space.xl }}>
         <DiskCard theme={theme} report={disk.report} loading={disk.query.isPending} scanning={disk.scan.isPending} onScan={() => disk.scan.mutate()} onCaches={() => go("workspaces", "caches")} onDelete={clearJob.running ? undefined : askDelete} askNow={fold.id === "cleanup"} onAsked={() => go("workspaces")} />
@@ -207,7 +210,7 @@ function DaemonBody(props: DaemonProps) {
             )}
           </View>
         ) : null}
-        <WorkspaceList theme={theme} compact={layout.compact} report={disk.report} processes={hubProcesses.data?.processes ?? []} say={setMessage} onDelete={clearJob.running ? undefined : askDelete} job={clearJob.job} />
+        <WorkspaceList theme={theme} compact={layout.compact} report={disk.report} processes={hubProcesses.data?.processes ?? []} onWatchBrowser={props.onWatchBrowser} say={setMessage} onDelete={clearJob.running ? undefined : askDelete} job={clearJob.job} />
         {deleting ? <DeleteDialog key={deleting.asked} theme={theme} tokens={deleting.tokens} open onClose={() => setDeleting(null)} onStarted={(job) => clearJob.follow(job)} /> : null}
         <Accordion theme={theme}>
           {disk.report && disk.report.scan.state !== "never" ? (
@@ -234,7 +237,9 @@ function DaemonBody(props: DaemonProps) {
             <Text style={t.text.body}>Save a forward on your own computer's daemon: the server then answers at 127.0.0.1 on your laptop and nothing is published. Pairing is simpler when both computers run Paseo.</Text>
             <Connections profiles={profiles} states={links.data?.connections || []} refresh={() => { void links.refetch(); }} initialRemotePort={sshRemotePort} />
           </AccordionItem>
+          <AccordionItem key={foldKey("recovery")} theme={theme} compact={layout.compact} icon="LifeBuoy" title="Recover another host" summary="Saved SSH connections on this runner · no automatic recovery" open={foldOpen("recovery")}><RecoverySection {...props} /></AccordionItem>
         </Accordion>
+        <CrossDaemonSection theme={theme} layout={layout} />
         {!apps.length && ready ? <QuietLine theme={theme} icon="Server">No dev server is running. Run a project's dev command in its Paseo terminal and it appears here with an Open button.</QuietLine> : null}
         <QuietLine theme={theme} icon="Info">Databases, system services and other listeners are left out. Link length is under Settings → Hosts.</QuietLine>
       </View>}

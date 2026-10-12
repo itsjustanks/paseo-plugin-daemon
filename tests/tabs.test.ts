@@ -36,6 +36,9 @@ describe("Hosts tabs (0.11.0)", () => {
   });
 
   it("honours `open` only on the tab its fold-out lives on", () => {
+    expect(resolveTab("recovery")).toEqual({ tab: "workspaces", fold: "recovery" });
+    expect(resolveTab("workspaces", "recovery")).toEqual({ tab: "workspaces", fold: "recovery" });
+    expect(resolveTab("overview", "recovery")).toEqual({ tab: "overview", fold: null });
     expect(resolveTab("workspaces", "ssh")).toEqual({ tab: "workspaces", fold: "ssh" });
     expect(resolveTab("connect", "sync")).toEqual({ tab: "workspaces", fold: "private" });
     expect(resolveTab("overview", "sync")).toEqual({ tab: "overview", fold: "sync" });

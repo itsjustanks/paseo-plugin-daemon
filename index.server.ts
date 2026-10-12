@@ -1,3 +1,6 @@
+import { contributeRecovery } from "./server/recovery";
+import { stopActiveWork } from "./server/shutdown";
+import { contributeCrossDaemon } from "./server/cross-daemon/register";
 import { BrowserSessions } from "./server/browser-sessions";
 import { BrowserDiscovery } from "./server/browser-discovery";
 import { browserSessions, browserViewOpen, browserViewFrame, browserViewClose } from "./shared/browser";
@@ -61,6 +64,8 @@ function housekeepingReader(handle: SettingsHandle): () => Promise<HousekeepingS
 
 export default function contribute(server: PluginServerContext) {
   const handle = server.registerSettings(hostsSettings) as SettingsHandle;
+  const stopCrossDaemon = contributeCrossDaemon(server);
+  const closeRecovery = contributeRecovery(server);
   const readSettings = settingsReader(handle);
   const runtime = createRuntime({ readSettings, readHousekeeping: housekeepingReader(handle) });
   const removeHooks = registerHooks(server, runtime, readSettings);
@@ -141,5 +146,11 @@ export default function contribute(server: PluginServerContext) {
   server.handle(peer.peerServices, ({ id }, context) => runtime.withContext(context, () => runtime.peers.services(id)));
   server.handle(peer.peerForward, ({ id, port }, context) => runtime.withContext(context, () => runtime.peers.forward(id, port)));
   server.handle(peer.peerDisconnect, ({ id }, context) => runtime.withContext(context, () => runtime.peers.disconnect(id)));
-  return async () => { browsers.close(); await runtime.housekeeper.close().catch(() => undefined); removeHooks(); if (typeof offArchived === "function") offArchived(); unsubscribe(); health.close(); runtime.guard?.close(); await runtime.disk.close().catch(() => undefined); runtime.processes.close(); await Promise.all([runtime.links.close(), runtime.peers.close(), runtime.transfers.close()]); };
+  return () => stopActiveWork({
+    cross: stopCrossDaemon, recovery: closeRecovery,
+    housekeeping: () => runtime.housekeeper.close(), browsers: () => browsers.close(),
+    cancel: [removeHooks, () => { if (typeof offArchived === "function") offArchived(); }, unsubscribe,
+      () => health.close(), () => runtime.guard?.close(), () => runtime.processes.close()],
+    close: [() => runtime.disk.close(), () => runtime.links.close(), () => runtime.peers.close(), () => runtime.transfers.close()],
+  }).then(() => undefined);
 }

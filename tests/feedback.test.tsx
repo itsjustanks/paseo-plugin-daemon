@@ -120,6 +120,20 @@ describe("Confirm", () => {
     });
   }
 
+  it("focuses enabled Cancel on each warning opening, even when the modal retains hidden children", async () => {
+    host.Modal = ({ children }: { children: React.ReactNode }) => <>{children}</>;
+    const confirm = vi.fn(), cancel = vi.fn(), focus = vi.fn();
+    const warning = (open: boolean, busy = false) => <Confirm theme={theme} open={open} busy={busy} title="Share full authority?" text="Fictional warning" confirmLabel="Share full daemon authority" onConfirm={confirm} onCancel={cancel} />;
+    let renderer!: ReactTestRenderer;
+    await act(async () => { renderer = create(warning(false), { createNodeMock: element => element.type === "Pressable" && (element.props as { accessibilityLabel?: string }).accessibilityLabel === "Cancel: Share full authority?" ? { focus } : null }); });
+    expect(focus).not.toHaveBeenCalled(); expect(pressable(renderer, "Cancel: Share full authority?")).toBeUndefined();
+    await act(async () => renderer.update(warning(true, true))); expect(focus).not.toHaveBeenCalled();
+    await act(async () => renderer.update(warning(true))); expect(focus).toHaveBeenCalledOnce();
+    await press(renderer, "Cancel: Share full authority?"); expect(cancel).toHaveBeenCalledOnce(); expect(confirm).not.toHaveBeenCalled();
+    await act(async () => renderer.update(warning(false))); expect(pressable(renderer, "Cancel: Share full authority?")).toBeUndefined();
+    await act(async () => renderer.update(warning(true))); expect(focus).toHaveBeenCalledTimes(2);
+    await act(async () => renderer.unmount());
+  });
   it("in the popover (inPlace) it asks in place even where the app has a dialog", async () => {
     withApp({ modal: true });
     let renderer!: ReactTestRenderer;

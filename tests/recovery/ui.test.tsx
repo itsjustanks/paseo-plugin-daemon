@@ -13,7 +13,7 @@ vi.mock("react-native", async () => {
   const make = (name: string) => (props: Record<string, unknown>) => React.createElement(name, props, props.children as React.ReactNode);
   return { Text: make("Text"), View: make("View"), Pressable: make("Pressable"), TextInput: make("TextInput"), ActivityIndicator: make("ActivityIndicator"), Linking: { openURL: vi.fn(async () => undefined) }, Clipboard: { setString: vi.fn() } };
 });
-const { RecoverySection } = await import("../../client/recovery");
+const { RecoverySection, RecoveryConfirmation } = await import("../../client/recovery");
 const fixtureProfile: RecoveryProfile = { id: "10000000-0000-4000-8000-000000000001", revision: 1, name: "Fixture target", hostname: "fixture.example.test", user: "", port: null, auth: { kind: "config" }, preset: "docker", container: "paseo-dev-stack-paseo", unit: "paseo.service", sudo: false };
 const props = { host: { id: "fixture-helper", label: "Fixture helper" }, theme: { colors: new Proxy({}, { get: () => "#336699" }) }, layout: { compact: true, platform: "web" } } as unknown as PluginSurfaceProps;
 let renderer: ReactTestRenderer;
@@ -44,6 +44,19 @@ describe("recovery native UI contracts", () => {
     await click("Restart existing container"); expect(handler("confirm")).not.toHaveBeenCalled(); expect(rpc.focus).toHaveBeenCalled();
     const view = JSON.stringify(renderer.toJSON()); expect(view).toContain("All work inside this container"); expect(view).toContain("Fixture helper"); expect(view).toContain("Fixture target");
     await click("Cancel"); expect(handler("cancel")).toHaveBeenCalledOnce(); expect(handler("confirm")).not.toHaveBeenCalled();
+  });
+  it("focuses Cancel when a newly opened busy confirmation becomes enabled", async () => {
+    const cancelled = vi.fn(), confirmed = vi.fn();
+    let disabled = true;
+    // Like the DOM, the fake native node cannot focus while disabled. A mere focus call is not proof.
+    const focus = vi.fn(() => { if (disabled) throw new Error("Cannot focus disabled Cancel"); });
+    const preview = { token: "10000000-0000-4000-8000-000000000002", profile: fixtureProfile, action: "restart" as const, expiresAt: Date.now() + 60000 };
+    await act(async () => { renderer = create(<RecoveryConfirmation {...props} preview={preview} busy onCancel={cancelled} onConfirm={confirmed} />, { createNodeMock: element => element.type === "Pressable" && (element.props as { accessibilityLabel?: string }).accessibilityLabel === "Cancel" ? { focus } : null }); });
+    expect(focus).not.toHaveBeenCalled(); expect(press("Cancel").props.disabled).toBe(true);
+    disabled = false;
+    await act(async () => { renderer.update(<RecoveryConfirmation {...props} preview={preview} busy={false} onCancel={cancelled} onConfirm={confirmed} />); });
+    expect(focus).toHaveBeenCalledOnce(); expect(press("Cancel").props.disabled).toBe(false);
+    await click("Cancel"); expect(cancelled).toHaveBeenCalledOnce(); expect(confirmed).not.toHaveBeenCalled();
   });
   it("requires exact target name before reboot; duplicate confirm presses act once", async () => {
     await mount(); await click("Manage Fixture target"); await click("Reboot host");

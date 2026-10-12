@@ -130,7 +130,7 @@ export function createAsk(deps: AskDeps) {
     const used = report.container?.memoryLimitBytes ? report.container.memoryUsedBytes : report.host.memoryUsedBytes;
     const parts = [`memory ${bytesWords(used)} of ${bytesWords(report.memoryBasisBytes)}${report.memoryBasis === "container" ? " (container limit)" : ""}`];
     if (report.host.cpuPercent !== null) parts.push(`CPU ${Math.round(report.host.cpuPercent)}%`);
-    parts.push(`${report.heavyJobs.count} of ${report.heavyJobs.limit} heavy jobs`);
+    parts.push(`${report.heavyJobs.count} heavy jobs (warning above ${report.heavyJobs.limit}; advisory only, never stops jobs)`);
     if (disk && disk.percent >= DISK_WARNING_PERCENT) parts.push(`disk ${Math.round(disk.percent)}% full (${formatSize(disk.freeBytes)} free)`);
     return parts.join(", ");
   }

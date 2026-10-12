@@ -255,8 +255,8 @@ export function RunningHere({ theme, rows, say }: { theme: Theme; rows: readonly
  * with ask-first Stop, its disk with one-press Delete (a warning first) for
  * the build folders that look safe, the last clear's results, and Ask an agent.
  */
-export function WorkspaceRow({ theme, compact, workspace, checking, processes = [], say = () => undefined, onDelete, job = null }: {
-  theme: Theme; compact: boolean; workspace: WorkspaceUsage; checking: boolean;
+export function WorkspaceRow({ theme, compact, workspace, checking, processes = [], say = () => undefined, onDelete, onWatchBrowser, job = null }: {
+  theme: Theme; compact: boolean; workspace: WorkspaceUsage; checking: boolean; onWatchBrowser?(workspaceId: string): void;
   processes?: readonly ProcessRow[]; say?: Say; onDelete?(tokens: string[]): void; job?: DiskJob | null;
 }) {
   const [open, setOpen] = useState(false);
@@ -276,7 +276,7 @@ export function WorkspaceRow({ theme, compact, workspace, checking, processes = 
         disk: <Note theme={theme}>{workspace.measured === false ? checking ? "Checking…" : "Not checked" : size(workspace.totalBytes, workspace.partial)}</Note>,
         reclaimable: <Note theme={theme}>{workspace.measured === false ? "Not checked" : size(workspace.clearableBytes, workspace.partial)}</Note>,
         running: <Note theme={theme}>{String(processes.length)}</Note>,
-        actions: <Row><Button theme={theme} label={open ? "Hide details" : "Details"} accessibilityLabel={`${open ? "Hide details" : "Details"} for ${label}`} onPress={() => setOpen(!open)} /></Row>,
+        actions: <Row><Button theme={theme} label={open ? "Hide details" : "Details"} accessibilityLabel={`${open ? "Hide details" : "Details"} for ${label}`} onPress={() => setOpen(!open)} />{onWatchBrowser ? workspace.workspaceIds?.map((id, index) => <Button key={id} theme={theme} icon="Globe" label={workspace.workspaceIds!.length > 1 ? `Watch ${workspace.names[index] ?? "workspace"} browser` : "Watch browser"} accessibilityLabel={`Watch agent browser in ${workspace.names[index] ?? label}`} onPress={() => onWatchBrowser(id)} />) : null}</Row>,
       }} />
       {open ? <View style={{ gap: SPACE.row }}>
         <View style={{ gap: SPACE.xs }}>
@@ -363,7 +363,7 @@ export function CacheList({ theme, groups, compact = false }: { theme: Theme; gr
 }
 
 /** Search and sort the last disk report without starting another scan. */
-export function WorkspaceList({ theme, compact, report, processes = [], say, onDelete, job = null }: { theme: Theme; compact: boolean; report: DiskReport | undefined; processes?: readonly ProcessRow[]; say?: Say; onDelete?(tokens: string[]): void; job?: DiskJob | null }) {
+export function WorkspaceList({ theme, compact, report, processes = [], say, onDelete, onWatchBrowser, job = null }: { theme: Theme; compact: boolean; report: DiskReport | undefined; processes?: readonly ProcessRow[]; say?: Say; onWatchBrowser?(workspaceId: string): void; onDelete?(tokens: string[]): void; job?: DiskJob | null }) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("all");
   const [sort, setSort] = useState<ResourceSort<WorkspaceSort>>({ id: "disk", direction: "desc" });
@@ -377,7 +377,7 @@ export function WorkspaceList({ theme, compact, report, processes = [], say, onD
       filters={[{ id: "all", label: "All statuses" }, ...["working", "waiting", "failed", "idle", "unlinked"].map((id) => ({ id, label: id.charAt(0).toUpperCase() + id.slice(1) }))]} />
     <ResourceTable compact={compact}>{(narrow) => <>
       <ResourceHeader theme={theme} columns={WORKSPACE_COLUMNS} compact={narrow} sort={sort} onSort={(id) => { setSort(nextResourceSort(sort, id as WorkspaceSort)); setPage(0); }} />
-      {rows.slice(shownPage * TABLE_PAGE, (shownPage + 1) * TABLE_PAGE).map(({ workspace, processes: running }) => <WorkspaceRow key={workspace.id} theme={theme} compact={narrow} workspace={workspace} checking={report.scan.state === "running"} processes={running} say={say} onDelete={onDelete} job={job} />)}
+      {rows.slice(shownPage * TABLE_PAGE, (shownPage + 1) * TABLE_PAGE).map(({ workspace, processes: running }) => <WorkspaceRow key={workspace.id} theme={theme} compact={narrow} workspace={workspace} checking={report.scan.state === "running"} processes={running} say={say} onDelete={onDelete} onWatchBrowser={onWatchBrowser} job={job} />)}
     </>}</ResourceTable>
     {!rows.length ? <Note theme={theme}>No workspaces match. Clear the search or choose All statuses. Search uses the last disk check.</Note> : null}
     <TablePages theme={theme} count={rows.length} page={shownPage} onPage={setPage} />

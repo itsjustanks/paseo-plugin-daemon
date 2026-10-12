@@ -47,9 +47,10 @@ the agents run, with its browser dependencies there. Installing it on your lapto
 Dev Stack already includes it; check its current README for supported browser and streaming setup. For another
 runtime, follow agent-browser's own installation instructions as that runtime user.
 
-The upcoming Hosts browser workspace panel is the in-Paseo entry point for observing that runtime's browser.
+In Hosts 0.19.0, Processes → Browsers and the Agent browsers workspace panel observe that runtime's browser.
 Treat its roughly one-frame-per-second view as an observer: the agent retains browser control. Availability depends
-on the browser panel being integrated and supported on that host. It is separate from Paseo's desktop browser tools.
+on a safely verified local CDP listener on that host; see [browser support](browser-viewing.md). It is
+separate from Paseo's desktop browser tools.
 Keep browser state and any additional tools in the runtime's persistent storage. Do not open a public stream port.
 
 ## Prepare a separate, always-on recovery helper

@@ -215,6 +215,7 @@ export function OverviewTab({ theme, compact, hostId, verdict, report, devServer
         ) : null}
         <Row>
           {primary === "workspaces" ? <Button theme={theme} label={diskIssue ? "Free up space" : "Open workspaces"} icon={diskIssue ? "HardDrive" : "FolderTree"} primary onPress={() => go("workspaces")} /> : null}
+          <Button theme={theme} label="Recover another host" icon="LifeBuoy" onPress={() => go("workspaces", "recovery")} />
           <Button theme={theme} label={processIssue ? "Review processes" : "See processes"} icon="Cpu" primary={primary === "processes"} onPress={() => go("processes")} />
         </Row>
       </HeroCard>

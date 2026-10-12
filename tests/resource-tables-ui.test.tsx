@@ -311,3 +311,17 @@ describe("native disk table controls", () => {
     expect(rpc.other).not.toHaveBeenCalled();
   });
 });
+
+describe("workspace browser integration", () => {
+  it("opens each registered workspace identity without confusing the folder row id", async () => {
+    const open = vi.fn();
+    const { renderer } = await mount(<WorkspaceRow theme={theme} compact workspace={workspaceUsage({ id: "folder-proof", names: ["Alpha", "Beta"], workspaceIds: ["workspace-a", "workspace-b"] })} checking={false} onWatchBrowser={open} />);
+    await press(renderer, "Watch agent browser in Beta");
+    expect(open).toHaveBeenCalledExactlyOnceWith("workspace-b"); expect(open).not.toHaveBeenCalledWith("folder-proof");
+    expect(buttons(renderer, "Details for Alpha")).toHaveLength(1);
+  });
+  it("keeps unlinked folders without an invented browser workspace action", async () => {
+    const { renderer } = await mount(<WorkspaceRow theme={theme} compact workspace={workspaceUsage({ state: "unlinked" })} checking={false} onWatchBrowser={vi.fn()} />);
+    expect(renderer.root.findAll(node => (node.type as unknown) === "Pressable" && String(node.props.accessibilityLabel).startsWith("Watch agent browser"))).toHaveLength(0);
+  });
+});
