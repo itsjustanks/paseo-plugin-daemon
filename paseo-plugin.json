@@ -1,6 +1,13 @@
 {
   "id": "daemon-link",
   "description": "Hosts: see what's slowing this computer down and stop runaway jobs safely, open your dev servers in a browser, and ask an agent to fix what breaks.",
-  "requirements": { "paseo": ">=0.9.0" },
-  "build": [["npm", "ci", "--ignore-scripts"]]
+  "requirements": {
+    "paseo": ">=0.11.1"
+  },
+  "build": [
+    [
+      "node",
+      "scripts/browser/bootstrap.mjs"
+    ]
+  ]
 }

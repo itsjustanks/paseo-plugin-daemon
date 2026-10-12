@@ -2,6 +2,8 @@
 // Exercise real upstream compilers, then evaluate both bundles with their host API boundaries.
 // Pinned releases cover the manifest's minimum and the native-screen runtime.
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
@@ -10,10 +12,10 @@ import { transform } from "esbuild";
 
 const project = resolve(import.meta.dirname, "..");
 const require = createRequire(join(project, "package.json"));
-const sdk = require("@getpaseo/plugin");
-const serverSdk = require("@getpaseo/plugin/server");
+let sdk = require("@getpaseo/plugin");
+let serverSdk = require("@getpaseo/plugin/server");
 const references = {
-  "0.9.0": "7f7e60bcbbfe57bf5250b10d01c5f97847b43db0",
+  "0.11.2": "75953250959979b8f088bbca8dbd6ee61d0151b1",
   "0.11.1": "ab10a6694ccf068959d1a6b67b6c915e21a9fe91",
 };
 await mkdir(join(project, "node_modules", ".cache"), { recursive: true });
@@ -66,7 +68,7 @@ async function checkServer(bundle, version) {
     agents: { list: async () => ({ entries: [], pageInfo: { hasMore: false, nextCursor: null } }) },
   } };
   const contribute = evaluate(bundle, "server");
-  const cleanup = contribute({ registerSettings() {}, on() { return () => {}; }, handle(contract, handler) {
+  const cleanup = contribute({ registerSettings() {}, before() { return () => {}; }, on() { return () => {}; }, handle(contract, handler) {
     assert(!handlers.has(contract.name), `Duplicate RPC: ${contract.name}`);
     handlers.set(contract.name, { contract, handler });
   } });
@@ -114,17 +116,17 @@ async function checkClient(bundle, version, supportsShortcuts) {
   for (const method of ["addSurface", "addSidebarItem", "addWorkspacePanel", "addSettingsScreen", "addCommandCenterItem"]) {
     context[method] = (...args) => { registrations.set(method, args); return () => {}; };
   }
-  if (version === "0.11.1") for (const method of ["addScreen", "addSidebarHeaderItem"]) {
+  if (["0.11.1", "0.11.2"].includes(version)) for (const method of ["addScreen", "addSidebarHeaderItem"]) {
     context[method] = (...args) => { registrations.set(method, args); return () => {}; };
   }
-  if (version === "0.11.1") context.openScreen = () => {};
+  if (["0.11.1", "0.11.2"].includes(version)) context.openScreen = () => {};
   if (supportsShortcuts) context.addSlashCommand = (...args) => {
     registrations.set(`slash:${args[0].name}`, args[0]); return () => {};
   };
   const cleanup = evaluate(bundle, "client")(context);
   assert.equal(typeof cleanup, "function");
   try {
-    if (version === "0.11.1") {
+    if (["0.11.1", "0.11.2"].includes(version)) {
       assert.equal(registrations.get("addScreen")[0].id, "daemon-link");
       assert.equal(registrations.get("addSidebarHeaderItem")[0].title, "Hosts");
       assert(!registrations.has("addSurface"), "Do not register both navigation formats");
@@ -136,7 +138,7 @@ async function checkClient(bundle, version, supportsShortcuts) {
     assert.equal(registrations.get("addWorkspacePanel")[0].id, "daemon-link");
     assert.equal(registrations.get("addSettingsScreen")[0].id, "hosts");
     assert.equal(registrations.has("slash:hosts"), supportsShortcuts);
-    const Surface = version === "0.11.1" ? registrations.get("addScreen")[0].Component : registrations.get("addSurface")[1];
+    const Surface = ["0.11.1", "0.11.2"].includes(version) ? registrations.get("addScreen")[0].Component : registrations.get("addSurface")[1];
     assert.equal(Surface({}).props.shortcuts, supportsShortcuts);
     if (supportsShortcuts) {
       let opened;
@@ -167,6 +169,8 @@ async function checkMonitorPolicy(compilePlugin, version) {
 
 const POLICY_FIXTURE = String.raw`
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { createMonitorHandlers } from "./server/handlers";
 import { ProjectScope } from "./server/scope";
 import { hashArgv } from "./server/redaction";
@@ -234,6 +238,17 @@ export default async function check() {
 try {
   for (const [version, commit] of Object.entries(references)) {
     process.env.PASEO_HOME = join(directory, `${version}-state`);
+    const integrity = { "0.11.1": "OVekDrwjh4TJXdWLqAA+BfhixFSPHGpnJ/7SqludG3c6L/ucNaatezLiCyAoYx50ynHpc3RnbbxHIIGsGlGAdg==",
+      "0.11.2": "AgTdbjCHdwzIJwL+vRz9j4lgcgemg8BszOwWEngLQ+L2ZRIgSaVVIrNXgKDoH2eC/QicUHTC1DysLqSYLpyy0A==" }[version];
+    const archiveResponse = await fetch(`https://registry.npmjs.org/@getpaseo/plugin/-/plugin-${version}.tgz`);
+    assert(archiveResponse.ok);
+    const archive = Buffer.from(await archiveResponse.arrayBuffer());
+    assert.equal(createHash("sha512").update(archive).digest("base64"), integrity);
+    const sdkRoot = join(directory, `sdk-${version}`); await mkdir(sdkRoot);
+    await writeFile(join(sdkRoot, "sdk.tgz"), archive);
+    execFileSync("tar", ["-xzf", join(sdkRoot, "sdk.tgz"), "-C", sdkRoot]);
+    sdk = require(join(sdkRoot, "package/dist/index.js"));
+    serverSdk = require(join(sdkRoot, "package/dist/server/index.js"));
     const { compilePlugin } = await compiler(version, commit);
     const bundles = await compilePlugin({
       client: join(project, "index.client.tsx"), server: join(project, "index.server.ts"),
@@ -244,7 +259,7 @@ try {
     await checkClient(bundles.clientBundle, version, false);
   }
   assert.deepEqual(...serverContracts);
-  console.log("Paseo 0.9.0 and 0.11.1 compile both entries and register the same RPCs. No live daemon was modified.");
+  console.log("Paseo 0.11.1 and 0.11.2 compile both entries and register the same RPCs. No live daemon was modified.");
 } finally {
   if (previousHome === undefined) delete process.env.PASEO_HOME;
   else process.env.PASEO_HOME = previousHome;

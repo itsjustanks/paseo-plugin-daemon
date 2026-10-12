@@ -8,12 +8,12 @@ const APP = "/Applications/Paseo.app/Contents";
 const HELPER = `${APP}/Frameworks/Paseo Helper.app/Contents/MacOS/Paseo Helper`;
 
 describe("0.12.1 real-app fixes", () => {
-  it("the manifest has a plain description and asks for the Paseo that accepts one (0.9+; 0.8's schema is strict without it)", () => {
+  it("the manifest has a plain description and requires the verified browser SDK floor", () => {
     const manifest = JSON.parse(readFileSync(join(root, "paseo-plugin.json"), "utf8"));
     expect(manifest.id).toBe("daemon-link");
     expect(manifest.description).toMatch(/^Hosts: /);
     expect(manifest.description.length).toBeLessThan(200);
-    expect(manifest.requirements.paseo).toBe(">=0.9.0");
+    expect(manifest.requirements.paseo).toBe(">=0.11.1");
   });
 
   it("names each part of Paseo, so a dozen \"Paseo\" rows can be told apart", () => {

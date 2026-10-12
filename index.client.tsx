@@ -1,6 +1,6 @@
 import { contributeCrossDaemonClient } from "./client/cross-daemon/register";
 import { workspaceBrowserOpener } from "./client/browser-navigation";
-import { BrowserWorkspacePanel } from "./client/browser-sessions";
+import { WorkspaceBrowserPanel } from "./client/managed-browser/panel";
 import type { PluginClientContext, PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { hostHealth } from "./shared/health";
 import { diskReport } from "./shared/disk";
@@ -19,8 +19,8 @@ export default function contribute(client: PluginClientContext) {
   const stopCrossDaemonSync = contributeCrossDaemonClient(client);
   const onWatchBrowser = workspaceBrowserOpener(client);
   const shortcuts = typeof client.addSlashCommand === "function";
-  client.addWorkspacePanel({ id: "hosts-browser", title: "Agent browsers", icon: "Globe", context: "workspace", locations: ["workspace", "explorer"], Component: BrowserWorkspacePanel });
-  client.addCommandCenterItem({ id: "open-hosts-browser", title: "Watch agent browsers", icon: "Globe", context: "workspace", keywords: ["browser", "agent-browser", "remote", "live", "hosts"], onSelect({ openPanel }) { openPanel("hosts-browser"); } });
+  client.addWorkspacePanel({ id: "hosts-browser", title: "Browser", icon: "Globe", context: "workspace", locations: ["workspace", "explorer"], Component: WorkspaceBrowserPanel });
+  client.addCommandCenterItem({ id: "open-hosts-browser", title: "Open workspace browser", icon: "Globe", context: "workspace", keywords: ["browser", "agent-browser", "remote", "live", "hosts"], onSelect({ openPanel }) { openPanel("hosts-browser"); } });
   const Surface = (props: PluginSurfaceProps & { params?: Record<string, string> }) => <DaemonSurface {...props} shortcuts={shortcuts} onWatchBrowser={onWatchBrowser} />;
   // A screen and the app's own sidebar row on Paseo 0.11 apps; the surface and sidebar item before.
   // On 0.11 the row also carries a status dot; pressing it opens a quick health check.

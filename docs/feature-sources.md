@@ -1,13 +1,13 @@
 # Feature sources and integration status
 
-Hosts 0.19.0 uses these supplied references. A link does not mean the upstream plugin or runtime is
+Hosts 0.21.0 uses these supplied references. A link does not mean the upstream plugin or runtime is
 installed, bundled, or fully reproduced.
 
-- **[Shared browser][shared-browser]** — adapted
-  minimal IPC/CDP/capture patterns into a read-only observer for existing Agent Browser sessions. The
-  controlled-browser runtime, navigation, tab activation, viewport changes and browser auto-install are
-  excluded. Source revision `daed6eb12f4156ca392f71c48e7a9ccca231ae8c`;
-  [retained MIT notice](../server/browser-LICENSE.txt). See [support and limits](browser-viewing.md).
+- **[Shared browser][shared-browser]** — adapted a cohesive managed workspace subsystem for control,
+  input, tabs, JPEG capture, private runtime and workspace MCP, alongside the earlier external observer.
+  Optional video is inaccessible. Source revision `daed6eb12f4156ca392f71c48e7a9ccca231ae8c`;
+  [retained notices and adaptations](managed-browser-source.md), [managed setup](managed-browser.md),
+  and [external observation limits](browser-viewing.md).
 - **[Top][top]** — resource-monitoring design reference.
   Hosts implements its own resource summaries and process/workspace tables using its existing telemetry,
   filtering, sorting and actions. No Top code or plugin-helper runtime was copied into this integration.

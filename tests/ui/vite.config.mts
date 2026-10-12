@@ -13,5 +13,5 @@ export default defineConfig({
     { find: "@getpaseo/plugin", replacement: here("./plugin.tsx") },
     { find: "react-native", replacement: "react-native-web" },
   ] },
-  server: { host: "127.0.0.1", port: 43197, strictPort: true },
+  server: { proxy: process.env.HOSTS_MANAGED_BROWSER_FIXTURE === "1" ? { "/__managed-browser": { target: "http://127.0.0.1:43198", rewrite: (path) => path.replace("/__managed-browser", "") } } : undefined, host: "127.0.0.1", port: 43197, strictPort: true },
 });

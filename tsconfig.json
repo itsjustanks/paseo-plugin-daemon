@@ -4,20 +4,30 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "lib": [
-      "ES2023"
+      "ES2024"
     ],
     "jsx": "react-jsx",
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
     "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true
+    "allowSyntheticDefaultImports": true,
+    "paths": {
+      "electron": [
+        "./server/managed-browser/electron.d.ts"
+      ]
+    }
   },
   "include": [
     "**/*.ts",
     "**/*.tsx"
   ],
   "exclude": [
-    "tests/ui"
+    "tests/ui",
+    "server/managed-browser/**/*.test.ts",
+    "client/managed-browser/**/*.test.ts",
+    "client/managed-browser/**/*.test.tsx",
+    "shared/managed-browser/**/*.test.ts",
+    "tests/managed-browser"
   ]
 }

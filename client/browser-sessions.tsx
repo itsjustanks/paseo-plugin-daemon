@@ -72,7 +72,7 @@ export function BrowserSessions({ theme, layout, host, navigation, workspaceId, 
   function choose(value: BrowserSession) { selectedTab.current = null; setTabId(null); setTabs([]); setFrame(null); setSelection({ value, context }); setFollowing(true); setRetry((n) => n + 1); }
   const tab = tabs.find((candidate) => candidate.id === tabId);
   return <View ref={root} style={{ backgroundColor: c.surface0, padding: layout.compact ? 16 : 24, gap: 16 }}>
-    <View style={{ gap: 6 }}><Text style={{ ...body, fontSize: 22, fontWeight: "600" }}>Agent browsers</Text><Text style={muted}>Watch a browser running on {host.label}. The browser keeps running on the selected host; your agent keeps control.</Text></View>
+    <View style={{ gap: 6 }}><Text style={{ ...body, fontSize: 22, fontWeight: "600" }}>External agent browsers</Text><Text style={muted}>Watch a browser running on {host.label}. The browser keeps running on the selected host; your agent keeps control.</Text></View>
     <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
       {button("Refresh sessions", () => { void query.refetch(); })}
       {workspaceId ? button(all ? "Show this workspace" : "Show all host sessions", () => setAll(!all), all) : null}

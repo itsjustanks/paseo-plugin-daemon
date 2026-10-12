@@ -1,4 +1,4 @@
-import { type PluginClientContext, type PluginComposerPillProps, useWorkspace } from "@getpaseo/plugin/client";
+import { type PluginClientContext, useWorkspace } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { settingsRpc } from "@getpaseo/plugin";
 import React, { useEffect, useState } from "react";
@@ -35,7 +35,7 @@ function useVerdict(store: VerdictStore): HealthVerdict | null {
 }
 
 export function createHealthPill(store: VerdictStore) {
-  return function HealthPill({ theme, workspaceId }: PluginComposerPillProps) {
+  return function HealthPill({ theme, workspaceId }: { theme: import("@getpaseo/plugin/client").PluginHostProps["theme"]; workspaceId: string }) {
     const target = useWorkspace(workspaceId, ({ directory, projectRootPath, name }) => ({ directory, projectRootPath, name }));
     const verdict = useVerdict(store);
     const health = target && verdict ? workspaceHealth(verdict, target) : null;
@@ -125,7 +125,7 @@ export function registerHealthPills(client: PluginClientContext): () => void {
         });
         return { update: (next) => registration.update({ label: next.label, icon: next.icon }), remove: () => registration.remove() };
       }
-      const remove = client.addComposerPill({ id: "host-health", title: "Open Hosts for this workspace", workspaceId: agent.workspaceId, agentId: agent.id, Component: HealthPill, onPress });
+      const remove = (client as unknown as { addComposerPill(contribution: { id: string; title: string; workspaceId: string; agentId: string; Component: typeof HealthPill; onPress(): void }): () => void }).addComposerPill({ id: "host-health", title: "Open Hosts for this workspace", workspaceId: agent.workspaceId, agentId: agent.id, Component: HealthPill, onPress });
       return { update: () => undefined, remove };
     },
     readSettings: () => readSettings(client),
