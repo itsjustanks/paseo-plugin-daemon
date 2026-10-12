@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
 import { open, readdir, readFile, readlink } from "node:fs/promises";
-import { cpus, loadavg, uptime } from "node:os";
+import { cpus, loadavg, uptime, endianness } from "node:os";
 import { promisify } from "node:util";
 import { parsePsiFull, readCgroup } from "./cgroup";
+import { provenLoopbackEndpoints, type TcpListener } from "./tcp-endpoints";
 import { hashArgv } from "./redaction";
 import {
   beforeDeadline,
@@ -173,6 +174,21 @@ export function parseProcNetTcp(text: string): ListeningSocket[] {
     out.push({ inode, port, uid });
   }
   return out;
+}
+
+/** Exact addresses from the kernel table; each 32-bit word uses native byte order. */
+export function parseProcTcpEndpoints(text: string, family: 4 | 6, byteOrder = endianness()): TcpListener[] {
+  return text.split("\n").slice(1).filter((line) => line.trim()).flatMap((line) => {
+    const cols = line.trim().split(/\s+/);
+    if (cols[3] !== "0A") return [];
+    const match = /^([A-Fa-f0-9]+):([A-Fa-f0-9]{4})$/.exec(cols[1] ?? "");
+    if (!match || match[1]!.length !== (family === 4 ? 8 : 32) || !/^\d+$/.test(cols[9] ?? "")) throw new Error("Unrecognized kernel TCP listener.");
+    const hex = match[1]!.match(/.{8}/g)!.map((word) => byteOrder === "LE" ? word.match(/../g)!.reverse().join("") : word).join("").toLowerCase();
+    const address = /^0+$/.test(hex) ? "*" : hex === "7f000001" ? "127.0.0.1" : hex === "00000000000000000000000000000001" ? "::1" : "other";
+    const owner = Number(cols[9]); const port = parseInt(match[2]!, 16);
+    if (!owner || !port) throw new Error("Invalid kernel TCP listener.");
+    return [{ owner, address, family, port }];
+  });
 }
 
 export function parseSocketInode(link: string): number | null {
@@ -410,6 +426,20 @@ export class LinuxAdapter implements PlatformAdapter {
       );
     }
     return { ports, warnings };
+  }
+
+  async freshListeningEndpoints(pid: number) {
+    // Both families must be readable so an unknown competing socket cannot be ignored.
+    const [tcp4, tcp6, fds] = await Promise.all([this.fs.readFile("/proc/net/tcp"), this.fs.readFile("/proc/net/tcp6"), this.fs.readdir(`/proc/${pid}/fd`)]);
+    if (fds.length > MAX_FDS_PER_PROCESS) throw new Error("Browser descriptor ownership is truncated.");
+    const rows = [...parseProcTcpEndpoints(tcp4, 4), ...parseProcTcpEndpoints(tcp6, 6)];
+    const held = new Set<number>();
+    for (const fd of fds) {
+      const inode = parseSocketInode(await this.fs.readlink(`/proc/${pid}/fd/${fd}`));
+      if (inode !== null) held.add(inode);
+    }
+    // Keep distinct kernel socket inodes distinct to reject SO_REUSEPORT ambiguity.
+    return [...held].flatMap((inode) => provenLoopbackEndpoints(rows, inode));
   }
 
   /**

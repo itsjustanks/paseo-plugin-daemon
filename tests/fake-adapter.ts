@@ -1,4 +1,4 @@
-import type { PlatformAdapter, PortScanResult, ProcessIdentity, RawProcess, RawSystemSample, TreeRow } from "../server/platform";
+import type { PlatformAdapter, PortScanResult, ProcessIdentity, RawProcess, RawSystemSample, TreeRow, TcpEndpoint } from "../server/platform";
 import { hashArgv } from "../server/redaction";
 
 export const GB = 1024 ** 3;
@@ -75,6 +75,11 @@ export class FakeAdapter implements PlatformAdapter {
       if (list) ports.set(pid, [...list]);
     }
     return { ports, warnings: [...this.portWarnings] };
+  }
+
+  async freshListeningEndpoints(pid: number): Promise<TcpEndpoint[]> {
+    this.portScans++;
+    return (this.ports.get(pid) ?? []).map((port) => ({ address: "127.0.0.1" as const, family: 4 as const, port }));
   }
 
   async readIdentity(pid: number): Promise<ProcessIdentity | null> {

@@ -1,3 +1,6 @@
+import { BrowserSessions } from "./server/browser-sessions";
+import { BrowserDiscovery } from "./server/browser-discovery";
+import { browserSessions, browserViewOpen, browserViewFrame, browserViewClose } from "./shared/browser";
 import * as sync from "./shared/sync";
 import type { PluginServerContext } from "@getpaseo/plugin/server";
 import { monitorForceStop, monitorSnapshot, monitorStop } from "./shared/contracts";
@@ -61,6 +64,11 @@ export default function contribute(server: PluginServerContext) {
   const readSettings = settingsReader(handle);
   const runtime = createRuntime({ readSettings, readHousekeeping: housekeepingReader(handle) });
   const removeHooks = registerHooks(server, runtime, readSettings);
+  const browsers = new BrowserSessions(new BrowserDiscovery({ adapter: runtime.monitor.internals?.adapter ?? null, uid: runtime.monitor.internals?.uid ?? -1, scope: runtime.scope, daemonPid: runtime.monitor.internals?.parentPid }));
+  server.handle(browserSessions, (input, context) => runtime.withContext(context, () => browsers.list(input)));
+  server.handle(browserViewOpen, (input) => browsers.open(input));
+  server.handle(browserViewFrame, (input) => browsers.frame(input));
+  server.handle(browserViewClose, (input) => browsers.closeView(input));
   // One cached verdict per host; pills and panels read it instead of probing.
   // 0.15.0: Paseo's workspace.archived hook (newer servers; looked up at runtime). Recording is instant and never throws.
   const archived = new ArchivedWorkspaces(homedir());
@@ -133,5 +141,5 @@ export default function contribute(server: PluginServerContext) {
   server.handle(peer.peerServices, ({ id }, context) => runtime.withContext(context, () => runtime.peers.services(id)));
   server.handle(peer.peerForward, ({ id, port }, context) => runtime.withContext(context, () => runtime.peers.forward(id, port)));
   server.handle(peer.peerDisconnect, ({ id }, context) => runtime.withContext(context, () => runtime.peers.disconnect(id)));
-  return async () => { await runtime.housekeeper.close().catch(() => undefined); removeHooks(); if (typeof offArchived === "function") offArchived(); unsubscribe(); health.close(); runtime.guard?.close(); await runtime.disk.close().catch(() => undefined); runtime.processes.close(); await Promise.all([runtime.links.close(), runtime.peers.close(), runtime.transfers.close()]); };
+  return async () => { browsers.close(); await runtime.housekeeper.close().catch(() => undefined); removeHooks(); if (typeof offArchived === "function") offArchived(); unsubscribe(); health.close(); runtime.guard?.close(); await runtime.disk.close().catch(() => undefined); runtime.processes.close(); await Promise.all([runtime.links.close(), runtime.peers.close(), runtime.transfers.close()]); };
 }

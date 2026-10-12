@@ -1,3 +1,4 @@
+import { BrowserWorkspacePanel } from "./client/browser-sessions";
 import type { PluginClientContext, PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { hostHealth } from "./shared/health";
 import { diskReport } from "./shared/disk";
@@ -14,6 +15,8 @@ const MAIN_SCREEN = "daemon-link";
 
 export default function contribute(client: PluginClientContext) {
   const shortcuts = typeof client.addSlashCommand === "function";
+  client.addWorkspacePanel({ id: "hosts-browser", title: "Agent browsers", icon: "Globe", context: "workspace", locations: ["workspace", "explorer"], Component: BrowserWorkspacePanel });
+  client.addCommandCenterItem({ id: "open-hosts-browser", title: "Watch agent browsers", icon: "Globe", context: "workspace", keywords: ["browser", "agent-browser", "remote", "live", "hosts"], onSelect({ openPanel }) { openPanel("hosts-browser"); } });
   const Surface = (props: PluginSurfaceProps & { params?: Record<string, string> }) => <DaemonSurface {...props} shortcuts={shortcuts} />;
   // A screen and the app's own sidebar row on Paseo 0.11 apps; the surface and sidebar item before.
   // On 0.11 the row also carries a status dot; pressing it opens a quick health check.
