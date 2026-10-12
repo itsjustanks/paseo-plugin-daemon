@@ -1,3 +1,4 @@
+import { contributeManagedBrowser } from "./server/managed-browser/register";
 import { contributeRecovery } from "./server/recovery";
 import { stopActiveWork } from "./server/shutdown";
 import { contributeCrossDaemon } from "./server/cross-daemon/register";
@@ -63,6 +64,7 @@ function housekeepingReader(handle: SettingsHandle): () => Promise<HousekeepingS
 }
 
 export default function contribute(server: PluginServerContext) {
+  const closeManagedBrowser = contributeManagedBrowser(server);
   const handle = server.registerSettings(hostsSettings) as SettingsHandle;
   const stopCrossDaemon = contributeCrossDaemon(server);
   const closeRecovery = contributeRecovery(server);
@@ -151,6 +153,6 @@ export default function contribute(server: PluginServerContext) {
     housekeeping: () => runtime.housekeeper.close(), browsers: () => browsers.close(),
     cancel: [removeHooks, () => { if (typeof offArchived === "function") offArchived(); }, unsubscribe,
       () => health.close(), () => runtime.guard?.close(), () => runtime.processes.close()],
-    close: [() => runtime.disk.close(), () => runtime.links.close(), () => runtime.peers.close(), () => runtime.transfers.close()],
+    close: [closeManagedBrowser, () => runtime.disk.close(), () => runtime.links.close(), () => runtime.peers.close(), () => runtime.transfers.close()],
   }).then(() => undefined);
 }

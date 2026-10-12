@@ -1,6 +1,7 @@
 import { headlessFixture, fixtureHosts } from "./headless-fixtures";
 import React, { useCallback, useEffect, useState } from "react";
 import { Pressable, Switch, Text, TextInput, View } from "react-native";
+export { TextInput };
 export function defineRpc<T>(contract: T) { return contract; }
 export function defineSettings<T>(definition: T) { return definition; }
 export function settingsRpc(id: string) { return { read: { name: `settings.${id}.read` }, write: { name: `settings.${id}.write` }, reset: { name: `settings.${id}.reset` } }; }
@@ -96,6 +97,10 @@ const watched = () => busy ? [
 let revision = 1;
 const stub = async (name: string, input: any) => {
   (window as any).__fixtureCalls.push({ name, input });
+  if (params.has("managed") && name.startsWith("daemon-link.browser.managed.")) {
+    const response = await fetch("/__managed-browser/rpc", { method: "POST", headers: { "Content-Type": "application/json", "x-hosts-fixture": "owned-browser-test" }, body: JSON.stringify({ name, input }) });
+    const result = await response.json(); if (!response.ok) throw new Error(result.error); return result;
+  }
   const headless = await headlessFixture(name, input); if (headless !== undefined) return headless;
   if (name === "daemon-link.housekeeping.status") {
     const state = mac ? "unsupported" : params.has("hkpassive") ? "passive" : params.has("hkblocked") ? "blocked" : !settings.housekeeping.enabled ? "off" : settings.housekeeping.dryRun ? "preview" : "live";
@@ -231,11 +236,12 @@ const toasts: string[] = [];
 (window as any).__fixtureToasts = toasts;
 const toast = { show: (message: string) => { toasts.push(message); console.info(message); }, error: (message: string) => { toasts.push(`error: ${message}`); console.info(message); } };
 export function useToast() { return toast; }
-export function Icon({ color, name }: { color: string; name: string }) { return <Text style={{ color }}>{({ FolderCode: "▣", Network: "⇄", Activity: "⌁", BookOpen: "▤", Laptop: "▱", Globe: "◎", Terminal: ">_", CircleCheck: "✓", Circle: "○", Server: "▥", TimerReset: "↻", ChevronDown: "▾", ChevronRight: "▸" } as Record<string, string>)[name] || "◇"}</Text>; }
+export function Icon({ color, name }: { color: string; name: string }) { return <Text style={{ color }}>{({ ArrowLeft: "←", ArrowRight: "→", RotateCw: "↻", EllipsisVertical: "⋮", MousePointer2: "↖", LogOut: "↗", Crown: "♛", PanelsTopLeft: "+", X: "×", FolderCode: "▣", Network: "⇄", Activity: "⌁", BookOpen: "▤", Laptop: "▱", Globe: "◎", Terminal: ">_", CircleCheck: "✓", Circle: "○", Server: "▥", TimerReset: "↻", ChevronDown: "▾", ChevronRight: "▸" } as Record<string, string>)[name] || "◇"}</Text>; }
 /** Like Paseo's own Modal, a sheet above the page (a portal), so later rows never paint over it. */
 export const Modal = Object.assign(({ children, open, title }: any) => open ? createPortal(<View style={{ position: "fixed" as any, top: 0, left: 0, right: 0, bottom: 0, alignItems: "center", paddingTop: 48, paddingHorizontal: 12, backgroundColor: "rgba(0,0,0,0.35)", zIndex: 10 }}><View style={{ width: "100%", maxWidth: 560, maxHeight: "90vh" as any, overflow: "auto" as any, backgroundColor: params.has("light") ? "#ffffff" : "#1a2029", borderWidth: 1, borderColor: "#8886", borderRadius: 16, boxShadow: "0 12px 40px rgba(0,0,0,0.35)" as any }}><Text style={{ padding: 16, paddingBottom: 0, fontSize: 17, fontWeight: "700", color: params.has("light") ? "#20252d" : "#eef1f6" }}>{title}</Text>{children}</View></View>, document.body) : null, { Content: ({ children }: any) => <View>{children}</View> });
 /** Settings hook: reads the fixture document through the same stub the pill uses, saves synchronously. */
-export function useSettings() {
+export function useSettings(definition?: any) {
+  if (definition?.id === "browser-display-preferences") return { status: "ready", values: { captureQuality: "medium", favoritePresetIds: [] }, revision: "1", saving: false, saveError: null, save: async () => true, reload: async () => {}, reset: async () => true };
   const [state, setState] = useState<any>({ status: "loading", saving: false, saveError: null });
   const load = useCallback(async () => { const result = await stub("settings.hosts.read", {}); setState({ ...result, saving: false, saveError: null }); }, []);
   useEffect(() => { void load(); }, [load]);

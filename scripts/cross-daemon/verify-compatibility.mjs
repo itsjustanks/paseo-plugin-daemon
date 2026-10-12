@@ -11,7 +11,7 @@ import { transform } from "esbuild";
 const project = resolve(import.meta.dirname, "../..");
 const require = createRequire(join(project, "package.json"));
 const sdk = require("@getpaseo/plugin");
-const versions = { "0.9.0": "7f7e60bcbbfe57bf5250b10d01c5f97847b43db0", "0.11.1": "ab10a6694ccf068959d1a6b67b6c915e21a9fe91" };
+const versions = { "0.11.2": "75953250959979b8f088bbca8dbd6ee61d0151b1", "0.11.1": "ab10a6694ccf068959d1a6b67b6c915e21a9fe91" };
 const scratch = await mkdtemp(join(tmpdir(), "hcd-compat-"));
 const previousHome = process.env.PASEO_HOME;
 
@@ -58,7 +58,7 @@ export default function contribute(client) { return contributeCrossDaemonClient(
     const { compilePlugin } = await compiler(version, commit);
     const bundles = await compilePlugin({ client: join(root, "index.client.tsx"), server: join(root, "index.server.ts") });
     assert(bundles.clientBundle && bundles.serverBundle);
-    for (const [supported, enabled] of version === "0.11.1" ? [[false, false], [true, false], [true, true]] : [[false, false]]) {
+    for (const [supported, enabled] of ["0.11.1", "0.11.2"].includes(version) ? [[false, false], [true, false], [true, true]] : [[false, false]]) {
       const handlers = new Map(); const hooks = new Map();
       const state = { status: "ready", revision: "fixture", values: { enabled, fullAuthorityConfirmed: enabled } };
       const server = { handle(contract, handler) { handlers.set(contract.name, { contract, handler }); }, registerSettings() { return supported ? { read: async () => state, subscribe: () => () => {} } : undefined; } };
@@ -93,7 +93,7 @@ export default function contribute(client) { return contributeCrossDaemonClient(
     }
     const client = evaluate(bundles.clientBundle, "client");
     const stop = client({ rpc: async () => { throw new Error("No host calls in registration smoke test"); } }); stop();
-    console.log(`${version}: feature client/server compiled; missing APIs unavailable${version === "0.11.1" ? "; enabled MCP injection and five exact approvals checked with fake adapters" : ""}`);
+    console.log(`${version}: feature client/server compiled; missing APIs unavailable${["0.11.1", "0.11.2"].includes(version) ? "; enabled MCP injection and five exact approvals checked with fake adapters" : ""}`);
   }
 } finally {
   if (previousHome === undefined) delete process.env.PASEO_HOME; else process.env.PASEO_HOME = previousHome;

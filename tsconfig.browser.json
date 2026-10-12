@@ -1,0 +1,21 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "types": [
+      "node",
+      "react"
+    ]
+  },
+  "include": [
+    "server/managed-browser/**/*.ts",
+    "client/managed-browser/**/*.ts",
+    "client/managed-browser/**/*.tsx",
+    "shared/managed-browser/**/*.ts",
+    "tests/managed-browser/**/*.ts"
+  ],
+  "exclude": [
+    "tests/managed-browser/**/*.smoke.test.ts"
+  ]
+}

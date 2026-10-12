@@ -2,7 +2,8 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
+    include: ["tests/**/*.test.ts", "tests/**/*.test.tsx", "server/managed-browser/**/*.test.ts", "client/managed-browser/**/*.test.ts", "client/managed-browser/**/*.test.tsx", "shared/managed-browser/**/*.test.ts"],
+    exclude: ["**/node_modules/**", "tests/managed-browser/**/*.smoke.test.ts"],
     environment: "node",
     testTimeout: 15_000,
     coverage: {

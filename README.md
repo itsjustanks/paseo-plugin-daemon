@@ -22,19 +22,19 @@ The plugin is **Daemon Link**; its sidebar entry is **Hosts**, matching Paseo's 
 *Actual plugin components rendered with fictional data. Every screenshot in this repository uses
 an isolated preview: no real accounts, host addresses, project names, credentials, or conversations.*
 
-## Headless work in 0.19.0
+## Workspace browser in 0.21.0
 
-[Feature sources and integration status](docs/feature-sources.md) maps the supplied references to this release.
+Select the always-on remote host and open the workspace **Browser** panel. Press **Open browser**
+to start a private browser at `about:blank`. Its address bar, tabs, mouse and keyboard operate the same
+browser exposed to newly created supported workspace agents through `hosts-browser` MCP.
+Human control takes priority in this managed runtime. The browser stays on its host when you disconnect;
+a sleeping laptop cannot keep a browser running on that laptop.
 
-Select the always-on **remote host** in Paseo. Under **Processes → Browsers**, watch an existing Agent Browser
-session and select its tab. Workspace table **Watch browser** actions and a workspace's **Agent browsers**
-panel scope the list to a verified workspace. The browser keeps running on the selected host when the viewer
-closes. A sleeping laptop cannot keep its own local host running.
-
-Capture travels over authenticated Paseo RPC into the native panel, including web/mobile. It does not use
-`navigation.openBrowser`, which creates a local desktop tab. Hosts never installs a browser or starts a
-missing session. Same-user local Chromium CDP listeners must be proven; unsupported sessions explain why.
-[Support and limits](docs/browser-viewing.md).
+**Watch external browser** in the Browser menu retains the existing read-only observer for independently
+started Agent Browser sessions. Hosts cannot enforce a control lease against an independent CLI.
+The managed browser uses the native plugin panel and authenticated Paseo RPC, not the desktop-only
+`navigation.openBrowser` API. See [managed setup and boundaries](docs/managed-browser.md),
+[external observation](docs/browser-viewing.md), and [source attribution](docs/managed-browser-source.md).
 
 **Connections** guides setup for agents across computers. Agent access stays off until confirmed and shares full
 daemon authority between opted-in hosts, independently of restricted private app/file grants. Turning off
@@ -595,21 +595,11 @@ framework handling, pressure thresholds, and known limitations.
 
 ## Paseo compatibility
 
-Supports Paseo 0.7 through 0.11. Paseo 0.9 and newer run the current version. Version 0.12.1 needs
-Paseo 0.9: its manifest carries a `description` (shown in Settings → Plugins), and Paseo 0.8's strict
-manifest schema rejects that key, so a 0.8 host should stay on 0.12.0. Paseo 0.7 hosts should stay on
-0.4.0. Version 0.10.0 was built and checked on Paseo 0.11.0-beta.3 and kept `requirements.paseo` at
-`>=0.8.0`: the 0.11 screen, sidebar row, status dot and popover, the 0.10
-external-link opener and settings read/subscribe, and button-style composer chips are each detected at
-runtime, and older apps get exactly what 0.9 drew. No plugin file imports an SDK path that Paseo 0.9.1
-can't build. Compatibility tests compile and register both entries using pinned Paseo 0.9.0 and
-0.11.1 runtimes, without installing the plugin into a live daemon.
-
-Before 0.10.0, it required Paseo 0.8 or newer. Version 0.5.0 moved to the 0.8 runtime layout: `index.client.tsx`
-and `index.server.ts` entries with code under `client/`, `server/`, and `shared/`, and
-`requirements.paseo` set to `>=0.8.0`. Versions 0.6.0 through 0.9.0 add the workspace panel,
-settings screen, lifecycle hooks, health checks, composer pill, workspace resource rollup, one-press
-Open, and the named-tab surface on top of that layout. Paseo 0.7 hosts should stay on 0.4.0.
+Hosts 0.21.0 requires Paseo **0.11.1 or newer**. Both entries compile and register with the real
+0.11.1 and 0.11.2 SDK/compiler under Node 22.23.2. There is no upper version bound. This release does
+not claim Paseo 0.9 compatibility. Existing core Node engine metadata remains `>=20.19.4`; the new
+browser bridge/bootstrap was exercised on Node 22.23.2. Its supervisor, MCP server and CLI wrapper
+use a separate pinned Node 24.20.0 installed by the explicit plugin preparation step.
 
 Features depend on the selected host's actual capabilities, so a newer host never lends its APIs
 to an older one. The `/hosts` composer shortcut appears only when the host provides that API.
@@ -642,7 +632,7 @@ currently target HTTP services on IPv4 loopback.
 ```sh
 git clone https://github.com/itsjustanks/paseo-plugin-daemon.git
 cd paseo-plugin-daemon
-npm ci
+npm ci --ignore-scripts # development: Node 24.20.0; never run agent-browser postinstall
 npm run typecheck
 npm test
 npm run test:compatibility

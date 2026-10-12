@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.21.0 — 2026-10-12
+
+- Added a full-height workspace Browser with shared tabs, navigation, real input and server-enforced
+  human priority for its injected workspace MCP. Opening is explicit; remote lifetime survives clients.
+- Retained read-only external browser observation separately. Existing Hosts settings, grants and
+  process protections are unchanged.
+- Added explicit pinned private Node/Chromium preparation while preserving the Node 22 daemon.
+  JPEG transport is bounded; hidden viewers detach. Requires Paseo 0.11.1 or newer.
+  See [setup and validation boundaries](docs/managed-browser.md).
+
 ## 0.20.0 — 2026-10-12
 
 - Fixed overflowing workspace rows and long workspace actions so controls remain reachable at wide and

@@ -1,5 +1,9 @@
 # Watching existing Agent Browser sessions
 
+This page describes **Watch external browser**. The separate [workspace browser](managed-browser.md)
+adds managed navigation and input. Workspace Watch actions open Browser; choose Watch external browser
+from its menu (or from the initial empty state).
+
 Choose the host where the agent runs, then Hosts → Processes → Browsers. Select a session, press Watch, and
 select a tab. A workspace's Agent browsers panel and Watch browser table actions list only sessions whose
 workspace attribution was verified. Unattributed sessions remain available in the host-wide list. Chat
@@ -57,5 +61,5 @@ remote Paseo RPC viewing remain separate validation boundaries.
 
 Browser transport patterns use the pinned MIT [shared browser
 source](https://github.com/omercnet/paseo-plugins/tree/daed6eb12f4156ca392f71c48e7a9ccca231ae8c/paseo-shared-browser),
-with [the retained Omer Cohen notice](../server/browser-LICENSE.txt). Hosts does not import its
-controlled-browser runtime or installation behavior.
+with [the retained Omer Cohen notice](../server/browser-LICENSE.txt). This external observer does not import its
+controlled-browser runtime or installation behavior. The separate managed subsystem does.
