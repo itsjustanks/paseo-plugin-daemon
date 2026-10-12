@@ -271,10 +271,10 @@ export function DestructiveButton({ theme, label, onPress, disabled, busy, acces
       accessibilityState={{ disabled: inactive, busy: !!busy }}
       disabled={inactive}
       onPress={inactive ? undefined : (event: GestureResponderEvent) => { if (!isEnterKey(event)) onPress(); }}
-      style={{ backgroundColor: color, borderRadius: RADIUS.control, paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm + SPACE.hair, minHeight: 44, opacity: inactive ? 0.45 : 1, flexDirection: "row", alignItems: "center", gap: SPACE.sm }}
+      style={{ backgroundColor: color, borderRadius: RADIUS.control, paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm + SPACE.hair, minHeight: 44, maxWidth: "100%", minWidth: 0, flexShrink: 1, opacity: inactive ? 0.45 : 1, flexDirection: "row", alignItems: "center", gap: SPACE.sm }}
     >
       {busy ? <ActivityIndicator size="small" color="#ffffff" /> : HostIcon ? <HostIcon name="Trash2" size={16} color="#ffffff" /> : null}
-      <Text style={{ ...TYPE.body, color: "#ffffff", fontWeight: "700" }}>{label}</Text>
+      <Text style={{ ...TYPE.body, color: "#ffffff", fontWeight: "700", flexShrink: 1 }}>{label}</Text>
     </Pressable>
   );
 }
@@ -286,8 +286,8 @@ export function CancelButton({ theme, label = "Cancel", onPress, disabled, acces
   useEffect(() => { if (!inactive) ref.current?.focus?.(); }, [inactive]);
   return (
     <Pressable ref={ref as never} accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? label} accessibilityState={{ disabled: !!disabled }} disabled={disabled} onPress={onPress}
-      style={{ backgroundColor: theme.colors.surface2, borderColor: theme.colors.accent, borderWidth: 2, borderRadius: RADIUS.control, paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, minHeight: 44, alignItems: "center", justifyContent: "center" }}>
-      <Text style={{ ...TYPE.body, color: theme.colors.foreground, fontWeight: "600" }}>{label}</Text>
+      style={{ backgroundColor: theme.colors.surface2, borderColor: theme.colors.accent, borderWidth: 2, borderRadius: RADIUS.control, paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, minHeight: 44, maxWidth: "100%", minWidth: 0, flexShrink: 1, alignItems: "center", justifyContent: "center" }}>
+      <Text style={{ ...TYPE.body, color: theme.colors.foreground, fontWeight: "600", flexShrink: 1 }}>{label}</Text>
     </Pressable>
   );
 }

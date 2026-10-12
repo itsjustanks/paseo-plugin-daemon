@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.20.0 — 2026-10-12
+
+- Fixed overflowing workspace rows and long workspace actions so controls remain reachable at wide and
+  narrow widths.
+- Workspaces shows a searchable, sortable running-app table with workspace/project context, memory,
+  CPU, ports and native filters. The listener snapshot does not require a disk measurement or an active chat.
+- Same-user dev servers outside registered projects, including Python HTTP, Vite and Next/node listeners,
+  appear in the monitor. Manual Stop and Force Stop use the shared process guard after a Cancel-default
+  ownership and process-tree review. Fresh identity checks, protected processes and graceful-first force
+  stopping remain enforced; automatic stops still require verified live daemon ancestry.
+- Open and app sharing retain their separate verified project and port restrictions. Inventory attribution
+  does not grant sharing or automatic-stop authority.
+- Connections guides optional cross-host agent access and saved SSH recovery. Existing settings, schemas
+  and defaults are unchanged; enabling authority still requires its existing separate confirmation.
+
 ## 0.19.0 — 2026-10-12
 
 - Processes has four compact views: All processes, Heavy jobs, Browsers and Housekeeping. Existing filtering,

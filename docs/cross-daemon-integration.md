@@ -1,61 +1,29 @@
 # Hosts cross-daemon integration
 
-This change is intentionally unregistered. Parent review must wire it into Hosts' existing Workspaces
-connection area. It adds no plugin, sidebar, screen, app grant, or file grant. Nothing is enabled or
-migrated automatically. The existing `index.client.tsx`, `index.server.ts`, `shared/settings.ts`, and
-app/file peer modules are unchanged.
+The client and server entries register cross-daemon coordination once per installation. The dedicated
+**Hosts → Connections** tab shows configured computers, their connection and agent-access state, and the
+next action. Setup instructions fold away when at least two computers are configured. Restricted app/file
+grants, SSH forwards and SSH recovery have separate disclosures below it. Old Workspaces connection deep
+links redirect to their new location.
 
-## Exact parent wiring
+Paseo's public plugin API exposes `useHosts()` and `getPaseoClient(serverId)`, but no pairing-link import
+or app add-host navigation API. The guide therefore uses Paseo's existing app pairing flow, without a
+fake Paste control or a credential field. On the other computer, open Settings → host → Pair a device,
+enable relay and copy its pairing link (or run `paseo daemon pair`). Paste the link in the app's supported
+pairing flow and review the host. Naming and configuring computers remains owned by Paseo.
 
-In `index.server.ts`, add:
+Adding a computer is separate from enabling agent access, sending a prompt or migrating a chat. The
+page never reads credential offers into its query cache. Enabling names currently opted-in recipients
+and explains that later opt-ins also receive access. It uses the existing default-Cancel, single-use
+full-authority confirmation. The transport and security contracts below are unchanged.
 
-```ts
-import { contributeCrossDaemon } from "./server/cross-daemon/register";
-```
+Client cleanup stops the shared scheduler first. Server cleanup calls the cross-daemon cleanup first,
+before awaiting other Hosts cleanup. The scheduler combines installation-scoped RPC connections,
+debounces changes, allows one sync at a time, and syncs once per minute while the app is open.
 
-Inside `contribute(server)`, retain the cleanup returned by this call:
-
-```ts
-const stopCrossDaemon = contributeCrossDaemon(server);
-```
-
-Call `await stopCrossDaemon()` **first** in the existing async cleanup, before waiting for other
-Hosts cleanup. Calling it synchronously marks the feature stopped and aborts outstanding CLI work
-before it awaits the tool server. Do not run cleanup through a later deferred callback.
-
-In `index.client.tsx`, add:
-
-```ts
-import { contributeCrossDaemonClient } from "./client/cross-daemon/register";
-```
-
-Inside `contribute(client)`, retain its remover:
-
-```ts
-const stopCrossDaemonSync = contributeCrossDaemonClient(client);
-```
-
-Call `stopCrossDaemonSync()` first in the existing client cleanup. Register this once per connected
-Hosts installation. The shared scheduler combines those installation-scoped RPC connections, debounces
-connection changes, runs one sync at a time, and resyncs once per minute while the app is open. It drops
-unloaded sources and suppresses deliveries to disposed instances. No borrowed SDK connection or new
-credential discovery API is invented.
-
-In `client/daemon.tsx`, import:
-
-```tsx
-import { CrossDaemonSection } from "./cross-daemon/section";
-```
-
-In the existing Workspaces connection area, render this as its own section alongside the private
-app/file peers, outside the private-pairing accordion and its grant flow:
-
-```tsx
-<CrossDaemonSection theme={theme} layout={layout} />
-```
-
-The section uses React Native primitives, the existing Hosts `Confirm`, theme colours, and compact
-layout. Do not register a new sidebar or duplicate screen. Keep restricted app/file peers separate.
+Official references checked for this UI:
+[plugin reference](https://paseo.sh/docs/plugins/reference.md) and
+[connectivity](https://paseo.sh/docs/connectivity.md).
 
 ## Authority and data contracts
 
@@ -151,8 +119,7 @@ The feature compatibility script copies sources to a temporary directory, uses t
 cases contain no invented `before` hook. Supported-API fixtures exercise both off and enabled settings/hook
 contracts, including MCP injection, five exact Claude/Codex preapprovals, OpenCode without new policy,
 and configured aliases. Temporary files are removed in `finally`. It never pairs, installs, enables,
-or sends a production prompt. The core compatibility script does not include this unregistered
-feature; run both scripts after parent integration too.
+or sends a production prompt. Run both compatibility scripts when reviewing integration.
 
 Reference: maxwell-01/maxs-paseo-plugins `cross-daemon`, pinned revision
 `975f8c4c062cb78ca82b203c8952e6c31621a9e6`. See `cross-daemon-LICENSE.txt` for the full retained MIT notice.

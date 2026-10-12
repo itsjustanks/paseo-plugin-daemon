@@ -7,24 +7,17 @@ import { HostIcon, TYPE, SPACE, RADIUS } from "./kit";
 
 type Theme = PluginTheme;
 
-/**
- * Four tabs, by what someone comes to do (0.11.0): is this computer fine
- * (Overview), what is making it slow (Processes), open my app (Dev servers),
- * how does this work (Help). Connect and Project Sync fold out under Dev
- * servers; old links to them land there (`shared/tabs.ts`). Icons are Lucide
- * names, drawn by the Paseo app. `line` is the tab's one plain sentence, if
- * it needs one; Overview's status card and Help's questions speak for
- * themselves.
- */
+/** Five task-focused tabs. Legacy links follow the moved sections in shared/tabs.ts. */
 export const TABS: ReadonlyArray<{ id: TabId; label: string; icon: string; line?: string }> = [
   { id: "overview", label: "Overview", icon: "LayoutDashboard" },
   { id: "processes", label: "Processes", icon: "Cpu", line: "Find what is using memory and CPU. Review jobs, browsers and Housekeeping." },
-  { id: "workspaces", label: "Workspaces", icon: "FolderTree", line: "Your Paseo workspaces: what's running in each, what each uses on disk, and what's safe to clear." },
+  { id: "workspaces", label: "Workspaces", icon: "FolderTree", line: "Running apps, workspaces and disk use." },
+  { id: "connections", label: "Connections", icon: "Network", line: "Connect your computers, then choose whether their agents can work together." },
   { id: "help", label: "Help", icon: "CircleHelp" },
 ];
 export { TAB_IDS, type TabId };
 
-/** About what one tab needs with its label (icon, name, padding); four need ~480 px. */
+/** About what one tab needs with its label (icon, name, padding); used to decide when navigation needs to scroll. */
 const LABELLED_TAB_WIDTH = 120;
 
 /** Keep labels readable; narrow navigation scrolls horizontally when needed. */

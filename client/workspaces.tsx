@@ -185,13 +185,13 @@ const WORKSPACE_COLUMNS: readonly ResourceColumn[] = [
   { id: "disk", label: "Total disk", sortable: true, compactInline: true },
   { id: "reclaimable", label: "Reclaimable", sortable: true, compactInline: true },
   { id: "running", label: "Running", sortable: true, compactInline: true },
-  { id: "actions", label: "Actions", weight: 1.2 },
+  { id: "actions", label: "Actions", width: 240 },
 ];
 const ITEM_COLUMNS: readonly ResourceColumn[] = [
   { id: "name", label: "Name / path", weight: 3, sortable: true },
   { id: "type", label: "Type / group", weight: 2 },
   { id: "size", label: "Size", sortable: true },
-  { id: "actions", label: "Actions", weight: 1.5 },
+  { id: "actions", label: "Actions", width: 200 },
 ];
 const OUTPUT_COLUMNS = ITEM_COLUMNS.filter((column) => column.id !== "actions");
 function TablePages({ theme, count, page, onPage }: { theme: Theme; count: number; page: number; onPage(page: number): void }) {
@@ -372,7 +372,7 @@ export function WorkspaceList({ theme, compact, report, processes = [], say, onD
   const shownPage = Math.min(page, Math.max(0, Math.ceil(rows.length / TABLE_PAGE) - 1));
   if (!report?.workspaces.length) return null;
   return <View style={{ gap: SPACE.sm }}>
-    <SectionTitle theme={theme} icon="FolderTree">Workspaces</SectionTitle>
+    <SectionTitle theme={theme} icon="FolderTree">Workspace disk and files</SectionTitle>
     <ResourceToolbar theme={theme} label="Search workspaces, projects, branches or paths" search={search} onSearch={(text) => { setSearch(text); setPage(0); }} filter={filter} onFilter={(id) => { setFilter(id); setPage(0); }}
       filters={[{ id: "all", label: "All statuses" }, ...["working", "waiting", "failed", "idle", "unlinked"].map((id) => ({ id, label: id.charAt(0).toUpperCase() + id.slice(1) }))]} />
     <ResourceTable compact={compact}>{(narrow) => <>

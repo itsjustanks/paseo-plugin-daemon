@@ -14,7 +14,8 @@ import { clearItem, workspaceUsage } from "../resource-table-fixtures";
 import { composeAskMessage } from "../../shared/ask";
 const params = new URLSearchParams(location.search);
 const empty = params.has("empty"), failed = params.has("error"), unverified = params.has("unverified"), tunnelFail = params.has("tunnelfail"), busy = params.has("busy"), mac = params.has("mac");
-const projects = [{ id: "website", name: "Website", path: "~/projects/website" }, { id: "api", name: "API service", path: "~/projects/api" }];
+const longnames = params.has("longnames"), nodisk = params.has("nodisk");
+const projects = [{ id: "website", name: longnames ? "Website-with-a-deliberately-long-project-name-for-layout-review" : "Website", path: "~/projects/website" }, { id: "api", name: "API service", path: "~/projects/api" }];
 const grant = { id: "00000000-0000-4000-8000-000000000001", label: "My laptop", projectIds: [] as string[] };
 const preview = { token: "00000000-0000-4000-8000-000000000002", project: projects[0], head: "a1b2c3d4".repeat(5), commits: 24, bytes: 245760, sha256: "a".repeat(64), expiresAt: Date.now() + 600000 };
 let history: any[] = [];
@@ -27,17 +28,18 @@ let history: any[] = [];
   if (url !== "about:blank") { record.finished = url; return { location: { replace() {} }, close() {}, opener: null }; }
   return { location: { replace(next: string) { record.finished = next; } }, close() { record.closed = true; }, opener: null };
 };
-const processes = Array.from({ length: 64 }, (_, index) => {
+const processes: any[] = Array.from({ length: 64 }, (_, index) => {
   const app = index < 2, agent = index === 2;
   const project = projects[index % 2];
   return { pid: 1000 + index, ppid: 900, name: agent ? "codex" : app ? (index === 0 ? "next-server" : "vite") : "node", command: agent ? "codex" : "node project-task.js", cwd: project.path,
     state: "sleeping", cpuPercent: 30 - index / 3, rssBytes: (65 - index) * 1e6, memoryPercent: 0.5, ageSeconds: index * 60 + 80,
     ports: app ? [3000 + index] : [], impact: "normal", reasons: [],
     service: app ? { kind: "dev-server", label: index === 0 ? "Next.js" : "Vite", confidence: "high", reasons: ["Recognized framework"] } : null,
-    project: { ...project, workspace: "Main", kind: agent ? "agent" : app ? "dev-server" : "project-tool", shareable: app, canStop: app },
-    actionable: app, actionToken: app ? "synthetic-action" : null, protectedReason: app ? null : agent ? "Manage this agent in its Paseo agent tab." : "Only verified project dev servers can be stopped here.",
+    project: { ...project, workspace: longnames ? "Sandbox with a deliberately long workspace name" : "main", kind: agent ? "agent" : app ? "dev-server" : "project-tool", shareable: app, canStop: app },
+    actionable: app, actionToken: app ? `synthetic-action-${1000 + index}` : null, protectedReason: app ? null : agent ? "Manage this agent in its Paseo agent tab." : "Only verified project dev servers can be stopped here.",
   };
 });
+processes.push({ ...processes[0], pid: 8100, name: "python3", command: "python3 -m http.server 8000", project: null, cwd: "~/scratch/http-demo", cpuPercent: 0, rssBytes: 20e6, ports: [8000], service: { kind: "dev-server", label: "Python HTTP server", confidence: "high", reasons: ["Exact -m http.server command"] }, actionable: true, actionToken: "synthetic-http-server", protectedReason: null });
 /** Fixture tunnels: starting for ~1.2 s, then connected (or error with ?tunnelfail). The URL never contains the real provider's domain. */
 type FixtureTunnel = { id: string; port: number; state: string; message: string; createdAt: number; expiresAt: number; url: string | null };
 let tunnels: FixtureTunnel[] = [];
@@ -100,9 +102,9 @@ const stub = async (name: string, input: any) => {
     return { state, enabled: settings.housekeeping.enabled, dryRun: settings.housekeeping.dryRun, message: state === "unsupported" ? "Housekeeping works on Linux hosts. This daemon runs on macOS, so it does nothing here." : state === "passive" ? "Standalone housekeeper active: Hosts stays passive." : state === "blocked" ? "The process table couldn't be read completely, so nothing was closed." : state === "off" ? "Housekeeping is off." : state === "preview" ? "Preview: logs what it would tidy. Nothing on this host is changed until you confirm live mode." : "Tidying this host. Running, open idle and unknown chats stay protected.", lastRuns: Object.fromEntries(["renice", "reap", "turbo", "helpers"].map((job) => [job, empty ? null : { at: Date.now() - 60000, outcome: settings.housekeeping.dryRun ? "preview" : "done", summary: job === "reap" ? "Kept an open idle chat's browser." : "Checked; see recent results." }])), actions: empty || mac ? [] : [{ at: Date.now() - 60000, job: "reap", outcome: "kept", what: "agent-browser daemon (PID 5001)", why: "Its chat is idle, so it was left alone" }, { at: Date.now() - 60000, job: "renice", outcome: "preview", what: "3 builds and tests", why: "Would lower main-process priority to nice 10" }], machine: mac ? null : { freeBytes: 6 * GB, totalBytes: 8 * GB, basis: "container", load1: 2.45, cores: 8 }, checkedAt: Date.now() };
   }
   if (name === "daemon-link.disk.report") return DiskReportSchema.parse({
-    disks: [{ label: "This computer's disk", totalBytes: 100 * GB, usedBytes: 65 * GB, freeBytes: 35 * GB, percent: 65, level: "ok", sentence: null }], scan: { state: empty ? "never" : "done", startedAt: null, finishedAt: empty ? null : Date.now() - 60000, done: empty ? 0 : 3, total: 3, partial: false, message: null },
-    workspaces: empty ? [] : [
-      workspaceUsage({ id: "website", workspaceIds: ["ws-fixture"], names: ["main"], folder: "~/projects/website", path: "/home/fixture/projects/website", totalBytes: 8 * GB, clearableBytes: 0, state: "working", busy: "A chat and dev server are running here.", items: [clearItem({ name: "node_modules", where: "~/projects/website/node_modules", bytes: 3 * GB, blocked: "Workspace is in use" })] }),
+    disks: [{ label: "This computer's disk", totalBytes: 100 * GB, usedBytes: 65 * GB, freeBytes: 35 * GB, percent: 65, level: "ok", sentence: null }], scan: { state: empty || nodisk ? "never" : "done", startedAt: null, finishedAt: empty ? null : Date.now() - 60000, done: empty ? 0 : 3, total: 3, partial: false, message: null },
+    workspaces: empty || nodisk ? [] : [
+      workspaceUsage({ id: "website", workspaceIds: longnames ? ["ws-fixture", "ws-fixture-review", "ws-fixture-long"] : ["ws-fixture"], names: longnames ? ["Sandbox", "Review workspace with a deliberately long name", "Release verification workspace with another long name"] : ["main"], folder: "~/projects/website", path: "/home/fixture/projects/website", totalBytes: 8 * GB, clearableBytes: 0, state: "working", busy: "A chat and dev server are running here.", items: [clearItem({ name: "node_modules", where: "~/projects/website/node_modules", bytes: 3 * GB, blocked: "Workspace is in use" })] }),
       workspaceUsage({ id: "api", names: ["fix-auth"], project: "API service", folder: "~/projects/api", path: "/home/fixture/projects/api", totalBytes: 3 * GB, clearableBytes: 0, state: "working", branch: "fix-auth", busy: "A dev server is running here.", items: [] }),
       workspaceUsage({ id: "docs", names: ["docs"], project: "Documentation", folder: "~/projects/docs", path: "/home/fixture/projects/docs", totalBytes: 2 * GB, clearableBytes: GB, items: [clearItem({ name: "node_modules", what: "Installed packages", where: "~/projects/docs/node_modules", bytes: GB, safe: true, token: "fixture-delete-docs" })] }),
     ], caches: empty ? [] : [
@@ -159,7 +161,7 @@ const stub = async (name: string, input: any) => {
     ] : [];
     return { status: busy ? "critical" : "ok", checkedAt: Date.now(), background: true, issues, watched: watched(),
       load: { memoryUsedBytes: r.container ? r.container.memoryUsedBytes : r.host.memoryUsedBytes, memoryLimitBytes: r.memoryBasisBytes, memoryBasis: r.memoryBasis, cpuPercent: r.host.cpuPercent, heavyJobs: r.heavyJobs.count, heavyJobLimit: r.heavyJobs.limit },
-      services: processes.filter((p) => p.service).map((p) => ({ name: p.name, cwd: p.cwd, ports: p.ports, project: { path: p.project.path, workspace: p.project.workspace } })) };
+      services: processes.filter((p) => p.service).map((p) => ({ name: p.name, cwd: p.cwd, ports: p.ports, project: p.project ? { path: p.project.path, workspace: p.project.workspace } : null })) };
   }
   if (name === "daemon-link.processes.report") return report(input);
   if (name === "daemon-link.ask.context") {
@@ -170,7 +172,12 @@ const stub = async (name: string, input: any) => {
     return { title: port ? "storybook on :6006 stopped" : "tsc is stuck at full CPU", text, workspaceId: "ws-fixture", workspaceName: "main", outputFrom: port ? "the terminal \"storybook\"" : null };
   }
   if (name === "daemon-link.terminal.open") return { ok: true, message: "Opened a terminal in ~/projects/website, in main.", workspaceId: "ws-fixture", terminalId: "term-1" };
-  if (name === "daemon-link.processes.preview") return { graceSeconds: 10, targets: processRows().filter((row) => row.stoppable && input.tokens.includes(row.actionToken)).map((row) => ({ pid: row.pid, name: row.name, ok: true, reason: null, rssBytes: row.rssBytes, cpuPercent: row.cpuPercent, outsidePaseo: row.outsidePaseo, children: row.tree.count > 1 ? Array.from({ length: row.tree.count - 1 }, (_, i) => ({ pid: row.pid + i + 1, name: i === 0 ? "node" : "esbuild" })) : [] })) };
+  if (name === "daemon-link.processes.preview") {
+    const targets = [...processRows(), ...processes.filter((row) => row.actionable)].filter((row) => input.tokens.includes(row.actionToken));
+    return { graceSeconds: 10, targets: targets.map((row) => ({ pid: row.pid, name: row.name, ok: true, reason: null, rssBytes: row.rssBytes, cpuPercent: row.cpuPercent, outsidePaseo: row.outsidePaseo ?? true, workspaceWarnings: row.project ? [`Inside ${row.project.workspace}, but Paseo didn't start it`] : [], children: row.tree?.count > 1 ? Array.from({ length: row.tree.count - 1 }, (_, i) => ({ pid: row.pid + i + 1, name: i === 0 ? "node" : "esbuild" })) : [] })) };
+  }
+  if (name === "monitor.stop" || name === "monitor.force-stop") return { ok: true, status: "signaled", message: "Fictional request only. No process was signalled." };
+
   if (name === "daemon-link.processes.stop") {
     const targets = processRows().filter((row) => row.stoppable && input.tokens.includes(row.actionToken));
     actions = [...targets.map((row) => ({ at: Date.now(), action: "stop", source: "processes", pid: row.pid, name: row.name, owner: row.owner.label, status: "signaled", signaled: 1, message: "" })), ...actions];
@@ -189,7 +196,7 @@ const stub = async (name: string, input: any) => {
   if (name === "daemon-link.peers.disconnect") { forwards = []; return { ok: true }; }
   if (name === "monitor.snapshot") {
     const all = empty || unverified ? [] : processes;
-    const filtered = all.filter((process) => `${process.name} ${process.project.name} ${process.pid}`.toLowerCase().includes(input.query?.toLowerCase() || ""));
+    const filtered = all.filter((process) => `${process.name} ${process.project?.name ?? ""} ${process.pid}`.toLowerCase().includes(input.query?.toLowerCase() || ""));
     const ascending = input.direction ? input.direction === "asc" : ["name", "pid"].includes(input.sort);
     const field = input.sort === "memory" ? "rssBytes" : input.sort === "cpu" ? "cpuPercent" : input.sort;
     filtered.sort((a: any, b: any) => (typeof a[field] === "string" ? a[field].localeCompare(b[field]) : a[field] - b[field]) * (ascending ? 1 : -1));
@@ -246,7 +253,7 @@ export const SettingsCard = ({ children }: any) => <View style={{ gap: 8, paddin
 export const SettingsRow = ({ label, hint, children }: any) => <View style={{ gap: 4 }}><Text style={{ color: settingsColors.text }}>{label}</Text>{hint ? <Text style={{ color: settingsColors.muted }}>{hint}</Text> : null}{children}</View>;
 export const SettingsSwitch = ({ label, hint, value, onValueChange, disabled }: any) => <SettingsRow label={label} hint={hint}><Switch accessibilityLabel={label} value={value} onValueChange={onValueChange} disabled={disabled} /></SettingsRow>;
 export function SettingsSelect({ label, hint, value, options, onValueChange, disabled }: any) {
-  return <SettingsRow label={label} hint={hint}><View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>{options.map((option: any) => <Pressable key={option.value} accessibilityRole="radio" accessibilityLabel={`${label}: ${option.label}`} accessibilityState={{ selected: option.value === value, disabled }} disabled={disabled} onPress={() => onValueChange(option.value)} style={{ padding: 6, borderWidth: 1, borderColor: option.value === value ? settingsColors.accent : settingsColors.border }}><Text style={{ color: settingsColors.text }}>{option.label}</Text></Pressable>)}</View></SettingsRow>;
+  return <SettingsRow label={label} hint={hint}><select aria-label={label} value={value} disabled={disabled} onChange={(event) => onValueChange(event.target.value)} style={{ minHeight: 36, width: "100%", minWidth: 0, maxWidth: "100%", padding: 6, color: settingsColors.text, background: params.has("light") ? "#ffffff" : "#1a2029", border: `1px solid ${settingsColors.border}`, borderRadius: 6 }}>{options.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></SettingsRow>;
 }
 export const SettingsInput = ({ label, hint, initialValue, onChangeText, placeholder, disabled }: any) => <SettingsRow label={label} hint={hint}><TextInput accessibilityLabel={label} defaultValue={initialValue} placeholder={placeholder} placeholderTextColor={settingsColors.muted} style={{ color: settingsColors.text, borderColor: settingsColors.border }} onChangeText={onChangeText} editable={!disabled} /></SettingsRow>;
 export const SettingsAction = ({ label, actionLabel, onPress, disabled }: any) => <SettingsRow label={label}><Pressable accessibilityRole="button" accessibilityLabel={actionLabel} disabled={disabled} onPress={onPress}><Text style={{ color: settingsColors.accent }}>{actionLabel}</Text></Pressable></SettingsRow>;

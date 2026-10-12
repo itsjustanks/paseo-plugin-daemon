@@ -82,3 +82,26 @@ it("closes a failed confirmation, refreshes status, and never implies successful
   expect(port.status.mock.calls.length).toBeGreaterThan(1);
   expect(matching(renderer, "Pressable").find((node) => node.props.accessibilityRole === "switch")!.props.accessibilityState.checked).toBe(false);
 });
+
+it("puts configured computers ahead of folded setup and keeps permission review explicit", async () => {
+  fixture.hosts.push({ serverId: "remote", label: "Development server", status: "online" });
+  const renderer = await render();
+  expect(output(renderer)).toContain("Development server");
+  expect(output(renderer)).not.toContain("Paste pairing link");
+  const guide = matching(renderer, "Pressable").find((node) => node.props.accessibilityLabel === "Setup guide and example task")!;
+  expect(guide.props.accessibilityState.expanded).toBe(false);
+  await act(async () => guide.props.onPress());
+  const add = matching(renderer, "Pressable").find((node) => node.props.accessibilityLabel === "Add a computer with a pairing link")!;
+  await act(async () => add.props.onPress());
+  expect(output(renderer)).toContain("Paste pairing link");
+  expect(output(renderer)).toContain("does not send a prompt or move an agent");
+  expect(matching(renderer, "Pressable").some((node) => node.props.accessibilityLabel === "Paste pairing link")).toBe(false);
+});
+
+it("guides an empty inventory without a credential input or invented Paste action", async () => {
+  fixture.hosts = [];
+  const renderer = await render();
+  expect(output(renderer)).toContain("No computers are configured");
+  expect(matching(renderer, "TextInput")).toEqual([]);
+  expect(matching(renderer, "Pressable").find((node) => node.props.accessibilityLabel === "Setup guide and example task")!.props.accessibilityState.expanded).toBe(true);
+});

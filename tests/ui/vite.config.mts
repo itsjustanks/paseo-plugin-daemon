@@ -4,6 +4,7 @@ const here = (path: string) => fileURLToPath(new URL(path, import.meta.url));
 // Most specific first: a bare "@getpaseo/plugin" alias would otherwise rewrite the subpaths too.
 export default defineConfig({
   root: here("./"),
+  ...(process.env.HOSTS_PREVIEW_CACHE_DIR ? { cacheDir: process.env.HOSTS_PREVIEW_CACHE_DIR } : {}),
   resolve: { alias: [
     { find: "@getpaseo/plugin/client/react-native", replacement: here("./plugin.tsx") },
     { find: "@getpaseo/plugin/client/ui", replacement: here("./plugin.tsx") },

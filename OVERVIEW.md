@@ -1,18 +1,25 @@
-# Hosts
+# Hosts 0.20.0
 
 See CPU, memory, disk use and dev servers on the selected Paseo host. Processes offers All processes,
 Heavy jobs, Browsers and Housekeeping views. Review a process tree before stopping it; protected agents
 and daemon processes explain why they cannot be stopped here. Existing settings and defaults are preserved.
+
+Workspaces lists the current snapshot of up to 50 running listeners with workspace/project association,
+CPU, memory, ports, Open and reviewed Stop. Memory sorts highest first. Ownership stays unknown when
+it cannot be identified. Disk measurements are separate and run only when requested.
+Same-user apps can appear outside registered projects and without an active chat. Manual Stop reviews
+ownership and the process tree with Cancel selected by default. Open and sharing still require verified
+project and port scope; inventory alone does not authorise automatic stops.
 
 ## Work with an always-on remote host
 
 - Watch existing Agent Browser sessions through authenticated Paseo RPC inside a native workspace panel.
   Workspace actions show verified attribution. Closing or hiding the viewer releases capture and preserves
   the browser. Hosts does not install or start browsers, navigate, activate tabs or change their viewport.
-- Workspaces includes optional cross-daemon coordination, off by default. Explicit confirmation shares
+- Connections guides optional agent access across computers, off by default. Explicit confirmation shares
   full daemon authority between opted-in hosts, separately from restricted app and file access.
   Turning it off does not revoke pairing links already shared.
-- Recover another host from Overview or Command Center → Workspaces. Select an online helper, save a
+- Recover another host from Overview or Command Center → Connections. Select an online helper, save a
   hostname/SSH alias and local SSH config/key reference, then test or review a fixed recovery action.
   Remove deletes only the saved connection. No startup SSH, automatic recovery or credential setup.
 

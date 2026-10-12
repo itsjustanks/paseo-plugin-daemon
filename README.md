@@ -36,13 +36,13 @@ Capture travels over authenticated Paseo RPC into the native panel, including we
 missing session. Same-user local Chromium CDP listeners must be proven; unsupported sessions explain why.
 [Support and limits](docs/browser-viewing.md).
 
-**Cross-daemon** lives in Workspaces connections and stays off until explicitly confirmed. It shares full
+**Connections** guides setup for agents across computers. Agent access stays off until confirmed and shares full
 daemon authority between opted-in hosts, independently of restricted private app/file grants. Turning off
 clears local peers and pending deliveries; revoke previously shared pairing credentials separately. Requires
 connected-host APIs; older runtimes show an update explanation. [Integration and security
 boundary](docs/cross-daemon-integration.md).
 
-**Recover another host** on Overview or in Command Center opens Workspaces' recovery fold. Select an online
+**Recover another host** on Overview or in Command Center opens Connections' SSH recovery fold. Select an online
 helper in Paseo first. Save a target hostname or SSH alias and a local key/config reference; test SSH
 explicitly, then review any start, restart, saved-connection removal or reboot.
 No credentials are configured by default. No
@@ -110,7 +110,7 @@ browser](https://github.com/omercnet/paseo-plugins/tree/daed6eb12f4156ca392f71c4
   workspace's dev server stopped, a link to it failed, or one of its jobs drives the host's load. It
   opens the Hosts tab for that workspace. A calm chat shows nothing; host-wide health is the sidebar
   dot's job.
-- **Guidance where you need it.** Four tabs, technical parts folded into rows you open in place, and
+- **Guidance where you need it.** Five tabs, technical parts folded into rows you open in place, and
   a Help tab of plain questions with live setup checks on Overview.
 
 Agent Browser is not required. Daemon Link forwards traffic; your normal browser renders the app. The
@@ -143,7 +143,7 @@ paseo plugin update daemon-link
 
 ## Open a dev server in one press
 
-With the remote host selected, open **Hosts → Dev servers** (or the **Hosts** tab of the workspace
+With the remote host selected, open **Hosts → Workspaces** (or the **Hosts** tab of the workspace
 the server runs in) and press **Open in browser** on its card. Daemon Link reserves a browser tab,
 starts a temporary HTTPS link to that port (or reuses the live one), and sends the tab there once the
 link is connected. The card reads **Starting link**, then **Link ready · 2 h left**, or **Link
@@ -177,14 +177,14 @@ project's terminal. For example:
 npm run dev
 ```
 
-Keep that terminal running. Open **Hosts → Dev servers** with the server selected.
+Keep that terminal running. Open **Hosts → Workspaces** with the server selected.
 Recognized apps appear automatically with their project, framework, and listening port.
 The plugin discovers an existing server; opening the panel does not start your project for you.
 
 ### 2. Pair the two hosts
 
-On the development server, open **Hosts → Dev servers → Open privately on your own computer → Pair
-hosts → Create pairing code**.
+On the development server, open **Hosts → Connections → Private apps and project files → Pair hosts
+→ Create pairing code**.
 Use Paseo's host picker to select your **laptop's daemon**, then paste the code under **Pair host**.
 
 Pairing establishes permission for one host to discover and access the other's eligible project
@@ -216,13 +216,19 @@ project access. Both plugins must remain running while you use a connection.
 | --- | --- |
 | **Overview** | The host's state in words; problems, watched services, setup, Project Sync and details fold out. |
 | **Processes** | Heaviest processes, runaways, memory against the limit, the ask-first stop; recent stops fold out. |
-| **Dev servers** | A card per app with Open; browser links, private links and SSH forwards fold out. |
+| **Workspaces** | Current running-app snapshot with ownership, resources, Open and reviewed Stop; disk below. |
+| **Connections** | Add computers, review agent access, private apps/files, SSH forwards and SSH recovery. |
 | **Help** | Plain questions, each folded, starting with how Hosts works. |
 
-Version 0.11.0 follows the design standard's update of 2026-10-06 (the layout of paseo-mcp 0.19):
-four tabs, no tab intros, and the technical or less-used parts in fold-out rows. 0.10's **Connect**
-and **Project Sync** tabs now fold out under **Dev servers**, and links to them still land there.
-"What you can do here" and the troubleshooting list became Help's questions. Nothing was removed.
+Connections is a dedicated top-level tab. Old Connect, Pair, SSH and recovery links still open their
+sections. Project Sync remains on Overview. Running apps are independent of disk measurements and
+show up to 50 listeners from the current snapshot. Memory defaults highest first; CPU, workspace,
+project, app, port and status can also be sorted. Unknown ownership stays visible.
+
+A server labelled **Listening · waiting for requests** is waiting for work, not an offline computer.
+A listening port does not prove app health. Stop first previews ownership warnings and affected children,
+with Cancel as the default. Running-app Stop requests a graceful exit; Force stop is reviewed separately
+if it remains running. Open remains restricted to verified shareable project ports.
 
 Each workspace also gets a **Hosts** tab, in the workspace view and in the Projects explorer; what it
 shows depends on the panel scope setting described below.
@@ -418,14 +424,20 @@ point it is closed and a fresh one costs one press. The service lease keeps bein
 two seconds, so an extended link still dies with the dev server it was issued for. Unlimited links
 are deliberately not offered: the URL is public for as long as the link lives.
 
-### Dev servers: the first thing you see
+### Running apps and workspace ownership
 
-![Dev servers with fictional running apps, each with Open.](docs/screenshots/dev-servers.png)
+The Workspaces table shows the current snapshot of up to 50 listening apps with memory, CPU, ownership,
+Open where sharing is allowed, and reviewed Stop. App filter selects All apps, Can stop or No workspace;
+Reset clears search and filtering. Disk measurement is separate; apps appear before a
+disk check. The existing screenshots below predate this table layout.
+
+![Earlier dev-server layout with fictional running apps.](docs/screenshots/dev-servers.png)
 
 ### Reaching a dev server from another computer
 
-Under **Dev servers**, three rows fold out: **Open privately on your own computer** (pairing),
-**Use your SSH keys instead**, and **Browser links you've opened**.
+Under **Connections**, restricted **Private apps and project files**, **SSH port forwards**, and
+**SSH recovery for an offline computer** are separate from full-authority agent access.
+**Browser links you've opened** remains under Workspaces.
 
 ![Private localhost access between fictional hosts.](docs/screenshots/dev-relay.png)
 
@@ -461,7 +473,7 @@ its existing encrypted relay. Install this version on both hosts; no SSH credent
 
 It lives under **Overview → Copy a project from another computer**.
 
-1. Pair the hosts under **Dev servers → Open privately on your own computer → Pair hosts**.
+1. Pair the hosts under **Connections → Private apps and project files → Pair hosts**.
 2. Select the source in Paseo. Open **Copy a project from another computer → Share with a host** and
    allow a project for
    the intended pairing code. Existing pairings start with **no project access**.
@@ -597,7 +609,7 @@ Before 0.10.0, it required Paseo 0.8 or newer. Version 0.5.0 moved to the 0.8 ru
 and `index.server.ts` entries with code under `client/`, `server/`, and `shared/`, and
 `requirements.paseo` set to `>=0.8.0`. Versions 0.6.0 through 0.9.0 add the workspace panel,
 settings screen, lifecycle hooks, health checks, composer pill, workspace resource rollup, one-press
-Open, and the simplified four-tab surface on top of that layout. Paseo 0.7 hosts should stay on 0.4.0.
+Open, and the named-tab surface on top of that layout. Paseo 0.7 hosts should stay on 0.4.0.
 
 Features depend on the selected host's actual capabilities, so a newer host never lends its APIs
 to an older one. The `/hosts` composer shortcut appears only when the host provides that API.
@@ -606,7 +618,7 @@ to an older one. The `/hosts` composer shortcut appears only when the host provi
 
 | Symptom | What to check |
 | --- | --- |
-| No apps listed | Start the app in a registered project. Refresh Dev servers; check the selected host. |
+| No apps listed | Start the app in a registered project. Refresh Workspaces; check the selected host. |
 | Open does nothing | Allow pop-ups for Paseo. The card reads Starting link, then Link ready; Link failed shows why. |
 | Link expired mid-session | Press Extend before it runs out; after 24 hours of life, Close it and press Open again. |
 | Custom server is missing | Configure it as a Paseo service script with its listening port. |

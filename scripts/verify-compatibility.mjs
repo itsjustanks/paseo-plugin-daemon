@@ -2,7 +2,7 @@
 // Exercise real upstream compilers, then evaluate both bundles with their host API boundaries.
 // Pinned releases cover the manifest's minimum and the native-screen runtime.
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -82,7 +82,17 @@ async function checkServer(bundle, version) {
     const snapshot = monitor.contract.output.parse(await monitor.handler({}, context));
     assert.equal(snapshot.scope.status, "ready");
     assert.equal(snapshot.scope.projects.length, 1);
-    assert(snapshot.processes.every((process) => process.project?.id === "fixture"));
+    const selfSnapshot = monitor.contract.output.parse(await monitor.handler({ query: String(process.pid) }, context));
+    const self = selfSnapshot.processes.find((row) => row.pid === process.pid);
+    assert(self, "Same-user inventory includes the verifier outside the registered fixture project");
+    assert.equal(self.project, null);
+    assert.equal(self.actionable, false, "The plugin process remains protected");
+    assert.equal(self.actionToken, null);
+    assert(self.protectedReason);
+    for (const row of snapshot.services) {
+      if (row.project?.shareable) assert(row.ports.every((port) => row.project.shareablePorts.includes(port)));
+      if (!row.actionable) assert.equal(row.actionToken, null);
+    }
     const { contract, handler } = handlers.get("daemon-link.peers.pair");
     await assert.rejects(() => handler(contract.input.parse({ invitation: "invalid" }), context), /valid Hosts pairing code/);
     serverContracts.push([...handlers.keys()].sort());
@@ -139,6 +149,88 @@ async function checkClient(bundle, version, supportsShortcuts) {
   console.log(`${version}: client registrations verified; composer shortcut ${supportsShortcuts ? "enabled" : "hidden"}`);
 }
 
+// Compile the exact policy modules with each upstream compiler. The adapter and
+// signal function are deterministic fixtures: this check never signals OS PIDs.
+async function checkMonitorPolicy(compilePlugin, version) {
+  const fixture = join(directory, `${version}-monitor-policy`);
+  await mkdir(fixture);
+  await cp(join(project, "server"), join(fixture, "server"), { recursive: true });
+  await cp(join(project, "shared"), join(fixture, "shared"), { recursive: true });
+  const adapter = (await readFile(join(project, "tests", "fake-adapter.ts"), "utf8"))
+    .replaceAll('../server/platform', './platform').replaceAll('../server/redaction', './redaction');
+  await writeFile(join(fixture, "server", "compatibility-adapter.ts"), adapter);
+  await writeFile(join(fixture, "index.server.ts"), POLICY_FIXTURE);
+  const bundle = await compilePlugin({ server: join(fixture, "index.server.ts") });
+  await evaluate(bundle.serverBundle, "server")();
+  console.log(`${version}: outside inventory, shared manual preview/stop/force, protected/stale identities, automation and verified share ports checked with fake adapters`);
+}
+
+const POLICY_FIXTURE = String.raw`
+import assert from "node:assert/strict";
+import { createMonitorHandlers } from "./server/handlers";
+import { ProjectScope } from "./server/scope";
+import { hashArgv } from "./server/redaction";
+import { FakeAdapter, FakeClock, proc } from "./server/compatibility-adapter";
+
+export default async function check() {
+  const scope = new ProjectScope(async (path) => path, "/home/fixture");
+  scope.bind({
+    projects: { list: async () => ({ projects: [{ projectId: "fixture", projectDisplayName: "Fixture", projectRootPath: "/home/fixture/project" }] }) },
+    workspaces: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
+    agents: { list: async () => ({ entries: [], pageInfo: { hasMore: false } }) },
+  } as never);
+  const adapter = new FakeAdapter();
+  adapter.processes = [
+    proc({ pid: 101, cwd: "/outside/project", argv: ["node", "/outside/node_modules/vite/bin/vite.js"] }),
+    proc({ pid: 102, cwd: "/home/fixture/project", argv: ["python3", "-m", "http.server"] }),
+    proc({ pid: 103, cwd: "/outside/project", argv: ["postgres"] }),
+    proc({ pid: 104, uid: 1001, cwd: "/outside/project" }),
+  ];
+  for (const pid of [101, 102, 103]) adapter.ports.set(pid, [8765, 9229]);
+  const signals: Array<[number, string]> = [];
+  const monitor = createMonitorHandlers({ adapter, scope, uid: 1000, selfPid: 900, parentPid: 901, clock: new FakeClock(), kill: (pid, signal) => { signals.push([pid, signal]); } });
+  const snapshot = await monitor.snapshot({});
+  const outside = snapshot.services.find((row) => row.pid === 101)!;
+  const inside = snapshot.services.find((row) => row.pid === 102)!;
+  const protectedRow = snapshot.services.find((row) => row.pid === 103)!;
+  assert(outside, "Outside-project dev server remains in inventory");
+  assert.equal(outside.project, null);
+  assert.equal(outside.actionable, true);
+  assert(outside.actionToken);
+  assert(!snapshot.processes.some((row) => row.pid === 104), "Other-user process remains excluded");
+  assert.equal(inside.project?.id, "fixture");
+  assert.equal(inside.project?.shareable, true);
+  assert.deepEqual(inside.project?.shareablePorts, [8765]);
+  assert.deepEqual(inside.ports, [8765], "Debugger port cannot enter Open/share controls");
+  assert.equal(scope.match(adapter.processes[0], [8765]), null, "Inventory cannot grant outside-project sharing");
+  assert.equal(protectedRow.actionable, false);
+  assert.equal(protectedRow.actionToken, null);
+  assert(protectedRow.protectedReason);
+  const manager = monitor.internals!.manager;
+  const plan = await manager.preview([outside.actionToken]);
+  assert.equal(plan.targets[0].ok, true, "Monitor token is accepted by the shared manager preview");
+  assert.equal(plan.targets[0].outsidePaseo, true);
+  assert.equal((await monitor.forceStop({ token: outside.actionToken })).status, "needs-graceful-first");
+  assert.deepEqual(signals, []);
+  assert.equal((await monitor.stop({ token: outside.actionToken })).status, "signaled");
+  assert.equal((await monitor.forceStop({ token: outside.actionToken })).status, "signaled");
+  assert.deepEqual(signals, [[101, "SIGTERM"], [101, "SIGKILL"]]);
+  adapter.processes[0].startId = "reused-pid";
+  assert.equal((await manager.preview([outside.actionToken])).targets[0].ok, false);
+  assert.equal((await monitor.stop({ token: outside.actionToken })).status, "denied");
+  assert.equal((await monitor.forceStop({ token: outside.actionToken })).status, "denied");
+  const protectedToken = manager.guard.mint(adapter.processes[2], hashArgv(adapter.processes[2].argv));
+  assert.equal((await manager.preview([protectedToken])).targets[0].ok, false);
+  assert.equal((await monitor.stop({ token: protectedToken })).status, "denied");
+  assert.equal((await monitor.forceStop({ token: protectedToken })).status, "needs-graceful-first");
+  adapter.processes[1].rssBytes = adapter.sample.memoryTotalBytes;
+  monitor.internals!.collector.invalidate();
+  assert.equal(await manager.autoStopBiggest(1, async () => true), null, "Workspace attribution cannot grant automation authority");
+  assert.equal(signals.length, 2, "Only stubbed manual fixture signals occurred");
+  manager.close();
+}
+`;
+
 try {
   for (const [version, commit] of Object.entries(references)) {
     process.env.PASEO_HOME = join(directory, `${version}-state`);
@@ -147,6 +239,7 @@ try {
       client: join(project, "index.client.tsx"), server: join(project, "index.server.ts"),
     });
     await checkServer(bundles.serverBundle, version);
+    await checkMonitorPolicy(compilePlugin, version);
     await checkClient(bundles.clientBundle, version, true);
     await checkClient(bundles.clientBundle, version, false);
   }
