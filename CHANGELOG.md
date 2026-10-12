@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.19.0 — 2026-10-12
+
+- Processes has four compact views: All processes, Heavy jobs, Browsers and Housekeeping. Existing filtering,
+  global sorting and process actions remain available.
+- Watch existing same-user Agent Browser sessions inside Paseo on the selected host. Workspace actions and the
+  workspace Agent browsers panel open a bounded, read-only remote capture. No browser installation,
+  navigation, tab activation or session closure. Hidden viewers release capture.
+- Cross-daemon coordination is separately opt-in, with explicit full-authority confirmation. Its section lives
+  under Workspaces connections, apart from restricted app/file grants. Existing settings and defaults are
+  preserved.
+- Saved SSH recovery connections on an online helper provide reviewed, fixed operations for a Docker / Dev
+  Stack container or systemd service. Open recovery from Overview or Command Center; offline targets do not
+  hide it. No startup SSH probes or automatic recovery.
+- Teardown cancels cross-daemon, recovery and housekeeping authority and detaches browser capture before
+  awaiting any shutdown.
+- Added a [headless setup guide](docs/headless-setup.md), [browser support details](docs/browser-viewing.md),
+  retained MIT source notices and fictional preview fixtures.
+
 ## 0.18.0 — 2026-10-11
 
 ### Keep shared Linux hosts responsive, with a preview before automation

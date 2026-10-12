@@ -37,7 +37,7 @@ const ROWS_FOLDED = 8;
  * Open, then its health verdict, resources, processes, and browser links; in
  * "host" scope it is the full Hosts surface.
  */
-export function WorkspacePanel(props: PluginWorkspacePanelProps) {
+export function WorkspacePanel(props: PluginWorkspacePanelProps & { onWatchBrowser?(workspaceId: string): void }) {
   const settings = useSettings(hostsSettings);
   // Hooks run unconditionally; the scope decision happens after them.
   const tokens = useUi(props.theme, props.layout.compact);
@@ -46,7 +46,7 @@ export function WorkspacePanel(props: PluginWorkspacePanelProps) {
   return (
     <TokensProvider value={tokens}>
       <HostsNavigationProvider navigation={props.navigation} hostId={props.host.id}>
-      <SayRoot><WorkspaceBody key={`${props.host.id}:${props.workspaceId}`} theme={props.theme} hostId={props.host.id} workspaceId={props.workspaceId} intervalSeconds={values.snapshotIntervalSeconds} minutes={values.tunnelMinutes} settingsLoading={settings.status === "loading"} /></SayRoot>
+      <SayRoot><WorkspaceBody key={`${props.host.id}:${props.workspaceId}`} theme={props.theme} hostId={props.host.id} workspaceId={props.workspaceId} intervalSeconds={values.snapshotIntervalSeconds} minutes={values.tunnelMinutes} settingsLoading={settings.status === "loading"} onWatchBrowser={props.onWatchBrowser ? () => props.onWatchBrowser!(props.workspaceId) : undefined} /></SayRoot>
       </HostsNavigationProvider>
     </TokensProvider>
   );
@@ -142,7 +142,7 @@ function DiskSection({ theme, view }: { theme: PluginTheme; view: WorkspaceDiskV
   );
 }
 
-function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, settingsLoading }: { theme: PluginTheme; hostId: string; workspaceId: string; intervalSeconds: number; minutes: TunnelMinutes; settingsLoading: boolean }) {
+function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, settingsLoading, onWatchBrowser }: { onWatchBrowser?(): void; theme: PluginTheme; hostId: string; workspaceId: string; intervalSeconds: number; minutes: TunnelMinutes; settingsLoading: boolean }) {
   const t = useTokens();
   // 0.15.0: replies are toasts; on an app without them, a message bar under the header.
   const [message] = usePageSay();
@@ -225,6 +225,7 @@ function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, s
     <ScrollView style={{ flex: 1, backgroundColor: t.color.surface0 }} contentContainerStyle={{ padding: t.compact ? SPACE.md : SPACE.section, paddingBottom: SPACE.section * 2, alignItems: "stretch" }}>
       <View style={{ width: "100%", maxWidth: t.maxWidth, alignSelf: "center", gap: SPACE.section }}>
         <PageHeader theme={theme} host={workspace?.name ?? "This workspace"} tone={tone} line={line} onRefresh={refreshNow} refreshing={refreshing} />
+        {onWatchBrowser ? <Button label="Watch agent browser" icon="Globe" onPress={onWatchBrowser} /> : null}
         {message ? <MessageBar theme={theme} tone={message.tone} text={message.text} /> : null}
         {snapshotQuery.isError ? (
           <Notice icon="CircleAlert" tone="danger" action={<Button label="Try again" onPress={refreshNow} loading={snapshotQuery.isFetching} />}>

@@ -213,7 +213,7 @@ describe("runaways, watched services and the summary", () => {
       snapshot: snapshot([], [], { memory: pressure("critical") }),
       report: report([
         runaway("memory-near-limit", "critical", "This container's memory is nearly full: 7.4 GB of its 8.0 GB limit."),
-        runaway("too-many-jobs", "warning", "5 heavy jobs are running at once; your limit is 4."),
+        runaway("too-many-jobs", "warning", "5 heavy jobs are running, above your warning threshold of 4. This warning never stops jobs."),
         runaway("cpu-runaway", "warning", "tsc (PID 402) has used a full CPU core for 4 min.", "~/app"),
       ]),
       watched: [{ id: "o", name: "OmniRoute", target: "h/x", state: "slow", latencyMs: 4200, usualMs: 100, status: 200, checkedAt: 1, message: "OmniRoute is slow: 4.2 s, usually 100 ms.", history: [] }],

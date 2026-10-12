@@ -22,6 +22,39 @@ The plugin is **Daemon Link**; its sidebar entry is **Hosts**, matching Paseo's 
 *Actual plugin components rendered with fictional data. Every screenshot in this repository uses
 an isolated preview: no real accounts, host addresses, project names, credentials, or conversations.*
 
+## Headless work in 0.19.0
+
+[Feature sources and integration status](docs/feature-sources.md) maps the supplied references to this release.
+
+Select the always-on **remote host** in Paseo. Under **Processes → Browsers**, watch an existing Agent Browser
+session and select its tab. Workspace table **Watch browser** actions and a workspace's **Agent browsers**
+panel scope the list to a verified workspace. The browser keeps running on the selected host when the viewer
+closes. A sleeping laptop cannot keep its own local host running.
+
+Capture travels over authenticated Paseo RPC into the native panel, including web/mobile. It does not use
+`navigation.openBrowser`, which creates a local desktop tab. Hosts never installs a browser or starts a
+missing session. Same-user local Chromium CDP listeners must be proven; unsupported sessions explain why.
+[Support and limits](docs/browser-viewing.md).
+
+**Cross-daemon** lives in Workspaces connections and stays off until explicitly confirmed. It shares full
+daemon authority between opted-in hosts, independently of restricted private app/file grants. Turning off
+clears local peers and pending deliveries; revoke previously shared pairing credentials separately. Requires
+connected-host APIs; older runtimes show an update explanation. [Integration and security
+boundary](docs/cross-daemon-integration.md).
+
+**Recover another host** on Overview or in Command Center opens Workspaces' recovery fold. Select an online
+helper in Paseo first. Save a target hostname or SSH alias and a local key/config reference; test SSH
+explicitly, then review any start, restart, saved-connection removal or reboot.
+No credentials are configured by default. No
+background SSH, arbitrary saved commands, browser-control commands or automatic recovery. If all helpers are
+offline, use the provider console. [Headless setup and recovery](docs/headless-setup.md).
+
+MIT sources: browser transport patterns adapted from [Omer Cohen's shared
+browser](https://github.com/omercnet/paseo-plugins/tree/daed6eb12f4156ca392f71c48e7a9ccca231ae8c/paseo-shared-browser)
+([retained notice](server/browser-LICENSE.txt)); cross-daemon adapted from
+[maxwell-01/maxs-paseo-plugins](https://github.com/maxwell-01/maxs-paseo-plugins/tree/975f8c4c062cb78ca82b203c8952e6c31621a9e6/cross-daemon)
+([retained notice](docs/cross-daemon-LICENSE.txt)). See the pinned source notes for exact provenance.
+
 ## What you get
 
 - **Heavy processes, first-class.** The Processes tab lists the heaviest processes with how long

@@ -78,7 +78,7 @@ const devLog = (extra: string[] = []) => ["> website@1.0.0 dev", "> next dev", "
 
 describe("composeAskMessage", () => {
   const facts: AskFacts = {
-    code: "cpu-runaway", problem: "tsc (PID 4402) has used a full CPU core for 4 min.", hostLine: "memory 6.9 GB of 7.3 GB (container limit), CPU 91%, 5 of 4 heavy jobs",
+    code: "cpu-runaway", problem: "tsc (PID 4402) has used a full CPU core for 4 min.", hostLine: "memory 6.9 GB of 7.3 GB (container limit), CPU 91%, 5 heavy jobs (warning above 4; advisory only, never stops jobs)",
     process: { name: "tsc", pid: 4402, job: "Type check", owner: "Website · main", cwd: "~/app", cpuPercent: 99, rssBytes: 2.1 * GB, memoryPercent: 28.8, memoryWhere: "this container's limit", ageSeconds: 420, command: "node tsc --watch", ports: [] },
     where: "Website · main",
   };
@@ -141,7 +141,7 @@ describe("server ask: context", () => {
     const context = AskContextSchema.parse(await ask.context({ kind: "process", pid: 4402 }, paseo));
     expect(context).toMatchObject({ title: "tsc is stuck at full CPU", workspaceId: "ws-app", workspaceName: "main", outputFrom: null });
     expect(context.text).toContain("What's wrong: tsc (PID 4402): has used a full CPU core for 4 min.");
-    expect(context.text).toContain("- Host: memory 6.9 GB of 7.3 GB (container limit), CPU 91%, 5 of 4 heavy jobs");
+    expect(context.text).toContain("- Host: memory 6.9 GB of 7.3 GB (container limit), CPU 91%, 5 heavy jobs (warning above 4; advisory only, never stops jobs)");
     expect(context.text).not.toContain(SYNTHETIC_PASSWORD);
     expect(context.text).not.toContain("output wasn't found");
   });
@@ -219,7 +219,7 @@ describe("server ask: disk (0.14.0)", () => {
   it("a heavy process's ask mentions the disk when it's 85% full or more, and not otherwise", async () => {
     const { paseo } = fakePaseo([]);
     const low = await createAsk(deps([row()], verdict({ disk: space }))).context({ kind: "process", pid: 4402 }, paseo);
-    expect(low.text).toContain("5 of 4 heavy jobs, disk 91% full (9 GB free)");
+    expect(low.text).toContain("5 heavy jobs (warning above 4; advisory only, never stops jobs), disk 91% full (9 GB free)");
     const fine = await createAsk(deps([row()], verdict({ disk: { ...space, percent: 60, freeBytes: 40 * GB, level: "ok", sentence: null } }))).context({ kind: "process", pid: 4402 }, paseo);
     expect(fine.text).not.toContain("disk");
   });

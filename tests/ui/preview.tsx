@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BrowserWorkspacePanel } from "../../client/browser-sessions";
+import { registerPreviewDaemons } from "./headless-fixtures";
 import { DaemonSurface } from "../../client/daemon";
 import { HostsSettings } from "../../client/settings";
 import { WorkspacePanel } from "../../client/workspace-panel";
 import { makeQuickHealth } from "../../client/quick";
 const QuickHealth = makeQuickHealth("daemon-link");
 const queryClient = new QueryClient();
+const stopPreviewDaemons = registerPreviewDaemons();
 const params = new URLSearchParams(location.search);
 const light = params.has("light");
 /** `?view=panel` mounts the workspace tab, `?view=settings` the Hosts settings screen; the default is the sidebar surface. */
@@ -20,11 +23,13 @@ const colors = light ? {
 };
 function Preview() {
   const [compact, setCompact] = useState(innerWidth < 640);
+  useEffect(() => stopPreviewDaemons, []);
   useEffect(() => { const resize = () => setCompact(innerWidth < 640); addEventListener("resize", resize); return () => removeEventListener("resize", resize); }, []);
-  const host = { theme: { colors }, host: { id: "preview", label: "My laptop" }, layout: { compact, platform: "web" as const } };
+  const host = { theme: { colors }, host: { id: "preview", label: "Always-on helper" }, layout: { compact, platform: "web" as const } };
+  const onWatchBrowser = (workspaceId: string) => { location.href = `/?view=browser&workspace=${encodeURIComponent(workspaceId)}${light ? "&light" : ""}`; };
   return <QueryClientProvider client={queryClient}>
     <div style={{ background: colors.surface0, minHeight: "100vh", color: colors.foreground }}>
-    {view === "panel" ? <WorkspacePanel {...host} context="workspace" workspaceId="ws-fixture" /> : view === "settings" ? <HostsSettings {...host} /> : view === "popover" ? <div style={{ maxWidth: 380, margin: 24, background: colors.surface1, border: `1px solid ${colors.border}`, borderRadius: 12 }}><QuickHealth theme={host.theme as never} close={() => {}} openScreen={() => {}} /></div> : <DaemonSurface {...host} shortcuts initialTab={(params.get("tab") as never) || undefined} />}
+    {view === "browser" ? <BrowserWorkspacePanel {...host} context="workspace" workspaceId={params.get("workspace") ?? "ws-fixture"} /> : view === "panel" ? <WorkspacePanel {...host} context="workspace" workspaceId="ws-fixture" onWatchBrowser={onWatchBrowser} /> : view === "settings" ? <HostsSettings {...host} /> : view === "popover" ? <div style={{ maxWidth: 380, margin: 24, background: colors.surface1, border: `1px solid ${colors.border}`, borderRadius: 12 }}><QuickHealth theme={host.theme as never} close={() => {}} openScreen={() => {}} /></div> : <DaemonSurface {...host} shortcuts onWatchBrowser={onWatchBrowser} params={{ tab: params.get("tab") ?? "overview", open: params.get("open") ?? "" }} initialTab={(params.get("tab") as never) || undefined} />}
     </div>
   </QueryClientProvider>;
 }

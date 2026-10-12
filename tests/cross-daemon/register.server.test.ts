@@ -1,0 +1,36 @@
+import type { PluginServerContext } from "@getpaseo/plugin/server";
+import type { CrossDaemonDependencies } from "../../server/cross-daemon/cross-daemon.server";
+import { beforeEach, expect, it, vi } from "vitest";
+const mocks = vi.hoisted(() => ({ register: vi.fn(), load: vi.fn(), resolveCli: vi.fn(), cli: vi.fn() }));
+vi.mock("../../server/cross-daemon/cross-daemon.server", () => ({ registerCrossDaemon: mocks.register }));
+vi.mock("../../server/cross-daemon/paseo-daemon.server", () => ({ loadPaseoDaemon: mocks.load, resolvePaseoCli: mocks.resolveCli }));
+vi.mock("../../server/cross-daemon/paseo-cli.server", () => ({ createPaseoCli: mocks.cli }));
+import { contributeCrossDaemon } from "../../server/cross-daemon/register";
+beforeEach(() => vi.resetAllMocks());
+it("keeps adapter loading lazy and shares one verified adapter across registration dependencies", async () => {
+  const own = { serverId: "fixture", name: "Fixture" };
+  const readOwnPeer = vi.fn(async () => null);
+  const run = vi.fn(async () => "remote"); const runLocal = vi.fn(async () => "local");
+  const stop = vi.fn(); mocks.register.mockReturnValue(stop);
+  mocks.load.mockResolvedValue({ home: "/fixture", readOwnPeer, readOwnIdentity: async () => own });
+  mocks.resolveCli.mockReturnValue({ command: "fixture-cli" }); mocks.cli.mockReturnValue({ run, runLocal });
+  const server = {} as PluginServerContext;
+  expect(contributeCrossDaemon(server)).toBe(stop); expect(mocks.load).not.toHaveBeenCalled();
+  const deps: CrossDaemonDependencies = mocks.register.mock.calls[0][1];
+  expect(await (deps.stateDir as () => Promise<string>)()).toBe("/fixture/plugin-data/hosts-cross-daemon");
+  expect(await deps.readOwnPeer(false)).toBeNull(); expect(readOwnPeer).toHaveBeenCalledWith(false);
+  expect(await deps.ownDaemon()).toBe(own);
+  const options = { promptText: "synthetic prompt" };
+  expect(await deps.cli.run("synthetic-link", ["inspect", "fixture"], options)).toBe("remote");
+  expect(await deps.cli.runLocal(["inspect", "fixture"], options)).toBe("local");
+  expect(run).toHaveBeenCalledWith("synthetic-link", ["inspect", "fixture"], options);
+  expect(runLocal).toHaveBeenCalledWith(["inspect", "fixture"], options);
+  expect(mocks.resolveCli).toHaveBeenCalledWith("/fixture"); expect(mocks.load).toHaveBeenCalledOnce();
+});
+it("shares adapter failure without invoking CLI factories or inventing fallback commands", async () => {
+  mocks.load.mockRejectedValue(new Error("unsupported daemon")); contributeCrossDaemon({} as PluginServerContext);
+  const deps: CrossDaemonDependencies = mocks.register.mock.calls[0][1];
+  await expect(deps.ownDaemon()).rejects.toThrow("unsupported daemon");
+  await expect(deps.cli.runLocal(["inspect", "fixture"])).rejects.toThrow("unsupported daemon");
+  expect(mocks.load).toHaveBeenCalledOnce(); expect(mocks.cli).not.toHaveBeenCalled();
+});

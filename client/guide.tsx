@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Text, View, type LayoutChangeEvent } from "react-native";
+import { Linking, Text, View, type LayoutChangeEvent } from "react-native";
 import type { PluginTheme } from "@getpaseo/plugin";
 import type { Fold, TabId } from "../shared/tabs";
 import { Accordion, AccordionItem, Button, Divider, HostIcon, IconBadge, Link, Meta, RADIUS, Row, SectionTitle, SPACE, TYPE, tint, toneColor } from "./kit";
@@ -145,7 +145,7 @@ export function Checks({ theme, checks }: { theme: Theme; checks: readonly Setup
 const WORDS = [
   { icon: "Server", term: "Host", text: "A computer or container running a Paseo daemon. Pick which one you're looking at with Paseo's host picker." },
   { icon: "HardDrive", term: "Memory limit", text: "A container can only use so much memory before its processes are stopped by the system. Hosts measures against that limit, not the whole machine." },
-  { icon: "Hammer", term: "Heavy job", text: "A build, test run, type check, install or dev server. Several at once compete for the same CPU; your limit is in Settings." },
+  { icon: "Hammer", term: "Heavy job", text: "A build, test run, type check, install or dev server. Several at once compete for the same CPU. Change the warning threshold in Processes → Threshold settings or Settings → Hosts. Counts above it are flagged; this warning never stops jobs." },
   { icon: "Flame", term: "Runaway", text: "A process stuck at a full CPU core for minutes, or holding a large share of memory." },
   { icon: "Globe", term: "Browser link", text: "A temporary public web address for one dev server. It works on any device and always expires." },
   { icon: "Laptop", term: "Private forward", text: "Makes a remote dev server answer at 127.0.0.1 on your own computer, over SSH or a paired host. Nothing is published." },
@@ -349,6 +349,11 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
 export function HelpTab({ theme, compact, go, minutes, shortcuts }: { theme: Theme; compact: boolean; go: Go; minutes: string; shortcuts: boolean }) {
   return (
     <Accordion theme={theme}>
+      <AccordionItem theme={theme} compact={compact} icon="LifeBuoy" title="How do I work with my laptop closed?" summary="Watch a remote browser, connect hosts, or recover an offline target">
+        <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>Select an always-on remote host in Paseo. Processes → Browsers observes its existing Agent Browser sessions inside Paseo; the browser keeps running on the selected host. Hosts does not install or start a browser. A sleeping laptop cannot keep its own local host running.</Text>
+        <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>Cross-daemon under Workspaces shares full daemon authority only after explicit confirmation; it is separate from private app and file grants. For an offline target, select an online helper and open Recover another host. Saved SSH connections never run automatically.</Text>
+        <Row><Button theme={theme} label="Recover another host" onPress={() => go("workspaces", "recovery")} /><Link theme={theme} label="Headless setup guide" onPress={() => { void Linking.openURL("https://github.com/itsjustanks/paseo-plugin-daemon/blob/main/docs/headless-setup.md").catch(() => undefined); }} /></Row>
+      </AccordionItem>
       <AccordionItem theme={theme} compact={compact} icon="BookOpen" title="How does Hosts work?" summary="What it watches, what it does about it, and the words it uses">
         <WhatIs theme={theme} />
         <Divider theme={theme} />

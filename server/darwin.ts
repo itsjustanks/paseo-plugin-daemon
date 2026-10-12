@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { cpus, loadavg, totalmem, uptime } from "node:os";
 import { promisify } from "node:util";
+import { provenLoopbackEndpoints, type TcpListener } from "./tcp-endpoints";
 import { hashArgv } from "./redaction";
 import {
   beforeDeadline,
@@ -205,6 +206,29 @@ export function parseLsofListen(text: string): Map<number, number[]> {
   return ports;
 }
 
+/** Fresh endpoint parser. Numeric literal names establish family even on older lsof. */
+export function parseLsofEndpoints(text: string): TcpListener[] {
+  const rows: TcpListener[] = []; let pid: number | null = null; let family: 4 | 6 | null = null;
+  for (const line of text.split("\n")) {
+    if (line.startsWith("p")) { pid = Number(line.slice(1)); family = null; }
+    else if (line.startsWith("f")) family = null;
+    else if (line === "tIPv4") family = 4;
+    else if (line === "tIPv6") family = 6;
+    else if (line.startsWith("n") && pid !== null && Number.isInteger(pid) && pid > 0) {
+      const match = /^(?:\[([^\]]+)\]|([^:]+)):(\d+)$/.exec(line.slice(1));
+      if (!match) throw new Error("Unrecognized TCP listener address.");
+      const address = match[1] ?? match[2]!; const port = Number(match[3]);
+      if (port < 1 || port > 65535) throw new Error("Invalid TCP listener port.");
+      const literalFamily = address.includes(":") ? 6 : /^\d+\.\d+\.\d+\.\d+$/.test(address) ? 4 : null;
+      // lsof may print an IPv4 name for a mapped IPv6 socket. Its exact bound
+      // address is unknown here: reject it on this port, without hiding unrelated sockets.
+      const verifiedFamily = family && literalFamily && family !== literalFamily ? null : family ?? literalFamily;
+      rows.push({ owner: pid, address, family: verifiedFamily, port });
+    }
+  }
+  return rows;
+}
+
 /** `lsof -a -p <pid> -d cwd -F n` → the `n` line. */
 export function parseLsofCwd(text: string): string | null {
   for (const line of text.split("\n")) if (line.startsWith("n")) return line.slice(1) || null;
@@ -365,6 +389,12 @@ export class DarwinAdapter implements PlatformAdapter {
     }
     this.portCache = { at: now, result };
     return result;
+  }
+
+  async freshListeningEndpoints(pid: number) {
+    // Intentionally separate from listeningPorts: never read/write its five-second cache.
+    const rows = parseLsofEndpoints(await this.exec("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-F", "pftn"]));
+    return provenLoopbackEndpoints(rows, pid);
   }
 
   /**

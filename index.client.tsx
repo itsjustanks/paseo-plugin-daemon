@@ -1,3 +1,6 @@
+import { contributeCrossDaemonClient } from "./client/cross-daemon/register";
+import { workspaceBrowserOpener } from "./client/browser-navigation";
+import { BrowserWorkspacePanel } from "./client/browser-sessions";
 import type { PluginClientContext, PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { hostHealth } from "./shared/health";
 import { diskReport } from "./shared/disk";
@@ -13,8 +16,12 @@ import { WorkspacePanel } from "./client/workspace-panel";
 const MAIN_SCREEN = "daemon-link";
 
 export default function contribute(client: PluginClientContext) {
+  const stopCrossDaemonSync = contributeCrossDaemonClient(client);
+  const onWatchBrowser = workspaceBrowserOpener(client);
   const shortcuts = typeof client.addSlashCommand === "function";
-  const Surface = (props: PluginSurfaceProps & { params?: Record<string, string> }) => <DaemonSurface {...props} shortcuts={shortcuts} />;
+  client.addWorkspacePanel({ id: "hosts-browser", title: "Agent browsers", icon: "Globe", context: "workspace", locations: ["workspace", "explorer"], Component: BrowserWorkspacePanel });
+  client.addCommandCenterItem({ id: "open-hosts-browser", title: "Watch agent browsers", icon: "Globe", context: "workspace", keywords: ["browser", "agent-browser", "remote", "live", "hosts"], onSelect({ openPanel }) { openPanel("hosts-browser"); } });
+  const Surface = (props: PluginSurfaceProps & { params?: Record<string, string> }) => <DaemonSurface {...props} shortcuts={shortcuts} onWatchBrowser={onWatchBrowser} />;
   // A screen and the app's own sidebar row on Paseo 0.11 apps; the surface and sidebar item before.
   // On 0.11 the row also carries a status dot; pressing it opens a quick health check.
   registerMainScreen(client, { id: MAIN_SCREEN, title: "Hosts", screenTitle: (params) => tabTitle(resolveTab(params.tab, params.open).tab), icon: "Network", Component: Surface, Trailing: makeStatusTrailing(makeQuickHealth(MAIN_SCREEN)) });
@@ -22,7 +29,7 @@ export default function contribute(client: PluginClientContext) {
     id: "daemon-link", title: "Hosts", icon: "Network", context: "workspace",
     // `locations` defaults to ["workspace"] alone; without "explorer" the tab never shows in Projects.
     locations: ["workspace", "explorer"],
-    Component: WorkspacePanel,
+    Component: (props) => <WorkspacePanel {...props} onWatchBrowser={onWatchBrowser} />,
   });
   client.addSettingsScreen({ id: "hosts", title: "Hosts", icon: "Network", Component: HostsSettings });
   client.addCommandCenterItem({
@@ -35,6 +42,7 @@ export default function contribute(client: PluginClientContext) {
     keywords: ["hosts", "sync", "daemon link", "daemon-link", "monitor", "ports", "dev server", "tunnel", "ssh"],
     onSelect(command) { openMainScreen(command, MAIN_SCREEN); },
   });
+  client.addCommandCenterItem({ id: "recover-host", title: "Recover another host", icon: "LifeBuoy", context: "global", keywords: ["hosts", "recovery", "offline", "ssh", "restart"], onSelect(command) { openMainScreen(command, MAIN_SCREEN, { tab: "workspaces", open: "recovery" }); } });
   client.addCommandCenterItem({
     id: "open-heavy-processes", title: "Show heavy processes", icon: "Cpu", context: "global",
     keywords: ["processes", "cpu", "memory", "runaway", "kill", "stop", "slow", "build", "limit", "container", "hosts"],
@@ -104,7 +112,7 @@ export default function contribute(client: PluginClientContext) {
   // A chip only when a chat needs attention (0.11.0). Host health at a glance is the sidebar row's dot and
   // popover; no sidebar footer item, since on every app that has one the row already shows the same thing.
   const removePills = registerHealthPills(client);
-  return () => { removePills(); void removeAttachments(); };
+  return () => { stopCrossDaemonSync(); removePills(); void removeAttachments(); };
 }
 
 /** Asks the daemon for a fresh health check; the screen, panel and sidebar dot then read it. A failure just opens the page as it is. */

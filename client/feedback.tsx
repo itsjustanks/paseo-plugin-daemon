@@ -207,12 +207,12 @@ export function Confirm({ theme, open, title, text, confirmLabel, danger, busy, 
 }) {
   const confirmOnce = useOnce(open, onConfirm);
   const words = redactSecrets(text);
-  const buttons = (
+  const buttons = open ? (
     <Row>
-      <Button theme={theme} label="Cancel" onPress={onCancel} disabled={busy} accessibilityLabel={`Cancel: ${title}`} />
+      <CancelButton theme={theme} label="Cancel" onPress={onCancel} disabled={busy} accessibilityLabel={`Cancel: ${title}`} />
       <Button theme={theme} label={confirmLabel} primary={!danger} danger={danger} busy={busy} onPress={confirmOnce} />
     </Row>
-  );
+  ) : null;
   const HostModal = hostModal();
   if (!HostModal || inPlace) {
     if (!open) return null;
@@ -282,7 +282,8 @@ export function DestructiveButton({ theme, label, onPress, disabled, busy, acces
 /** Cancel: the default button of a warning dialog, focused as it opens (on the web, Enter then cancels). */
 export function CancelButton({ theme, label = "Cancel", onPress, disabled, accessibilityLabel }: { theme: PluginTheme; label?: string; onPress(): void; disabled?: boolean; accessibilityLabel?: string }) {
   const ref = useRef<{ focus?: () => void } | null>(null);
-  useEffect(() => { ref.current?.focus?.(); }, []);
+  const inactive = !!disabled;
+  useEffect(() => { if (!inactive) ref.current?.focus?.(); }, [inactive]);
   return (
     <Pressable ref={ref as never} accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? label} accessibilityState={{ disabled: !!disabled }} disabled={disabled} onPress={onPress}
       style={{ backgroundColor: theme.colors.surface2, borderColor: theme.colors.accent, borderWidth: 2, borderRadius: RADIUS.control, paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, minHeight: 44, alignItems: "center", justifyContent: "center" }}>

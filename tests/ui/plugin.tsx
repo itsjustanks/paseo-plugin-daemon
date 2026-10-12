@@ -1,3 +1,4 @@
+import { headlessFixture, fixtureHosts } from "./headless-fixtures";
 import React, { useCallback, useEffect, useState } from "react";
 import { Pressable, Switch, Text, TextInput, View } from "react-native";
 export function defineRpc<T>(contract: T) { return contract; }
@@ -43,7 +44,7 @@ let tunnels: FixtureTunnel[] = [];
 let installed = !empty;
 let tunnelSequence = 0;
 let settings: any = { closeTunnelsOnArchive: true, panelScope: "workspace", snapshotIntervalSeconds: 30, backgroundHealthChecks: true, showComposerPill: true, tunnelMinutes: Number(params.get("minutes") || 120), maxHeavyJobs: 4, autoStopRunaways: false, housekeeping: { ...HOUSEKEEPING_DEFAULTS, enabled: !params.has("hkoff"), dryRun: !params.has("hklive") },
-  watchedServices: busy ? [{ id: "omniroute-ai-router", name: "OmniRoute (AI Router)", url: "http://10.0.0.9:20128/api/health/ping", expectedStatus: null }, { id: "status-page", name: "Status page", url: "https://status.example.com/health", expectedStatus: 200 }] : [] };
+  watchedServices: busy ? [{ id: "omniroute-ai-router", name: "OmniRoute (AI Router)", url: "http://router.example.test/health", expectedStatus: null }, { id: "status-page", name: "Status page", url: "https://status.example.com/health", expectedStatus: 200 }] : [] };
 const GB = 1024 ** 3, MB = 1024 ** 2;
 /** Fixture processes for the Processes tab: a fleet container (or a Mac with ?mac); ?busy adds a runaway and a crowd of jobs. */
 const owner = (kind: string, label: string, project: string | null = null, workspace: string | null = null) => ({ kind, label, project, workspace });
@@ -74,7 +75,7 @@ function report(input: any) {
   const container = mac ? null : { memoryLimitBytes: limitBytes, memoryUsedBytes: used, memoryPercent: Math.round((used / limitBytes) * 1000) / 10, cpuLimitCores: null, cpuCoresUsed: busy ? 5.4 : 1.2, cpuPercent: busy ? 67 : 15, psiMemorySome10: 0, psiCpuSome10: 0, oomKills: 0, pressure: busy ? "critical" : "normal", reasons: busy ? ["using 94% of this container's 7.3 GB memory limit"] : [] };
   const runaways = busy ? [
     { code: "memory-near-limit", severity: "critical", title: "This container's memory is nearly full: 6.9 GB of its 7.3 GB limit.", pids: [], cwd: null },
-    { code: "too-many-jobs", severity: "warning", title: "5 heavy jobs are running at once; your limit is 4. Builds, tests and dev servers compete for the same CPU.", pids: [4402, 4310, 4520, 4600, 4700], cwd: null },
+    { code: "too-many-jobs", severity: "warning", title: "5 heavy jobs are running, above your warning threshold of 4. Builds, tests and dev servers compete for the same CPU. This warning never stops jobs.", pids: [4402, 4310, 4520, 4600, 4700], cwd: null },
     { code: "cpu-runaway", severity: "warning", title: "tsc (PID 4402) has used a full CPU core for 4 min.", pids: [4402], cwd: "~/projects/website" },
   ] : [];
   return {
@@ -87,20 +88,21 @@ function report(input: any) {
   };
 }
 const watched = () => busy ? [
-  { id: "omniroute-ai-router", name: "OmniRoute (AI Router)", target: "10.0.0.9:20128/api/health/ping", state: "slow", latencyMs: 4200, usualMs: 110, status: 200, checkedAt: Date.now(), message: "OmniRoute (AI Router) is slow: 4.2 s, usually 110 ms.", history: [110, 95, 120, 105, 130, 2900, 4200].map((latencyMs, i) => ({ at: i, state: latencyMs > 2000 ? "slow" : "up", latencyMs })) },
+  { id: "omniroute-ai-router", name: "OmniRoute (AI Router)", target: "router.example.test/health", state: "slow", latencyMs: 4200, usualMs: 110, status: 200, checkedAt: Date.now(), message: "OmniRoute (AI Router) is slow: 4.2 s, usually 110 ms.", history: [110, 95, 120, 105, 130, 2900, 4200].map((latencyMs, i) => ({ at: i, state: latencyMs > 2000 ? "slow" : "up", latencyMs })) },
   { id: "status-page", name: "Status page", target: "status.example.com/health", state: "up", latencyMs: 180, usualMs: 170, status: 200, checkedAt: Date.now(), message: "Status page answered in 180 ms.", history: [160, 170, 180, 175, 180].map((latencyMs, i) => ({ at: i, state: "up", latencyMs })) },
 ] : [];
 let revision = 1;
 const stub = async (name: string, input: any) => {
+  (window as any).__fixtureCalls.push({ name, input });
+  const headless = await headlessFixture(name, input); if (headless !== undefined) return headless;
   if (name === "daemon-link.housekeeping.status") {
     const state = mac ? "unsupported" : params.has("hkpassive") ? "passive" : params.has("hkblocked") ? "blocked" : !settings.housekeeping.enabled ? "off" : settings.housekeeping.dryRun ? "preview" : "live";
     return { state, enabled: settings.housekeeping.enabled, dryRun: settings.housekeeping.dryRun, message: state === "unsupported" ? "Housekeeping works on Linux hosts. This daemon runs on macOS, so it does nothing here." : state === "passive" ? "Standalone housekeeper active: Hosts stays passive." : state === "blocked" ? "The process table couldn't be read completely, so nothing was closed." : state === "off" ? "Housekeeping is off." : state === "preview" ? "Preview: logs what it would tidy. Nothing on this host is changed until you confirm live mode." : "Tidying this host. Running, open idle and unknown chats stay protected.", lastRuns: Object.fromEntries(["renice", "reap", "turbo", "helpers"].map((job) => [job, empty ? null : { at: Date.now() - 60000, outcome: settings.housekeeping.dryRun ? "preview" : "done", summary: job === "reap" ? "Kept an open idle chat's browser." : "Checked; see recent results." }])), actions: empty || mac ? [] : [{ at: Date.now() - 60000, job: "reap", outcome: "kept", what: "agent-browser daemon (PID 5001)", why: "Its chat is idle, so it was left alone" }, { at: Date.now() - 60000, job: "renice", outcome: "preview", what: "3 builds and tests", why: "Would lower main-process priority to nice 10" }], machine: mac ? null : { freeBytes: 6 * GB, totalBytes: 8 * GB, basis: "container", load1: 2.45, cores: 8 }, checkedAt: Date.now() };
   }
-  (window as any).__fixtureCalls.push({ name, input });
   if (name === "daemon-link.disk.report") return DiskReportSchema.parse({
     disks: [{ label: "This computer's disk", totalBytes: 100 * GB, usedBytes: 65 * GB, freeBytes: 35 * GB, percent: 65, level: "ok", sentence: null }], scan: { state: empty ? "never" : "done", startedAt: null, finishedAt: empty ? null : Date.now() - 60000, done: empty ? 0 : 3, total: 3, partial: false, message: null },
     workspaces: empty ? [] : [
-      workspaceUsage({ id: "website", names: ["main"], folder: "~/projects/website", path: "/home/fixture/projects/website", totalBytes: 8 * GB, clearableBytes: 0, state: "working", busy: "A chat and dev server are running here.", items: [clearItem({ name: "node_modules", where: "~/projects/website/node_modules", bytes: 3 * GB, blocked: "Workspace is in use" })] }),
+      workspaceUsage({ id: "website", workspaceIds: ["ws-fixture"], names: ["main"], folder: "~/projects/website", path: "/home/fixture/projects/website", totalBytes: 8 * GB, clearableBytes: 0, state: "working", busy: "A chat and dev server are running here.", items: [clearItem({ name: "node_modules", where: "~/projects/website/node_modules", bytes: 3 * GB, blocked: "Workspace is in use" })] }),
       workspaceUsage({ id: "api", names: ["fix-auth"], project: "API service", folder: "~/projects/api", path: "/home/fixture/projects/api", totalBytes: 3 * GB, clearableBytes: 0, state: "working", branch: "fix-auth", busy: "A dev server is running here.", items: [] }),
       workspaceUsage({ id: "docs", names: ["docs"], project: "Documentation", folder: "~/projects/docs", path: "/home/fixture/projects/docs", totalBytes: 2 * GB, clearableBytes: GB, items: [clearItem({ name: "node_modules", what: "Installed packages", where: "~/projects/docs/node_modules", bytes: GB, safe: true, token: "fixture-delete-docs" })] }),
     ], caches: empty ? [] : [
@@ -175,7 +177,7 @@ const stub = async (name: string, input: any) => {
     return { escalateAfterSeconds: 10, results: targets.map((row) => ({ pid: row.pid, name: row.name, ok: true, status: "signaled", signaled: 1, message: `Asked ${row.name} to stop. Anything still running in 10 seconds is stopped forcefully.` })) };
   }
   if (name === "daemon-link.processes.log") return { entries: actions };
-  if (name === "daemon-link.watch.suggestions") return { suggestions: settings.watchedServices.length || mac ? [] : [{ name: "OmniRoute (AI Router)", url: "http://10.0.0.9:20128/api/health/ping", source: "ai-router", why: "The AI Router plugin on this daemon sends every request through it." }] };
+  if (name === "daemon-link.watch.suggestions") return { suggestions: settings.watchedServices.length || mac ? [] : [{ name: "OmniRoute (AI Router)", url: "http://router.example.test/health", source: "ai-router", why: "The AI Router plugin on this daemon sends every request through it." }] };
   if (name === "settings.hosts.read") return { status: "ready", revision: String(revision), values: settings };
   if (name === "settings.hosts.write") { settings = input.values; revision++; return { status: "saved", revision: String(revision), values: settings }; }
   if (name === "daemon-link.peers.status") return { relayState: "off", grants: [], peers: empty ? [] : [peer], forwards };
@@ -215,6 +217,7 @@ const paseo = params.has("noagents") ? null : {
   workspaces: { ref: (id: string) => ({ agents: { create: async (input: unknown) => { sent.push({ workspace: id, input }); return { id: "new" }; } } }) },
   terminals: { create: async () => ({ id: "term-1" }) },
 };
+export function useHosts() { return fixtureHosts; }
 export function usePaseo() { return paseo; }
 export function useRpc(contract: { name: string }) { return useCallback((input: unknown) => stub(contract.name, input), [contract.name]); }
 const toasts: string[] = [];

@@ -281,7 +281,7 @@ export class ProcessManager {
     }
     if (base.cpu.pressure === "critical") out.push({ code: "cpu-busy", severity: "warning", title: `The CPU is almost fully busy (${base.cpu.reasons[0] ?? "high load"}).`, pids: [], cwd: null });
     if (roots.length > limit) {
-      out.push({ code: "too-many-jobs", severity: "warning", title: `${roots.length} heavy jobs are running at once; your limit is ${limit}. Builds, tests and dev servers compete for the same CPU.`, pids: roots.map((row) => row.pid), cwd: null });
+      out.push({ code: "too-many-jobs", severity: "warning", title: `${roots.length} heavy jobs are running, above your warning threshold of ${limit}. Builds, tests and dev servers compete for the same CPU. This warning never stops jobs.`, pids: roots.map((row) => row.pid), cwd: null });
     }
     for (const row of rows) {
       const hot = row.flags.find((flag) => flag.code === "cpu-runaway");

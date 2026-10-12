@@ -89,6 +89,9 @@ export interface PortScanResult {
   warnings: string[];
 }
 
+/** A literal address whose listening socket is freshly proved to belong to a PID. */
+export interface TcpEndpoint { address: "127.0.0.1" | "::1"; family: 4 | 6; port: number }
+
 export interface PlatformAdapter {
   readonly platform: "linux" | "darwin";
   sampleSystem(): Promise<RawSystemSample>;
@@ -96,6 +99,8 @@ export interface PlatformAdapter {
   sampleProcesses(uid: number): Promise<{ processes: RawProcess[]; warnings: string[] }>;
   /** Listening TCP ports for the given same-user PIDs. */
   listeningPorts(pids: readonly number[]): Promise<PortScanResult>;
+  /** Uncached exact loopback socket ownership. Rejects incomplete/unknown OS evidence. */
+  freshListeningEndpoints(pid: number): Promise<TcpEndpoint[]>;
   /**
    * Fresh identity for one PID. Resolves null only when the process
    * demonstrably no longer exists; rejects when the read itself failed, so
