@@ -192,7 +192,7 @@ describe("readable host navigation", () => {
     const { renderer } = await mount(<TabBar theme={theme} compact tabs={TAB_IDS} active="processes" onSelect={select} />);
     const scroller = renderer.root.findByType("ScrollView" as never);
     expect(scroller.props.horizontal).toBe(true);
-    for (const label of ["Overview", "Processes", "Workspaces", "Help"]) expect(text(renderer.toJSON())).toContain(label);
+    for (const label of ["Overview", "Processes", "Workspaces", "Connections", "Help"]) expect(text(renderer.toJSON())).toContain(label);
     await press(renderer, "Help");
     expect(select).toHaveBeenCalledWith("help");
   });
@@ -202,7 +202,7 @@ describe("readable host navigation", () => {
     const bar = renderer.root.findAll((node) => (node.type as unknown) === "View" && node.props.accessibilityLabel === "Hosts navigation")[0]!;
     await act(async () => bar.props.onLayout({ nativeEvent: { layout: { width: 390 } } }));
     expect(renderer.root.findByType("ScrollView" as never).props.horizontal).toBe(true);
-    for (const label of ["Overview", "Processes", "Workspaces", "Help"]) expect(text(renderer.toJSON())).toContain(label);
+    for (const label of ["Overview", "Processes", "Workspaces", "Connections", "Help"]) expect(text(renderer.toJSON())).toContain(label);
   });
 });
 

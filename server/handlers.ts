@@ -6,7 +6,9 @@ import type { ActionResult, Snapshot, SnapshotInput } from "../shared/contracts"
 import { Collector, unsupportedSnapshot } from "./collector";
 import type { Clock, PlatformAdapter } from "./platform";
 import { systemClock } from "./platform";
-import { ProcessGuard, type KillFn } from "./safety";
+import type { KillFn } from "./safety";
+import { ProcessManager, type ProcessManagerOptions } from "./processes";
+import { ActionLog } from "./action-log";
 
 /**
  * RPC entry points. Handlers are the only callers of the guard, and they
@@ -18,7 +20,7 @@ export interface MonitorHandlers {
   stop(input: { token: string }): Promise<ActionResult>;
   forceStop(input: { token: string }): Promise<ActionResult>;
   /** What the process report shares with the monitor (one collector, one CPU history); null on unsupported platforms. */
-  internals: { adapter: PlatformAdapter; collector: Collector; uid: number; selfPid: number; parentPid: number; clock: Clock } | null;
+  internals: { adapter: PlatformAdapter; collector: Collector; uid: number; selfPid: number; parentPid: number; clock: Clock; manager: ProcessManager } | null;
 }
 
 export interface MonitorRuntimeOptions {
@@ -30,8 +32,10 @@ export interface MonitorRuntimeOptions {
   selfPid?: number;
   parentPid?: number;
   clock?: Clock;
-  guard?: ProcessGuard;
-  collector?: Collector;
+  log?: ActionLog;
+  readSettings?: ProcessManagerOptions["readSettings"];
+  growth?: ProcessManagerOptions["growth"];
+  memoryLevel?: ProcessManagerOptions["memoryLevel"];
 }
 
 function currentUid(): number {
@@ -53,23 +57,24 @@ export function createMonitorHandlers(options: MonitorRuntimeOptions = {}): Moni
   const uid = options.uid ?? currentUid();
   const selfPid = options.selfPid ?? process.pid;
   const parentPid = options.parentPid ?? process.ppid;
-  const guard =
-    options.guard ??
-    new ProcessGuard({ adapter, uid, selfPid, kill: options.kill, alwaysProtected: parentPid > 1 ? [parentPid] : [], clock,
-      authorizeProcess: options.scope ? async (pid, descendant) => {
-        await options.scope!.refresh(true);
-        const sample = await adapter.sampleProcesses(uid);
-        const raw = sample.processes.find((p) => p.pid === pid);
-        if (!raw) return false;
-        const ports = await adapter.listeningPorts([pid]);
-        const project = options.scope!.match(raw, ports.ports.get(pid) || []);
-        return !!project && (descendant ? project.kind !== "agent" : project.canStop);
-      } : undefined,
-    });
-  const collector = options.collector ?? new Collector({ adapter, policy: guard, uid, home: options.home ?? homedir(), clock, scope: options.scope });
+  // One policy and signing key for Monitor, Processes, and their confirmation preview.
+  // The collector invokes this policy only after construction has completed.
+  const collector: Collector = new Collector({ adapter, uid, home: options.home ?? homedir(), clock, scope: options.scope,
+    policy: {
+      evaluate: (raw, byPid) => {
+        const decision = manager.decide({ raw }, byPid, []);
+        return { actionable: decision.stoppable, reason: decision.reason };
+      },
+      mint: (raw, argvHash, at) => manager.guard.mint(raw, argvHash, at),
+    },
+  });
+  const manager: ProcessManager = new ProcessManager({ adapter, collector, uid, selfPid, daemonPid: parentPid, clock,
+    scope: options.scope, kill: options.kill, log: options.log ?? new ActionLog(),
+    readSettings: options.readSettings, growth: options.growth, memoryLevel: options.memoryLevel,
+  });
 
   return {
-    internals: uid < 0 ? null : { adapter, collector, uid, selfPid, parentPid, clock },
+    internals: uid < 0 ? null : { adapter, collector, uid, selfPid, parentPid, clock, manager },
     async snapshot(input, context) {
       if (context) options.scope?.bind(context.paseo);
       if (options.scope) {
@@ -87,11 +92,11 @@ export function createMonitorHandlers(options: MonitorRuntimeOptions = {}): Moni
     },
     async stop(input) {
       if (uid < 0) return { ok: false, status: "denied", message: "Monitor cannot determine the current user.", pid: null, signaledCount: 0 };
-      return guard.stop(input.token);
+      return manager.guard.stop(input.token);
     },
     async forceStop(input) {
       if (uid < 0) return { ok: false, status: "denied", message: "Monitor cannot determine the current user.", pid: null, signaledCount: 0 };
-      return guard.forceStop(input.token);
+      return manager.guard.forceStop(input.token);
     },
   };
 }

@@ -1,12 +1,18 @@
+import type { PluginTheme } from "@getpaseo/plugin";
+import { useRpc } from "@getpaseo/plugin/client";
+import { processPreview, OUTSIDE_PASEO_WARNING, type StopPlan } from "../shared/processes";
+import { processStateWords } from "../shared/service-inventory";
+import { StopSheet } from "./processes";
+import { CancelButton, DestructiveButton } from "./feedback";
 import { errorText, useCopy, useOnce, useSafeToast, Sheet } from "./feedback";
 import { friendlyPath, pathWidth, truncateMiddle } from "../shared/paths";
 import { redactSecrets } from "../shared/redaction";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useMutation } from "@tanstack/react-query";
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, Text, View } from "react-native";
 import { processKey, useMonitorRpc, type Impact, type Process, type Snapshot } from "./rpc";
-import { Button, Card, ConfirmButton, Facts, StatusPill, Tag, alpha, formatBytes, formatDuration, formatPercent, toneColor, useTokens, type Tone } from "./ui";
+import { Button, Card, Facts, StatusPill, Tag, alpha, formatBytes, formatDuration, formatPercent, toneColor, useTokens, type Tone } from "./ui";
 
 /**
  * The dev-server card and the process row with its stop controls, shared by
@@ -110,7 +116,8 @@ export { errorText };
  * Stop / force-stop mutations plus the row action bag. Shared by the host
  * surface and the workspace panel so both offer identical controls.
  */
-export function useProcessActions({ rpc, snapshot, pendingStops, refresh }: {
+export function useProcessActions({ theme, rpc, snapshot, pendingStops, refresh }: {
+  theme: PluginTheme;
   rpc: ReturnType<typeof useMonitorRpc>;
   snapshot: Snapshot | undefined;
   pendingStops: ReturnType<typeof usePendingStops>;
@@ -119,6 +126,30 @@ export function useProcessActions({ rpc, snapshot, pendingStops, refresh }: {
   const toast = useSafeToast();
   const { pending, mark, clear } = pendingStops;
   const [forceTarget, setForceTarget] = useState<Process | null>(null);
+  const [forcePlan, setForcePlan] = useState<StopPlan | null>(null);
+  const [review, setReview] = useState<{ process: Process; plan: StopPlan } | null>(null);
+  const preview = useRpc(processPreview);
+  const previewLock = useRef(false);
+  const ask = useMutation({
+    mutationFn: async ({ process, force }: { process: Process; force: boolean }) => {
+      if (!process.actionable || !process.actionToken) throw new Error(process.protectedReason ?? "This process cannot be stopped here.");
+      // Keep the reviewed identity. A later snapshot must never swap in a new token.
+      const frozen = { ...process };
+      const plan = await preview({ tokens: [frozen.actionToken!] });
+      return { process: frozen, plan, force };
+    },
+    onSuccess: ({ process, plan, force }) => {
+      if (force) { setForcePlan(plan); setForceTarget(process); }
+      else setReview({ process, plan });
+    },
+    onError: (error) => toast.error(errorText(error)),
+    onSettled: () => { previewLock.current = false; },
+  });
+  const requestReview = (process: Process, force: boolean) => {
+    if (previewLock.current || review || forceTarget) return;
+    previewLock.current = true;
+    ask.mutate({ process, force });
+  };
 
   const stopMutation = useMutation({
     mutationFn: async (process: Process) => {
@@ -126,6 +157,7 @@ export function useProcessActions({ rpc, snapshot, pendingStops, refresh }: {
       return rpc.stop({ token: process.actionToken });
     },
     onSuccess: (result, process) => {
+      setReview(null);
       if (result.status === "already-exited") {
         toast.show(`${process.name} (PID ${process.pid}) had already exited`, { variant: "success" });
       } else if (result.ok) {
@@ -136,7 +168,7 @@ export function useProcessActions({ rpc, snapshot, pendingStops, refresh }: {
       }
       refresh();
     },
-    onError: (error) => toast.error(errorText(error)),
+    onError: (error) => { setReview(null); toast.error(errorText(error)); },
   });
 
   const forceMutation = useMutation({
@@ -162,20 +194,17 @@ export function useProcessActions({ rpc, snapshot, pendingStops, refresh }: {
     },
   });
 
-  // Keep the modal's target fresh so the token it sends is the latest one.
-  const liveForceTarget = useMemo(() => {
-    if (!forceTarget || !snapshot) return forceTarget;
-    const key = processKey(forceTarget);
-    return [...snapshot.processes.items, ...snapshot.services].find((process) => processKey(process) === key) ?? forceTarget;
-  }, [forceTarget, snapshot]);
-
   const actions: RowActions = {
     pending,
-    onStop: (process: Process) => stopMutation.mutate(process),
-    onForce: (process: Process) => setForceTarget(process),
-    stopping: stopMutation.isPending ? stopMutation.variables : undefined,
+    onStop: (process) => requestReview(process, false),
+    onForce: (process) => requestReview(process, true),
+    stopping: stopMutation.isPending ? stopMutation.variables : ask.isPending ? ask.variables?.process : undefined,
   };
-  return { actions, liveForceTarget, forceMutation, setForceTarget };
+  return {
+    actions, liveForceTarget: forceTarget, forcePlan, forceMutation,
+    setForceTarget: (target: Process | null) => { setForceTarget(target); if (!target) setForcePlan(null); },
+    stopReview: <StopSheet theme={theme} automaticForce={false} plan={review?.plan ?? null} busy={stopMutation.isPending} onCancel={() => setReview(null)} onConfirm={() => { if (review) stopMutation.mutate(review.process); }} />,
+  };
 }
 
 // ---------------------------------------------------------------- overview
@@ -193,19 +222,19 @@ export function ServiceCard({ process, actions, footer }: { process: Process; ac
   const isServer = process.classification.kind === "dev-server";
   return (
     <Card>
-      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: t.space.sm }}>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "flex-start", gap: t.space.sm, minWidth: 0 }}>
         <View style={{ width: 30, height: 30, borderRadius: t.radius.sm, backgroundColor: t.color.surface2, alignItems: "center", justifyContent: "center" }}>
           <Icon name={isServer ? "Server" : "Activity"} size={15} color={t.color.muted} />
         </View>
-        <View style={{ flex: 1, minWidth: 0, gap: t.space.hair }}>
-          <Text style={t.text.bodyStrong} numberOfLines={1}>
+        <View style={{ flex: 1, minWidth: 100, gap: t.space.hair }}>
+          <Text style={t.text.bodyStrong}>
             {process.name}
           </Text>
-          <Text style={t.text.caption} numberOfLines={1}>
+          <Text style={t.text.caption}>
             {process.classification.label}
           </Text>
         </View>
-        <StatusPill tone={stateTone(process.state)} label={process.state} />
+        <StatusPill tone={stateTone(process.state)} label={processStateWords(process.state, process.ports)} />
       </View>
       {process.ports.length > 0 ? (
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
@@ -221,7 +250,8 @@ export function ServiceCard({ process, actions, footer }: { process: Process; ac
           { value: `up ${formatDuration(process.ageSeconds)}` },
         ]}
       />
-      <Text style={t.text.caption}>{process.project?.name}{process.project?.workspace ? ` · ${process.project.workspace}` : ""}</Text>
+      <Text style={t.text.caption}>{process.project ? `${process.project.name}${process.project.workspace ? ` · ${process.project.workspace}` : ""} · folder association` : "No workspace or chat identified"}</Text>
+      <ProcessActions process={process} actions={actions} />
       {footer}
     </Card>
   );
@@ -231,45 +261,47 @@ export function ServiceCard({ process, actions, footer }: { process: Process; ac
 
 export function ProcessRow({ process, first, expanded, onToggle, actions }: { process: Process; first: boolean; expanded: boolean; onToggle: () => void; actions: RowActions }) {
   const t = useTokens();
+  const [rowWidth, setRowWidth] = useState<number | null>(null);
+  const compact = t.compact || (rowWidth !== null && rowWidth < 760);
   const tone = impactTone(process.impact);
   const flagged = process.impact === "pressure-driver" || process.impact === "high";
   const pending = actions.pending[processKey(process)];
   return (
-    <View style={{ borderTopWidth: first ? 0 : 1, borderTopColor: t.color.borderSubtle, borderLeftWidth: flagged ? 2 : 0, borderLeftColor: flagged ? toneColor(t, tone) : "transparent" }}>
+    <View onLayout={(event) => setRowWidth(event.nativeEvent.layout.width)} style={{ minWidth: 0, borderTopWidth: first ? 0 : 1, borderTopColor: t.color.borderSubtle, borderLeftWidth: flagged ? 2 : 0, borderLeftColor: flagged ? toneColor(t, tone) : "transparent" }}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`${process.name}, PID ${process.pid}, CPU ${formatPercent(process.cpuPercent, 1)}, memory ${formatBytes(process.rssBytes)}. ${expanded ? "Collapse" : "Expand"} details`}
         accessibilityState={{ expanded }}
         onPress={onToggle}
         style={({ pressed }) => ({
-          paddingVertical: t.compact ? t.space.md : t.space.sm + 2,
+          paddingVertical: compact ? t.space.md : t.space.sm + 2,
           paddingHorizontal: t.space.md,
           minHeight: t.control.min + 8,
           backgroundColor: pressed ? alpha(t.color.muted, 0.08) : "transparent",
-          flexDirection: t.compact ? "column" : "row",
-          alignItems: t.compact ? "stretch" : "center",
+          flexDirection: compact ? "column" : "row",
+          alignItems: compact ? "stretch" : "center",
           gap: t.space.sm,
         })}
       >
         <View style={{ flex: 1, minWidth: 0, gap: t.space.hair }}>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm, minWidth: 0 }}>
             <Icon name={expanded ? "ChevronDown" : "ChevronRight"} size={14} color={t.color.muted} />
-            <Text style={[t.text.bodyStrong, { flexShrink: 1 }]} numberOfLines={1}>
+            <Text style={[t.text.bodyStrong, { flexShrink: 1 }]}>
               {process.name}
             </Text>
             {pending ? <Tag label={pending.survivedPolls >= FORCE_AFTER_POLLS ? "still running" : "stopping…"} tone={pending.survivedPolls >= FORCE_AFTER_POLLS ? "warning" : undefined} /> : null}
             {process.ports.length > 0 ? <Tag label={process.ports.map((port) => `:${port}`).join(" ")} /> : null}
           </View>
-          <Text style={[t.text.caption, { marginLeft: t.space.card }]} numberOfLines={1}>
+          <Text style={[t.text.caption, { marginLeft: t.space.card }]}>
             {process.project ? `${process.project.name} · ${process.project.kind === "agent" ? "Agent tool" : process.project.kind === "dev-server" ? "Dev server" : "Project tool"}` : process.classification.label}
           </Text>
         </View>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: t.compact ? 10 : 12, marginLeft: t.compact ? 20 : 0, flexShrink: 0, flexWrap: t.compact ? "wrap" : "nowrap" }}>
-          <TableFigure label="PID" value={String(process.pid)} width={65} />
-          <TableFigure label="CPU" value={formatPercent(process.cpuPercent, 1)} width={70} />
-          <TableFigure label="Memory" value={formatBytes(process.rssBytes)} width={85} />
-          {!t.compact && <TableFigure label="Uptime" value={formatDuration(process.ageSeconds)} width={65} />}
-          <View style={{ width: t.compact ? undefined : 132, alignItems: "flex-end" }}><StatusPill tone={tone} label={impactLabel(process.impact)} /></View>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: compact ? 10 : 12, marginLeft: compact ? 20 : 0, flexShrink: 0, flexWrap: compact ? "wrap" : "nowrap" }}>
+          <TableFigure compact={compact} label="PID" value={String(process.pid)} width={65} />
+          <TableFigure compact={compact} label="CPU" value={formatPercent(process.cpuPercent, 1)} width={70} />
+          <TableFigure compact={compact} label="Memory" value={formatBytes(process.rssBytes)} width={85} />
+          {!compact && <TableFigure compact={compact} label="Uptime" value={formatDuration(process.ageSeconds)} width={65} />}
+          <View style={{ width: compact ? undefined : 132, alignItems: "flex-end" }}><StatusPill tone={tone} label={impactLabel(process.impact)} /></View>
         </View>
       </Pressable>
       {expanded ? (
@@ -281,7 +313,7 @@ export function ProcessRow({ process, first, expanded, onToggle, actions }: { pr
             items={[
               { value: `PID ${process.pid}` },
               { value: `parent ${process.ppid}` },
-              { value: `state ${process.state}`, tone: stateTone(process.state) === "warning" ? "warning" : undefined },
+              { value: processStateWords(process.state, process.ports), tone: stateTone(process.state) === "warning" ? "warning" : undefined },
               { value: `${formatPercent(process.memoryPercent, 1)} of memory` },
               { value: `age ${formatDuration(process.ageSeconds)}` },
             ]}
@@ -311,18 +343,18 @@ function ProcessFolder({ process }: { process: Process }) {
   );
 }
 
-function TableFigure({ label, value, width }: { label: string; value: string; width: number }) {
+function TableFigure({ label, value, width, compact }: { label: string; value: string; width: number; compact: boolean }) {
   const t = useTokens();
   return (
-    <View style={{ alignItems: "flex-end", width: t.compact ? undefined : width, minWidth: t.compact ? 44 : undefined }}>
+    <View style={{ alignItems: "flex-end", width: compact ? undefined : width, minWidth: compact ? 44 : undefined }}>
       <Text style={t.text.figure}>{value}</Text>
-      {t.compact && <Text style={t.text.small}>{label}</Text>}
+      {compact && <Text style={t.text.small}>{label}</Text>}
     </View>
   );
 }
 
-/** Stop → inline confirm; after the process outlives the graceful attempt, Force Stop (modal). */
-function ProcessActions({ process, actions }: { process: Process; actions: RowActions }) {
+/** Stop → preview and confirmation; after the process outlives the graceful attempt, Force Stop (modal). */
+export function ProcessActions({ process, actions }: { process: Process; actions: RowActions }) {
   const t = useTokens();
   const target = `${process.name} (PID ${process.pid})`;
   const pending = actions.pending[processKey(process)];
@@ -342,23 +374,20 @@ function ProcessActions({ process, actions }: { process: Process; actions: RowAc
     return (
       <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
         <ActivityIndicator size="small" color={t.color.muted} />
-        <Text style={t.text.caption}>Waiting for {process.name} to exit…</Text>
+        <Text style={[t.text.caption, { flex: 1, minWidth: 0 }]}>Waiting for {process.name} to exit…</Text>
       </View>
     );
   }
-  return (
-    <View style={{ flexDirection: "row", alignItems: "center" }}>
-      <ConfirmButton label="Stop dev server…" confirmLabel="Stop dev server" target={`${process.project?.name || "Project"}: ${target}`} loading={busy} onConfirm={() => actions.onStop(process)}
-        title={`Stop ${process.name}?`}
-        text={`Hosts asks ${process.name} (PID ${process.pid})${process.ports.length ? `, on ${process.ports.map((port) => `:${port}`).join(", ")},` : ""} to stop, and waits for it to exit. If it's still running after that, you can force-stop it. Anything it hasn't saved may be lost; its browser links stop working.`} />
-    </View>
-  );
+  return <View style={{ flexDirection: "row", flexWrap: "wrap", minWidth: 0 }}>
+    <Button label="Stop…" variant="danger" icon="OctagonX" accessibilityLabel={`Stop ${target}…`} loading={busy} onPress={() => actions.onStop(process)} />
+  </View>;
 }
 
 // ------------------------------------------------------------------- modal
 
-export function ForceStopModal({ target, busy, onCancel, onConfirm }: { target: Process | null; busy: boolean; onCancel: () => void; onConfirm: (process: Process) => void }) {
+export function ForceStopModal({ target, plan, theme, busy, onCancel, onConfirm }: { target: Process | null; plan?: StopPlan | null; theme?: PluginTheme; busy: boolean; onCancel: () => void; onConfirm: (process: Process) => void }) {
   const t = useTokens();
+  const forceTheme = theme ?? { colors: { foreground: t.color.fg, foregroundMuted: t.color.muted, surface2: t.color.surface2, accent: t.color.accent, statusDanger: t.color.danger } } as PluginTheme;
   // Single use (0.15.0): two quick presses force-stop once.
   const confirmOnce = useOnce(target !== null, () => { if (target) onConfirm(target); });
   return (
@@ -376,10 +405,14 @@ export function ForceStopModal({ target, busy, onCancel, onConfirm }: { target: 
               <Text style={t.text.caption}>
                 This sends SIGKILL. The process cannot clean up or save anything, and this cannot be undone. Only do this if it ignored the graceful stop.
               </Text>
+              {plan ? <View style={{ gap: t.space.sm }}>
+                {plan.targets.flatMap((item) => [...(item.workspaceWarnings ?? []), ...(item.tagWarnings ?? []), ...(item.outsidePaseo ? [OUTSIDE_PASEO_WARNING] : []), ...(!item.ok && item.reason ? [item.reason] : [])]).map((warning, index) => <Text key={index} style={t.text.body}>{warning}</Text>)}
+                {plan.targets.map((item, index) => item.children.length ? <Text key={index} style={t.text.caption}>{`Children: ${item.children.map((child) => `${child.name} (PID ${child.pid})`).join(", ")}`}</Text> : null)}
+              </View> : null}
               {target.ports.length > 0 ? <Text style={t.text.caption}>Listening on {target.ports.map((port) => `:${port}`).join(", ")}.</Text> : null}
               <View style={{ flexDirection: t.compact ? "column-reverse" : "row", justifyContent: "flex-end", gap: t.space.sm }}>
-                <Button label="Cancel" variant="secondary" accessibilityLabel={`Cancel force stop of ${target.name}`} onPress={onCancel} disabled={busy} />
-                <Button label="Force stop" variant="danger" accessibilityLabel={`Confirm force stop of ${target.name}, PID ${target.pid}`} onPress={confirmOnce} loading={busy} />
+                <CancelButton theme={forceTheme} accessibilityLabel={`Cancel force stop of ${target.name}`} onPress={onCancel} disabled={busy} />
+                <DestructiveButton theme={forceTheme} label="Force stop" accessibilityLabel={`Confirm force stop of ${target.name}, PID ${target.pid}`} onPress={confirmOnce} busy={busy} disabled={!!plan && !plan.targets.some((item) => item.ok)} />
               </View>
             </>
           ) : null}

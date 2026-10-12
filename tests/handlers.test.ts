@@ -10,9 +10,7 @@ describe("handlers", () => {
     const kills: Array<[number, string]> = [];
     adapter.processes = [proc({ pid: 4000, ppid: 1, argv: ["Paseo Daemon"] }), proc({ pid: 4001, ppid: 4000, argv: ["monitor"] }), proc({ pid: 4100, ppid: 1, argv: ["node", "next", "dev"] })];
     adapter.ports.set(4100, [3000]);
-    const { ProcessGuard } = await import("../server/safety");
-    const guard = new ProcessGuard({ adapter, uid: 1000, selfPid: 4001, alwaysProtected: [4000], clock, kill: (pid, signal) => void kills.push([pid, signal]) });
-    const handlers = createMonitorHandlers({ adapter, uid: 1000, home: "/home/alice", selfPid: 4001, parentPid: 4000, clock, guard });
+    const handlers = createMonitorHandlers({ adapter, uid: 1000, home: "/home/alice", selfPid: 4001, parentPid: 4000, clock, kill: (pid, signal) => void kills.push([pid, signal]) });
 
     const snap = await handlers.snapshot(monitorSnapshot.input.parse({}));
     expect(SnapshotSchema.safeParse(snap).success).toBe(true);

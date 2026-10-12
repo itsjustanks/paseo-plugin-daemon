@@ -251,7 +251,7 @@ function RecentStops({ theme, entries }: { theme: Theme; entries: readonly Actio
 }
 
 /** The ask-first sheet: exactly what will be stopped (children too), what won't and why, and what happens next. */
-export function StopSheet({ theme, plan, busy, onCancel, onConfirm }: { theme: Theme; plan: StopPlan | null; busy: boolean; onCancel(): void; onConfirm(): void }) {
+export function StopSheet({ theme, plan, busy, onCancel, onConfirm, automaticForce = true }: { automaticForce?: boolean; theme: Theme; plan: StopPlan | null; busy: boolean; onCancel(): void; onConfirm(): void }) {
   const ready = plan?.targets.filter((target) => target.ok) ?? [];
   const refused = plan?.targets.filter((target) => !target.ok) ?? [];
   const children = ready.reduce((sum, target) => sum + target.children.length, 0);
@@ -278,7 +278,9 @@ export function StopSheet({ theme, plan, busy, onCancel, onConfirm }: { theme: T
             </View>
           ))}
           {ready.length ? (
-            <Note theme={theme}>{`${ready.length + children === 1 ? "It is" : `These ${ready.length + children} processes are`} asked to stop first. Anything still running after ${plan!.graceSeconds} seconds is stopped forcefully, which can lose unsaved work. Every step is logged.`}</Note>
+            <Note theme={theme}>{automaticForce
+              ? `${ready.length + children === 1 ? "It is" : `These ${ready.length + children} processes are`} asked to stop first. Anything still running after ${plan!.graceSeconds} seconds is stopped forcefully, which can lose unsaved work. Every step is logged.`
+              : "Hosts requests a graceful stop and waits for the process to exit. If it remains running, you can review Force stop separately. Unsaved work and browser links may be lost. Every step is logged."}</Note>
           ) : null}
           <View style={{ flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: SPACE.sm }}>
             {/* 0.16.0: like every warning dialog: Cancel is the default, Enter never stops anything. */}

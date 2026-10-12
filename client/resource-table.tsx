@@ -4,7 +4,7 @@ import type { PluginTheme } from "@getpaseo/plugin";
 import { Meta, RADIUS, SPACE, TYPE } from "./kit";
 import type { ResourceSort } from "../shared/resource-table";
 
-export interface ResourceColumn { id: string; label: string; weight?: number; sortable?: boolean; compactInline?: boolean }
+export interface ResourceColumn { id: string; label: string; weight?: number; width?: number; sortable?: boolean; compactInline?: boolean }
 /** Use the table's actual width: Hosts can also live inside a narrow side panel. */
 export function ResourceTable({ compact, children }: { compact: boolean; children(narrow: boolean): React.ReactNode }) {
   const [width, setWidth] = useState<number | null>(null);
@@ -31,7 +31,7 @@ export function ResourceHeader({ theme, columns, compact, sort, onSort }: { them
     {columns.filter((column) => !compact || column.sortable).map((column) => {
       const active = column.id === sort.id;
       const label = `${column.label}${active ? sort.direction === "desc" ? " ↓" : " ↑" : ""}`;
-      const style = compact ? { paddingHorizontal: SPACE.xs } : { flex: column.weight ?? 1, minWidth: 0 };
+      const style = compact ? { paddingHorizontal: SPACE.xs } : column.width ? { width: column.width, minWidth: 0 } : { flex: column.weight ?? 1, minWidth: 0 };
       return column.sortable ? <Pressable key={column.id} accessibilityRole="button" accessibilityLabel={`Sort by ${column.label}${active ? `, ${sort.direction === "desc" ? "descending" : "ascending"}` : ""}`} accessibilityHint="Press to change sort direction" onPress={() => onSort(column.id)} style={style}>
         <Text style={{ ...TYPE.secondary, color: active ? theme.colors.accent : theme.colors.foregroundMuted }}>{label}</Text>
       </Pressable> : <View key={column.id} style={style}><Meta theme={theme}>{label}</Meta></View>;
@@ -40,7 +40,7 @@ export function ResourceHeader({ theme, columns, compact, sort, onSort }: { them
 }
 export function ResourceCells({ theme, columns, compact, cells }: { theme: PluginTheme; columns: readonly ResourceColumn[]; compact: boolean; cells: Record<string, React.ReactNode> }) {
   return <View style={{ flexDirection: "row", flexWrap: compact ? "wrap" : "nowrap", gap: SPACE.sm, minWidth: 0 }}>
-    {columns.map((column) => <View key={column.id} style={{ flexBasis: compact ? column.compactInline ? "30%" : "100%" : 0, flexGrow: compact ? column.compactInline ? 1 : 0 : column.weight ?? 1, flexShrink: compact ? 0 : 1, minWidth: 0, gap: SPACE.xs }}>
+    {columns.map((column) => <View key={column.id} style={{ flexBasis: compact ? column.compactInline ? "30%" : "100%" : column.width ?? 0, flexGrow: compact ? column.compactInline ? 1 : 0 : column.width ? 0 : column.weight ?? 1, flexShrink: compact ? 0 : 1, minWidth: 0, maxWidth: "100%", gap: SPACE.xs }}>
       {compact ? <Meta theme={theme}>{column.label}</Meta> : null}{cells[column.id]}
     </View>)}
   </View>;

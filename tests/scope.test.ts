@@ -122,21 +122,24 @@ describe("Paseo project scope", () => {
     await expect(unbound.refresh()).rejects.toThrow("Open Hosts");
   });
 
-  it("filters before sorting/pagination and keeps agents and unknown tools read-only", async () => {
+  it("lists same-user servers independently of sharing scope and keeps agents protected", async () => {
     const { scope } = setup();
     const adapter = new FakeAdapter();
     adapter.processes = [proc({ pid: 101, argv: ["node", "next", "dev"], rssBytes: 10 }), proc({ pid: 102, argv: ["codex"], rssBytes: 20 }), proc({ pid: 103, argv: ["custom"], rssBytes: 30 }), proc({ pid: 104, cwd: "/elsewhere", rssBytes: 999 }), proc({ pid: 105, argv: ["postgres"], rssBytes: 999 })];
     for (const process of adapter.processes) adapter.ports.set(process.pid, [3000 + process.pid]);
     const handlers = createMonitorHandlers({ scope, adapter, uid: 1000, selfPid: 10000, parentPid: 10001, kill: vi.fn() });
     const page = await handlers.snapshot({ sort: "memory", direction: "desc", limit: 1, offset: 1 });
-    expect(page.totalProcesses).toBe(3); expect(page.hiddenProcesses).toBe(2);
-    expect(page.processes[0]?.pid).toBe(102); expect(page.processes[0]?.actionToken).toBeNull();
-    expect(page.services.map((process) => process.pid)).toEqual([101]);
+    expect(page.totalProcesses).toBe(5); expect(page.hiddenProcesses).toBe(0);
+    expect(page.processes[0]?.pid).toBe(105); expect(page.processes[0]?.actionToken).toBeNull();
+    expect(new Set(page.services.map((process) => process.pid))).toEqual(new Set([101, 102, 103, 104, 105]));
+    const agent = (await handlers.snapshot({ query: "codex" })).processes[0]!;
+    expect(agent.actionToken).toBeNull();
+    expect((await handlers.snapshot({ query: "custom" })).processes[0]?.actionable).toBe(true);
     expect((await handlers.snapshot({ sort: "memory", direction: "asc", limit: 1 })).processes[0]?.pid).toBe(101);
     expect((await handlers.snapshot({ query: "Website" })).processes).toHaveLength(3);
   });
 
-  it("rechecks project membership before stop and force-stop; removed projects cannot use old tokens", async () => {
+  it("removed projects lose sharing but retain reviewed same-user manual Stop", async () => {
     const { scope, api } = setup();
     const adapter = new FakeAdapter(), kill = vi.fn();
     adapter.processes = [proc({ pid: 100, argv: ["node", "next", "dev"] })]; adapter.ports.set(100, [3000]);
@@ -144,9 +147,13 @@ describe("Paseo project scope", () => {
     const token = (await handlers.snapshot({})).processes[0]!.actionToken!;
     expect((await handlers.stop({ token })).ok).toBe(true); expect(kill).toHaveBeenCalledTimes(1);
     api.projects.list.mockResolvedValue({ projects: [] });
-    expect((await handlers.forceStop({ token })).status).toBe("denied");
-    expect((await handlers.stop({ token })).status).toBe("denied");
-    expect(kill).toHaveBeenCalledTimes(1);
+    await scope.refresh(true);
+    expect(scope.match(adapter.processes[0], [3000])).toBeNull();
+    const preview = await handlers.internals!.manager.preview([token]);
+    expect(preview.targets[0]).toMatchObject({ ok: true, outsidePaseo: true });
+    expect((await handlers.forceStop({ token })).status).toBe("signaled");
+    expect((await handlers.stop({ token })).status).toBe("signaled");
+    expect(kill).toHaveBeenCalledTimes(3);
   });
 
   it("rechecks scope for descendants and skips an agent child", async () => {

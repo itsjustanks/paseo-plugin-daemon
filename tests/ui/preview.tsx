@@ -28,7 +28,7 @@ function Preview() {
   const host = { theme: { colors }, host: { id: "preview", label: "Always-on helper" }, layout: { compact, platform: "web" as const } };
   const onWatchBrowser = (workspaceId: string) => { location.href = `/?view=browser&workspace=${encodeURIComponent(workspaceId)}${light ? "&light" : ""}`; };
   return <QueryClientProvider client={queryClient}>
-    <div style={{ background: colors.surface0, minHeight: "100vh", color: colors.foreground }}>
+    <div style={{ width: params.has("nested") ? Math.min(Number(params.get("nested")) || 680, innerWidth) : "100%", maxWidth: "100%", margin: "0 auto", background: colors.surface0, minHeight: "100vh", color: colors.foreground }}>
     {view === "browser" ? <BrowserWorkspacePanel {...host} context="workspace" workspaceId={params.get("workspace") ?? "ws-fixture"} /> : view === "panel" ? <WorkspacePanel {...host} context="workspace" workspaceId="ws-fixture" onWatchBrowser={onWatchBrowser} /> : view === "settings" ? <HostsSettings {...host} /> : view === "popover" ? <div style={{ maxWidth: 380, margin: 24, background: colors.surface1, border: `1px solid ${colors.border}`, borderRadius: 12 }}><QuickHealth theme={host.theme as never} close={() => {}} openScreen={() => {}} /></div> : <DaemonSurface {...host} shortcuts onWatchBrowser={onWatchBrowser} params={{ tab: params.get("tab") ?? "overview", open: params.get("open") ?? "" }} initialTab={(params.get("tab") as never) || undefined} />}
     </div>
   </QueryClientProvider>;

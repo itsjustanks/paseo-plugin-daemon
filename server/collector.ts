@@ -137,7 +137,7 @@ export class Collector {
     const input = SnapshotInputSchema.parse(rawInput);
     const base = await this.collect();
     const query = input.query.trim().toLowerCase();
-    const visible = this.scope ? base.processes.filter((p) => p.project) : base.processes;
+    const visible = base.processes;
     const matched = query ? visible.filter((p) => matches(p, query) || p.project?.name.toLowerCase().includes(query)) : visible;
     const sorted = [...matched].sort(comparator(input.sort));
     const defaultDirection = ["name", "pid"].includes(input.sort) ? "asc" : "desc";
@@ -145,7 +145,7 @@ export class Collector {
     const offset = input.offset || 0;
     const page = sorted.slice(offset, offset + input.limit);
     const services = visible
-      .filter((p) => p.service !== null && (!this.scope || p.project?.shareable))
+      .filter((p) => p.service !== null)
       // 0.15.0: the heaviest dev server first; name and PID break ties so cards don't jump.
       .sort((a, b) => b.rssBytes - a.rssBytes || a.name.localeCompare(b.name) || a.pid - b.pid)
       .slice(0, MAX_SERVICES);
@@ -250,10 +250,7 @@ export class Collector {
       const ports = portScan.ports.get(raw.pid) ?? [];
       const service = detectService(raw.argv, ports);
       const project = this.scope?.match(raw, ports) ?? null;
-      const baseDecision = this.policy.evaluate(raw, byPid);
-      const decision = this.scope && baseDecision.actionable && !project?.canStop
-        ? { actionable: false, reason: project?.kind === "agent" ? "Manage this agent in its Paseo agent tab." : "Only verified project dev servers can be stopped here." }
-        : baseDecision;
+      const decision = this.policy.evaluate(raw, byPid);
       const argvHash = hashArgv(raw.argv);
       const view: ProcessView = {
         ...(this.scope ? { project } : {}),

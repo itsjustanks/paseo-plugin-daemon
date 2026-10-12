@@ -170,7 +170,7 @@ export function Grid({ children, min = 240 }: { children: React.ReactNode; min?:
   return (
     <View style={{ flexDirection: t.compact ? "column" : "row", flexWrap: t.compact ? "nowrap" : "wrap", alignItems: "stretch", gap: t.space.md }}>
       {React.Children.map(children, (child) =>
-        child ? <View style={{ width: t.compact ? "100%" : undefined, flexGrow: 1, flexBasis: t.compact ? undefined : min, minWidth: t.compact ? undefined : min }}>{child}</View> : null,
+        child ? <View style={{ width: t.compact ? "100%" : undefined, flexGrow: 1, flexBasis: t.compact ? undefined : min, minWidth: 0, maxWidth: "100%" }}>{child}</View> : null,
       )}
     </View>
   );
@@ -183,9 +183,9 @@ export function StatusPill({ tone, label }: { tone: Tone; label: string }) {
   const t = useTokens();
   const color = toneColor(t, tone);
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm, flexShrink: 0 }} accessibilityLabel={label}>
-      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} />
-      <Text style={[t.text.small, { color: tone === "neutral" ? t.color.muted : t.color.fg, fontWeight: "600" }]}>{label}</Text>
+    <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm, minWidth: 0, maxWidth: "100%", flexShrink: 1 }} accessibilityLabel={label}>
+      <View style={{ width: 8, height: 8, flexShrink: 0, borderRadius: 4, backgroundColor: color }} />
+      <Text style={[t.text.small, { color: tone === "neutral" ? t.color.muted : t.color.fg, fontWeight: "600", flexShrink: 1 }]}>{label}</Text>
     </View>
   );
 }
@@ -286,6 +286,9 @@ export function Button({
       hitSlop={t.control.hit}
       style={({ pressed }) => ({
         minHeight: t.control.min,
+        minWidth: 0,
+        maxWidth: "100%",
+        flexShrink: 1,
         paddingHorizontal: variant === "ghost" ? t.space.sm : t.space.lg,
         borderRadius: t.radius.sm,
         borderWidth: 1,
@@ -299,7 +302,7 @@ export function Button({
       })}
     >
       {loading ? <ActivityIndicator size="small" color={fg} /> : icon ? <Icon name={icon} size={16} color={fg} /> : null}
-      <Text style={[TYPE.body, { fontWeight: "600", color: fg }]}>{label}</Text>
+      <Text style={[TYPE.body, { fontWeight: "600", color: fg, flexShrink: 1, minWidth: 0 }]}>{label}</Text>
     </Pressable>
   );
 }

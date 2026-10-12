@@ -4,9 +4,9 @@ import { describe, expect, it } from "vitest";
 import { TAB_IDS, resolveTab, tabTitle } from "../shared/tabs";
 
 describe("Hosts tabs (0.11.0)", () => {
-  it("has four tabs at most, in the order people come to do things", () => {
-    expect(TAB_IDS).toEqual(["overview", "processes", "workspaces", "help"]);
-    expect(TAB_IDS.length).toBeLessThanOrEqual(4);
+  it("has five named tabs, in the order people come to do things", () => {
+    expect(TAB_IDS).toEqual(["overview", "processes", "workspaces", "connections", "help"]);
+    expect(TAB_IDS.length).toBe(5);
   });
 
   it("opens the current tabs by id, and Overview for anything unknown or missing", () => {
@@ -19,28 +19,30 @@ describe("Hosts tabs (0.11.0)", () => {
   });
 
   it("sends 0.8–0.10 tab ids where their content lives now", () => {
-    expect(resolveTab("connect")).toEqual({ tab: "workspaces", fold: "private" });
+    expect(resolveTab("connect")).toEqual({ tab: "connections", fold: "private" });
     expect(resolveTab("sync")).toEqual({ tab: "overview", fold: "sync" });
     expect(resolveTab("health")).toEqual({ tab: "processes", fold: null });
-    expect(resolveTab("ssh")).toEqual({ tab: "workspaces", fold: "ssh" });
+    expect(resolveTab("ssh")).toEqual({ tab: "connections", fold: "ssh" });
     expect(resolveTab("guide")).toEqual({ tab: "help", fold: null });
   });
 
   it("names the header after the tab", () => {
     expect(tabTitle("overview")).toBe("Hosts");
     expect(tabTitle("workspaces")).toBe("Hosts · Workspaces");
+    expect(tabTitle("connections")).toBe("Hosts · Connections");
+    expect(resolveTab("cross-daemon")).toEqual({ tab: "connections", fold: null });
     // 0.14.0: old links to Dev servers land on Workspaces.
     expect(resolveTab("servers")).toEqual({ tab: "workspaces", fold: null });
-    expect(resolveTab("servers", "ssh")).toEqual({ tab: "workspaces", fold: "ssh" });
+    expect(resolveTab("servers", "ssh")).toEqual({ tab: "connections", fold: "ssh" });
     expect(resolveTab("disk")).toEqual({ tab: "workspaces", fold: null });
   });
 
   it("honours `open` only on the tab its fold-out lives on", () => {
-    expect(resolveTab("recovery")).toEqual({ tab: "workspaces", fold: "recovery" });
-    expect(resolveTab("workspaces", "recovery")).toEqual({ tab: "workspaces", fold: "recovery" });
+    expect(resolveTab("recovery")).toEqual({ tab: "connections", fold: "recovery" });
+    expect(resolveTab("workspaces", "recovery")).toEqual({ tab: "connections", fold: "recovery" });
     expect(resolveTab("overview", "recovery")).toEqual({ tab: "overview", fold: null });
-    expect(resolveTab("workspaces", "ssh")).toEqual({ tab: "workspaces", fold: "ssh" });
-    expect(resolveTab("connect", "sync")).toEqual({ tab: "workspaces", fold: "private" });
+    expect(resolveTab("workspaces", "ssh")).toEqual({ tab: "connections", fold: "ssh" });
+    expect(resolveTab("connect", "sync")).toEqual({ tab: "connections", fold: "private" });
     expect(resolveTab("overview", "sync")).toEqual({ tab: "overview", fold: "sync" });
     expect(resolveTab("workspaces", "bogus")).toEqual({ tab: "workspaces", fold: null });
     expect(resolveTab("processes", "ssh")).toEqual({ tab: "processes", fold: null });

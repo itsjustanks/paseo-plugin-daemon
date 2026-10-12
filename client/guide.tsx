@@ -177,6 +177,19 @@ type Question = { icon: string; question: string; answer: readonly string[]; act
 export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
   return [
     {
+      icon: "Network", question: "How can agents on my computers work together?",
+      answer: [
+        "Open Connections. Add each computer through Paseo's pairing-link flow, then review agent access separately for each online computer. Access starts off. Enabling shares full daemon control with the other computers you opt in, including agents and files beyond private app grants.",
+        "After the computers share access, start a new Claude, Codex or OpenCode agent. It can find remote workspaces, read activity and ask another agent to do a task. Pairing alone never sends a task or migrates an agent. Turning off does not revoke links already shared; rotate credentials separately.",
+      ],
+      action: { label: "Open Connections", tab: "connections" },
+    },
+    {
+      icon: "Server", question: "Why is my Python HTTP server waiting?",
+      answer: ["Listening · waiting for requests means the process is still listening on its port while the operating system waits for work. It is not asleep like a laptop. A listening port does not prove the app's health; Open or a configured health check can help verify it."],
+      action: { label: "See running apps", tab: "workspaces" },
+    },
+    {
       icon: "Globe", question: "How do I open my app in a browser?",
       answer: [
         "Start its dev command (such as npm run dev) in that project's terminal in Paseo. It appears under Workspaces with an Open button.",
@@ -188,15 +201,15 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
       icon: "Laptop", question: "Can I open it privately, only on my own computer?",
       answer: [
         "Yes. Pair this host with your own computer once (both need Paseo and Hosts), and its dev servers open at 127.0.0.1 on your computer. Nothing is published.",
-        "Already reach this host with SSH keys? Save an SSH forward instead. Both live under Workspaces.",
+        "Already reach this host with SSH keys? Save an SSH forward instead. Both live under Connections.",
       ],
-      action: { label: "Pair my computer", tab: "workspaces", fold: "private" },
+      action: { label: "Pair my computer", tab: "connections", fold: "private" },
     },
     {
       icon: "SearchX", question: "My dev server isn't listed",
       answer: [
-        "It shows only when it runs inside a project registered in Paseo, from that project's folder. A custom server needs a Paseo service script with its port.",
-        "Register each project folder on its own: your home folder or the whole disk is too broad and is ignored.",
+        "Workspaces shows the current snapshot of up to 50 listeners, including apps outside Paseo projects. Search by app or port, or refresh. The inventory does not require a disk check.",
+        "Open and port sharing need a verified project association. Register each project folder on its own; your home folder or the whole disk is too broad. A custom server needs a Paseo service script with its port.",
         "After the daemon restarts, open Hosts on that host once so it can read its projects again. Overview's Setup checks show what's missing.",
       ],
       action: { label: "See setup checks", tab: "overview" },
@@ -214,7 +227,7 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
       answer: [
         "Each protected row says why beside its name. Paseo itself, plugin hosts and their helpers, agent programs, interactive terminal shells, databases, system services and other users' processes stay protected. On a Mac, system programs and desktop apps stay protected too: quit those in their app.",
         "Only the agent CLI itself is protected: dev servers, builds and scripts it starts are intentionally stoppable. Paseo protection covers its own internal workers and plugin hosts, never an agent's work. Close an interactive terminal in Paseo, or use Open chat for an agent program. Tagged jobs can be stopped even after they detach or move outside the workspace, with an extra warning because a tag cannot prove who started them. The chat title and workspace stay on the row; older apps without chat navigation show the title only.",
-        "A job inside a workspace without live Paseo ancestry warns: Inside <workspace>, but Paseo didn't start it. Folder location and chat tags do not prove origin. Other processes you own can be stopped after an extra warning: This wasn't started by Paseo. Make sure you don't need it. Cancel is the default. Hosts checks the process again before signalling, asks it to stop first, and only forces the same process after the grace period. Every step is logged.",
+        "A job inside a workspace without live Paseo ancestry warns: Inside <workspace>, but Paseo didn't start it. Folder location and chat tags do not prove origin. Other processes you own can be stopped after an extra warning: This wasn't started by Paseo. Make sure you don't need it. Cancel is the default. Hosts checks the process again before signalling. Processes asks it to stop, then forces the same process after the grace period. Running apps requests a graceful stop only; Force stop needs a separate review if it remains running. Every step is logged.",
       ],
       action: { label: "See processes", tab: "processes" },
     },
@@ -336,7 +349,7 @@ export function helpQuestions(minutes: string, shortcuts: boolean): Question[] {
       answer: [
         "Both computers must be online with Hosts running. If it still won't connect, use a browser link or your SSH keys instead.",
       ],
-      action: { label: "Open private links", tab: "workspaces", fold: "private" },
+      action: { label: "Open private links", tab: "connections", fold: "private" },
     },
   ];
 }
@@ -351,8 +364,8 @@ export function HelpTab({ theme, compact, go, minutes, shortcuts }: { theme: The
     <Accordion theme={theme}>
       <AccordionItem theme={theme} compact={compact} icon="LifeBuoy" title="How do I work with my laptop closed?" summary="Watch a remote browser, connect hosts, or recover an offline target">
         <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>Select an always-on remote host in Paseo. Processes → Browsers observes its existing Agent Browser sessions inside Paseo; the browser keeps running on the selected host. Hosts does not install or start a browser. A sleeping laptop cannot keep its own local host running.</Text>
-        <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>Cross-daemon under Workspaces shares full daemon authority only after explicit confirmation; it is separate from private app and file grants. For an offline target, select an online helper and open Recover another host. Saved SSH connections never run automatically.</Text>
-        <Row><Button theme={theme} label="Recover another host" onPress={() => go("workspaces", "recovery")} /><Link theme={theme} label="Headless setup guide" onPress={() => { void Linking.openURL("https://github.com/itsjustanks/paseo-plugin-daemon/blob/main/docs/headless-setup.md").catch(() => undefined); }} /></Row>
+        <Text style={{ ...TYPE.body, color: theme.colors.foreground }}>Agent access under Connections shares full daemon authority only after explicit confirmation; it is separate from private app and file grants. For an offline target, select an online helper and open Recover another host. Saved SSH connections never run automatically.</Text>
+        <Row><Button theme={theme} label="Recover another host" onPress={() => go("connections", "recovery")} /><Link theme={theme} label="Headless setup guide" onPress={() => { void Linking.openURL("https://github.com/itsjustanks/paseo-plugin-daemon/blob/main/docs/headless-setup.md").catch(() => undefined); }} /></Row>
       </AccordionItem>
       <AccordionItem theme={theme} compact={compact} icon="BookOpen" title="How does Hosts work?" summary="What it watches, what it does about it, and the words it uses">
         <WhatIs theme={theme} />

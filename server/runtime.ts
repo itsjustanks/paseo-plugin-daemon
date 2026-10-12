@@ -9,7 +9,6 @@ import { createMonitorHandlers } from "./handlers";
 import { createServiceLease } from "./lease";
 import { LinkManager } from "./links";
 import { PeerManager } from "./peers";
-import { ProcessManager } from "./processes";
 import { ProjectScope } from "./scope";
 import { TunnelManager } from "./tunnels";
 import { WatchChecker } from "./watch";
@@ -113,15 +112,14 @@ export function createRuntime(options: RuntimeOptions = {}) {
   const scope = new ProjectScope();
   const transfers = new ProjectTransfers(scope);
   const log = options.log ?? new ActionLog();
-  const monitor = createMonitorHandlers({ scope });
   const readSettings = options.readSettings ?? (async () => HOSTS_SETTINGS_DEFAULTS);
   // 0.13.0: the always-on check loop (memory pressure, growth, plugin health) and plugin restarts.
   let guard: GuardLoop | null = null;
-  const manager = monitor.internals ? new ProcessManager({
-    ...monitor.internals, daemonPid: monitor.internals.parentPid, scope, log, readSettings,
+  const monitor = createMonitorHandlers({ scope, log, readSettings,
     growth: (pid, startId) => guard?.growthOf(pid, startId) ?? null,
     memoryLevel: () => guard?.state().memory.level ?? "normal",
-  }) : null;
+  });
+  const manager = monitor.internals?.manager ?? null;
   let restarter: PluginRestarter | null = null;
   // 0.14.0: disk usage. The workspaces come from Paseo's SDK through the bound session.
   /** From the shared registry read; `force` (scan, clear) reads fresh, polling reuses the 60-second cache. */

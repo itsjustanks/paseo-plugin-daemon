@@ -196,7 +196,7 @@ function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, s
     void healthQuery.refetch();
   }, [queryClient, links, healthQuery]);
   const pendingStops = usePendingStops(snapshot);
-  const { actions, liveForceTarget, forceMutation, setForceTarget } = useProcessActions({ rpc, snapshot, pendingStops, refresh });
+  const { actions, stopReview, forcePlan, liveForceTarget, forceMutation, setForceTarget } = useProcessActions({ theme, rpc, snapshot, pendingStops, refresh });
   const available = links.data?.cloudflared === true;
 
   // Services already have their own card; the process list shows the rest.
@@ -255,7 +255,7 @@ function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, s
                   {snapshot.services.map((process) => (
                     <ServiceCard key={processKey(process)} process={process} actions={actions} footer={
                       <>
-                        <OpenRow ports={process.ports} tunnels={links.data?.tunnels ?? []} minutes={minutes} available={available} opener={opener} onSetup={() => opener.installLinks()} installing={opener.installing} />
+                        <OpenRow ports={process.project?.shareable ? process.ports.filter((port) => !process.project?.shareablePorts || process.project.shareablePorts.includes(port)) : []} tunnels={links.data?.tunnels ?? []} minutes={minutes} available={available} opener={opener} onSetup={() => opener.installLinks()} installing={opener.installing} />
                         <OpenTerminalButton theme={theme} pid={process.pid} />
                       </>
                     } />
@@ -310,7 +310,8 @@ function WorkspaceBody({ theme, hostId, workspaceId, intervalSeconds, minutes, s
         ) : null}
         {diskView?.mode === "quiet" ? <Meta theme={theme}>{diskView.line}</Meta> : null}
       </View>
-      <ForceStopModal target={liveForceTarget} busy={forceMutation.isPending} onCancel={() => setForceTarget(null)} onConfirm={(process) => forceMutation.mutate(process)} />
+      {stopReview}
+      <ForceStopModal theme={theme} plan={forcePlan} target={liveForceTarget} busy={forceMutation.isPending} onCancel={() => setForceTarget(null)} onConfirm={(process) => forceMutation.mutate(process)} />
     </ScrollView>
   );
 }

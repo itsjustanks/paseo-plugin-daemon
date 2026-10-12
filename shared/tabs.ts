@@ -1,41 +1,30 @@
-/**
- * The Hosts screen's tabs (0.11.0) and how older links land on them.
- *
- * Four tabs, by what someone comes to do: see whether this computer is fine
- * (Overview), find what's making it slow (Processes), open their app (Dev
- * servers), or learn how it works (Help). Connect and Project Sync were tabs
- * until 0.10; both are about other computers, so they now fold out under Dev
- * servers, and a link to either opens Dev servers with that fold-out open.
- * 0.12.1: copying a project isn't about dev servers, so Project Sync folds
- * out on Overview instead, and `sync` links land there.
- * 0.14.0: Dev servers became Workspaces: each workspace's dev servers, disk
- * use and what's safe to clear. Old `servers` links land there.
- */
+/** Hosts destinations and backwards-compatible links. Connections separates agent access from workspace inventory. */
 
 /** The screen's header title for a tab (0.12.1): "Hosts", "Hosts · Processes". */
 export function tabTitle(tab: TabId): string {
   return tab === "overview" ? "Hosts" : `Hosts · ${TAB_LABELS[tab]}`;
 }
-export const TAB_LABELS: Record<TabId, string> = { overview: "Overview", processes: "Processes", workspaces: "Workspaces", help: "Help" };
-export const TAB_IDS = ["overview", "processes", "workspaces", "help"] as const;
+export const TAB_LABELS: Record<TabId, string> = { overview: "Overview", processes: "Processes", workspaces: "Workspaces", connections: "Connections", help: "Help" };
+export const TAB_IDS = ["overview", "processes", "workspaces", "connections", "help"] as const;
 export type TabId = (typeof TAB_IDS)[number];
 
 /** The fold-outs that an old tab id or a button can open: on Dev servers, and (0.12.1) Project Sync on Overview. */
 export const FOLD_IDS = ["private", "ssh", "links", "sync", "caches", "cleanup", "recovery"] as const;
 export type Fold = (typeof FOLD_IDS)[number];
 /** The tab each fold-out lives on. */
-export const FOLD_TAB: Record<Fold, TabId> = { private: "workspaces", ssh: "workspaces", links: "workspaces", sync: "overview", caches: "workspaces", cleanup: "workspaces", recovery: "workspaces" };
+export const FOLD_TAB: Record<Fold, TabId> = { private: "connections", ssh: "connections", links: "workspaces", sync: "overview", caches: "workspaces", cleanup: "workspaces", recovery: "connections" };
 
 export type TabTarget = { tab: TabId; fold: Fold | null };
 
 /** Old ids from 0.8 to 0.10, and a few plain aliases, to where they live now. */
 const LEGACY: Record<string, TabTarget> = {
+  "cross-daemon": { tab: "connections", fold: null },
   health: { tab: "processes", fold: null },
   "daemon-health": { tab: "processes", fold: null },
-  connect: { tab: "workspaces", fold: "private" },
-  pair: { tab: "workspaces", fold: "private" },
-  private: { tab: "workspaces", fold: "private" },
-  ssh: { tab: "workspaces", fold: "ssh" },
+  connect: { tab: "connections", fold: "private" },
+  pair: { tab: "connections", fold: "private" },
+  private: { tab: "connections", fold: "private" },
+  ssh: { tab: "connections", fold: "ssh" },
   browser: { tab: "workspaces", fold: null },
   links: { tab: "workspaces", fold: "links" },
   sync: { tab: "overview", fold: "sync" },
@@ -47,7 +36,7 @@ const LEGACY: Record<string, TabTarget> = {
   disk: { tab: "workspaces", fold: null },
   storage: { tab: "workspaces", fold: null },
   cleanup: { tab: "workspaces", fold: "cleanup" },
-  recovery: { tab: "workspaces", fold: "recovery" },
+  recovery: { tab: "connections", fold: "recovery" },
   guide: { tab: "help", fold: null },
 };
 
@@ -62,6 +51,8 @@ export function resolveTab(tab?: string | null, open?: string | null): TabTarget
   const wanted = String(tab ?? "").trim().toLowerCase();
   const target: TabTarget = isTab(wanted) ? { tab: wanted, fold: null } : LEGACY[wanted] ?? { tab: "overview", fold: null };
   const fold = String(open ?? "").trim().toLowerCase();
+  // Old Workspaces links to moved connection sections still reach their content.
+  if (target.tab === "workspaces" && isFold(fold) && FOLD_TAB[fold] === "connections") return { tab: "connections", fold };
   if (isFold(fold) && FOLD_TAB[fold] === target.tab) return { tab: target.tab, fold };
   return target;
 }

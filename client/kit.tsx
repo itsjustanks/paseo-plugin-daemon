@@ -125,6 +125,9 @@ export function Button({ theme, label, onPress, primary, danger, busy, disabled,
         paddingHorizontal: SPACE.md,
         paddingVertical: SPACE.sm + SPACE.hair,
         minHeight: 44,
+        minWidth: 0,
+        maxWidth: "100%",
+        flexShrink: 1,
         opacity: inactive ? 0.5 : 1,
         flexDirection: "row",
         alignItems: "center",
@@ -132,7 +135,7 @@ export function Button({ theme, label, onPress, primary, danger, busy, disabled,
       }}
     >
       {busy ? <ActivityIndicator size="small" color={color} /> : icon && HostIcon ? <HostIcon name={icon} size={16} color={color} /> : null}
-      <Text style={{ ...TYPE.body, color, fontWeight: "600" }}>{label}</Text>
+      <Text style={{ ...TYPE.body, color, fontWeight: "600", flexShrink: 1, minWidth: 0 }}>{label}</Text>
     </Pressable>
   );
 }
@@ -168,11 +171,11 @@ export function Meta({ theme, children, selectable }: { theme: Theme; children: 
 
 /** A heading for one item inside a card, such as a provider or an account. */
 export function ItemTitle({ theme, children }: { theme: Theme; children: React.ReactNode }) {
-  return <Text style={{ ...TYPE.item, color: theme.colors.foreground, flexShrink: 1 }}>{children}</Text>;
+  return <Text style={{ ...TYPE.item, color: theme.colors.foreground, minWidth: 0, flexShrink: 1 }}>{children}</Text>;
 }
 
 export function Row({ children }: { children: React.ReactNode }) {
-  return <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: SPACE.sm }}>{children}</View>;
+  return <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", minWidth: 0, maxWidth: "100%", gap: SPACE.sm }}>{children}</View>;
 }
 
 /** A quiet text action, for secondary links such as "Change in dashboard". */
@@ -304,9 +307,9 @@ export function Disclosure({ theme, label, openLabel, initiallyOpen = false, qui
   const color = quiet ? theme.colors.foregroundMuted : theme.colors.accent;
   return (
     <View style={{ gap: quiet ? SPACE.sm : SPACE.row }}>
-      <Pressable accessibilityRole="button" accessibilityLabel={shown} accessibilityState={{ expanded: open }} onPress={() => setOpen(!open)} style={{ flexDirection: "row", alignItems: "center", gap: SPACE.xs, paddingVertical: SPACE.xs, alignSelf: "flex-start" }}>
+      <Pressable accessibilityRole="button" accessibilityLabel={shown} accessibilityState={{ expanded: open }} onPress={() => setOpen(!open)} style={{ flexDirection: "row", alignItems: "center", gap: SPACE.xs, paddingVertical: SPACE.xs, alignSelf: "flex-start", minWidth: 0, maxWidth: "100%" }}>
         {HostIcon ? <HostIcon name={open ? "ChevronDown" : "ChevronRight"} size={quiet ? 14 : 16} color={color} /> : null}
-        <Text style={{ ...(quiet ? TYPE.secondary : TYPE.body), color, fontWeight: "600" }}>{shown}</Text>
+        <Text style={{ ...(quiet ? TYPE.secondary : TYPE.body), color, fontWeight: "600", flexShrink: 1 }}>{shown}</Text>
       </Pressable>
       {open ? children : null}
     </View>

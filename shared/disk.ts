@@ -450,7 +450,7 @@ export const diskLeftoverDismiss = defineRpc({ name: "daemon-link.disk.leftover-
 /** "Idle 3 days", "Agent working now". */
 export function stateWords(state: WorkspaceState, activeAt: number | null, now = Date.now()): string {
   if (state === "working") return "Agent working now";
-  if (state === "waiting") return "Waiting for you";
+  if (state === "waiting") return "Agent needs your reply or permission";
   if (state === "failed") return activeAt ? `Last run failed · ${ago(activeAt, now)}` : "Last run failed";
   if (state === "unlinked") return "Not linked to a workspace";
   return activeAt ? `Idle since ${ago(activeAt, now)}` : "Idle";

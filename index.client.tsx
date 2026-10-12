@@ -42,7 +42,7 @@ export default function contribute(client: PluginClientContext) {
     keywords: ["hosts", "sync", "daemon link", "daemon-link", "monitor", "ports", "dev server", "tunnel", "ssh"],
     onSelect(command) { openMainScreen(command, MAIN_SCREEN); },
   });
-  client.addCommandCenterItem({ id: "recover-host", title: "Recover another host", icon: "LifeBuoy", context: "global", keywords: ["hosts", "recovery", "offline", "ssh", "restart"], onSelect(command) { openMainScreen(command, MAIN_SCREEN, { tab: "workspaces", open: "recovery" }); } });
+  client.addCommandCenterItem({ id: "recover-host", title: "Recover another host", icon: "LifeBuoy", context: "global", keywords: ["hosts", "recovery", "offline", "ssh", "restart"], onSelect(command) { openMainScreen(command, MAIN_SCREEN, { tab: "connections", open: "recovery" }); } });
   client.addCommandCenterItem({
     id: "open-heavy-processes", title: "Show heavy processes", icon: "Cpu", context: "global",
     keywords: ["processes", "cpu", "memory", "runaway", "kill", "stop", "slow", "build", "limit", "container", "hosts"],
