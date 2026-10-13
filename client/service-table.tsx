@@ -10,7 +10,7 @@ import type { Process } from "./rpc";
 import { formatBytes, formatPercent } from "./ui";
 import { ProcessActions, type RowActions } from "./surface";
 import { OpenChatButton } from "./ask";
-import { Button, Disclosure, ItemTitle, Meta, Row, SectionTitle, SPACE } from "./kit";
+import { Button, Card, Disclosure, ItemTitle, Meta, Row, SPACE } from "./kit";
 import { ResourceCells, ResourceHeader, ResourceTable, ResourceToolbar, type ResourceColumn } from "./resource-table";
 
 const FILTERS: readonly { value: ServiceFilter; label: string }[] = [
@@ -22,8 +22,8 @@ const COLUMNS: readonly ResourceColumn[] = [
   { id: "project", label: "Project", weight: 1.2, sortable: true, compactInline: true },
   { id: "app", label: "App", weight: 1.4, sortable: true, compactInline: true },
   { id: "ports", label: "Ports", weight: 0.7, sortable: true, compactInline: true },
-  { id: "memory", label: "Memory", weight: 1.1, sortable: true, compactInline: true },
-  { id: "cpu", label: "CPU", weight: 0.8, sortable: true, compactInline: true },
+  { id: "memory", label: "Memory", weight: 1.1, sortable: true, compactInline: true, numeric: true },
+  { id: "cpu", label: "CPU", weight: 0.8, sortable: true, compactInline: true, numeric: true },
   { id: "status", label: "Status", weight: 1.7, sortable: true, compactInline: true },
   { id: "actions", label: "Open / Stop", width: 216 },
 ];
@@ -38,8 +38,7 @@ export function ServiceTable({ theme, compact, services, processes = [], workspa
   const [sort, setSort] = useState<ResourceSort<ServiceSort>>({ id: "memory", direction: "desc" });
   const rows = serviceTableRows(serviceInventory(services, processes, workspaces), search, sort, filter);
   const reset = () => { setSearch(""); setFilter("all"); };
-  return <View style={{ gap: SPACE.row, minWidth: 0 }}>
-    <SectionTitle theme={theme} icon="Server">{`Running apps · ${services.length}`}</SectionTitle>
+  return <Card theme={theme} title={`Running apps · ${services.length}`} icon="Server" flush>
     <Meta theme={theme}>Up to 50 listening apps · Memory descending by default.</Meta>
     <Disclosure theme={theme} label="Details" quiet><Meta theme={theme}>CPU is a share of one core. A listening port does not prove the app is healthy. Running apps appear without a disk check; disk measurements run separately when requested.</Meta></Disclosure>
     <ResourceToolbar theme={theme} label="Search apps, workspaces, projects or ports" search={search} onSearch={setSearch}>
@@ -49,8 +48,7 @@ export function ServiceTable({ theme, compact, services, processes = [], workspa
         {search || filter !== "all" ? <Button theme={theme} label="Reset" accessibilityLabel="Clear app search and filter" onPress={reset} /> : null}
       </Row>
     </ResourceToolbar>
-    <ResourceTable compact={compact}>{(narrow) => <>
-      <ResourceHeader theme={theme} columns={COLUMNS} compact={narrow} sort={sort} onSort={(id) => setSort(nextResourceSort(sort, id as ServiceSort))} />
+    <ResourceTable theme={theme} compact={compact} header={(narrow) => <ResourceHeader theme={theme} columns={COLUMNS} compact={narrow} sort={sort} onSort={(id) => setSort(nextResourceSort(sort, id as ServiceSort))} />}>{(narrow) => <>
       {rows.map(({ service, workspace, project, ownership, chatId, status }) => <View key={`${service.pid}:${service.name}`} style={{ borderBottomWidth: 1, borderColor: theme.colors.border, paddingVertical: SPACE.row, minWidth: 0 }}>
         <ResourceCells theme={theme} columns={COLUMNS} compact={narrow} cells={{
           workspace: <View style={{ gap: SPACE.xs, minWidth: 0 }}><ItemTitle theme={theme}>{workspace}</ItemTitle><Meta theme={theme}>{ownership}</Meta>{chatId ? <Row><OpenChatButton theme={theme} agentId={chatId} /></Row> : null}</View>,
@@ -65,5 +63,5 @@ export function ServiceTable({ theme, compact, services, processes = [], workspa
       </View>)}
     </>}</ResourceTable>
     {loading ? <Meta theme={theme}>Checking this computer's running apps…</Meta> : failed ? <Meta theme={theme}>The running-app inventory could not be read. Refresh to try again.</Meta> : !services.length ? <Meta theme={theme}>No running apps were found in the current listener snapshot. Start your app's dev command in a Paseo workspace, then Refresh. No disk check is needed.</Meta> : !rows.length ? <Meta theme={theme}>No apps match this search and filter. Use Reset to clear both and see this snapshot's running apps.</Meta> : null}
-  </View>;
+  </Card>;
 }

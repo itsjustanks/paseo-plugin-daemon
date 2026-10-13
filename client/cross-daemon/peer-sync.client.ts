@@ -4,6 +4,7 @@ import type { PluginClientContext } from "@getpaseo/plugin/client";
 import type { z } from "zod";
 import { settingsRpc } from "@getpaseo/plugin";
 import { crossDaemonSettings, describeDaemon, shareDaemon, listPeers, setPeers } from "../../shared/cross-daemon/cross-daemon.shared";
+import { daemonRequest } from "./requests.client";
 
 const switchSettings = settingsRpc(crossDaemonSettings.id);
 
@@ -44,7 +45,7 @@ export function createDaemonPort(rpc: PluginClientContext["rpc"]): DaemonPort {
 export async function syncPeers(ports: readonly DaemonPort[], isCurrent: (port: DaemonPort) => boolean = () => true): Promise<void> {
   const epochs = new Map(ports.map((port) => [port, port.generation?.()]));
   const current = (port: DaemonPort) => isCurrent(port) && epochs.get(port) === port.generation?.();
-  const results = await Promise.allSettled(ports.map((port) => port.describe()));
+  const results = await Promise.allSettled(ports.map((port) => daemonRequest(port, "describe", () => port.describe())));
   const answered = results.flatMap((result, index) => {
     if (!current(ports[index])) return [];
     if (result.status === "fulfilled") return [{ port: ports[index], daemon: result.value }];
@@ -53,18 +54,26 @@ export async function syncPeers(ports: readonly DaemonPort[], isCurrent: (port: 
   });
   // Recheck opt-in using the credential-free status RPC before preparing any delivery.
   const eligibility = await Promise.allSettled(answered.map(async ({ port, daemon }) => {
-    if (!daemon.switchedOn || !current(port)) return false;
-    const status = await port.status();
-    return current(port) && status.available && status.switchedOn && status.serverId === daemon.serverId;
+    if (!current(port)) return "unknown";
+    if (!daemon.switchedOn) return "off";
+    // Separate read lane from the UI: an ordinary refresh is not a refusal of authority.
+    const status = await daemonRequest(port, "authority", () => port.status());
+    if (!current(port) || !status.available || status.serverId !== daemon.serverId) return "unknown";
+    return status.switchedOn ? "on" : "off";
   }));
-  const eligible = (index: number) => eligibility[index].status === "fulfilled" && eligibility[index].value === true && current(answered[index].port);
-  const answeredServerIds = answered.map(({ daemon }) => daemon.serverId);
+  const state = (index: number) => {
+    const result = eligibility[index];
+    return result.status === "fulfilled" && current(answered[index].port) ? result.value : "unknown";
+  };
+  const eligible = (index: number) => state(index) === "on";
+  // Unknown is not switched off: keep its stored links and do not write to that recipient.
+  const answeredServerIds = answered.flatMap(({ daemon }, index) => state(index) === "unknown" ? [] : [daemon.serverId]);
   const deliveries = await Promise.allSettled(answered.map(({ port, daemon }, index) => {
-    if (!current(port)) return Promise.resolve();
+    if (state(index) === "unknown") return Promise.resolve();
     // An off or unavailable recipient sees only an empty list, never another host's credential.
     const peers = eligible(index) ? answered.flatMap((source, sourceIndex) =>
       eligible(sourceIndex) && source.daemon.member && source.daemon.serverId !== daemon.serverId ? [source.daemon.member] : []) : [];
-    return port.setPeers({ peers, answeredServerIds });
+    return daemonRequest(port, "setPeers", () => port.setPeers({ peers, answeredServerIds }));
   }));
   for (const delivery of deliveries) {
     if (delivery.status === "rejected") console.warn("cross-daemon: a host rejected its peer list; details withheld");

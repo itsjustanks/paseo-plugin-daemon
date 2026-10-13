@@ -182,15 +182,15 @@ const TABLE_PAGE = 25;
 const WORKSPACE_COLUMNS: readonly ResourceColumn[] = [
   { id: "name", label: "Workspace / project", weight: 2.5, sortable: true },
   { id: "state", label: "Status", weight: 1.3 },
-  { id: "disk", label: "Total disk", sortable: true, compactInline: true },
-  { id: "reclaimable", label: "Reclaimable", sortable: true, compactInline: true },
+  { id: "disk", label: "Total disk", sortable: true, compactInline: true, numeric: true },
+  { id: "reclaimable", label: "Reclaimable", sortable: true, compactInline: true, numeric: true },
   { id: "running", label: "Running", sortable: true, compactInline: true },
   { id: "actions", label: "Actions", width: 240 },
 ];
 const ITEM_COLUMNS: readonly ResourceColumn[] = [
   { id: "name", label: "Name / path", weight: 3, sortable: true },
   { id: "type", label: "Type / group", weight: 2 },
-  { id: "size", label: "Size", sortable: true },
+  { id: "size", label: "Size", sortable: true, numeric: true },
   { id: "actions", label: "Actions", width: 200 },
 ];
 const OUTPUT_COLUMNS = ITEM_COLUMNS.filter((column) => column.id !== "actions");
@@ -210,8 +210,7 @@ function BuildOutputList({ theme, items, owner, compact }: { theme: Theme; items
   const shownPage = Math.min(page, Math.max(0, Math.ceil(rows.length / TABLE_PAGE) - 1));
   return <View style={{ gap: SPACE.sm }}>
     {items.length > 3 ? <ResourceToolbar theme={theme} label="Search build outputs" search={search} onSearch={(text) => { setSearch(text); setPage(0); }} /> : null}
-    <ResourceTable compact={compact}>{(narrow) => <>
-      <ResourceHeader theme={theme} columns={OUTPUT_COLUMNS} compact={narrow} sort={sort} onSort={(id) => { setSort(nextResourceSort(sort, id as ItemSort)); setPage(0); }} />
+    <ResourceTable theme={theme} compact={compact} header={(narrow) => <ResourceHeader theme={theme} columns={OUTPUT_COLUMNS} compact={narrow} sort={sort} onSort={(id) => { setSort(nextResourceSort(sort, id as ItemSort)); setPage(0); }} />}>{(narrow) => <>
       {rows.slice(shownPage * TABLE_PAGE, (shownPage + 1) * TABLE_PAGE).map((item) => <View key={item.path ?? item.where} style={{ paddingVertical: SPACE.sm }}><ResourceCells theme={theme} columns={OUTPUT_COLUMNS} compact={narrow} cells={{
         name: <ItemLine theme={theme} item={item} owner={owner} compact={narrow} />,
         type: <Meta theme={theme}>{item.what}</Meta>, size: <Note theme={theme}>{size(item.bytes, item.partial)}</Note>,
@@ -350,8 +349,7 @@ export function CacheList({ theme, groups, compact = false }: { theme: Theme; gr
   return <View style={{ gap: SPACE.row }}>
     <ResourceToolbar theme={theme} label="Search caches and temporary files" search={search} onSearch={(text) => { setSearch(text); setPage(0); }} filter={filter} onFilter={(id) => { setFilter(id); setPage(0); }}
       filters={[{ id: "all", label: "All groups and types" }, ...groups.map((group) => ({ id: group.id, label: group.title })), ...[...new Set(groups.flatMap((group) => group.items.map((item) => item.what)))].map((type) => ({ id: `type:${type}`, label: type }))]} />
-    <ResourceTable compact={compact}>{(narrow) => <>
-      <ResourceHeader theme={theme} columns={ITEM_COLUMNS} compact={narrow} sort={sort} onSort={(id) => { setSort(nextResourceSort(sort, id as ItemSort)); setPage(0); }} />
+    <ResourceTable theme={theme} compact={compact} header={(narrow) => <ResourceHeader theme={theme} columns={ITEM_COLUMNS} compact={narrow} sort={sort} onSort={(id) => { setSort(nextResourceSort(sort, id as ItemSort)); setPage(0); }} />}>{(narrow) => <>
       {rows.slice(shownPage * TABLE_PAGE, (shownPage + 1) * TABLE_PAGE).map(({ group, item }) => <CacheLine key={`${group.id}:${item.path ?? item.where}`} theme={theme} item={item} group={group.title} compact={narrow} />)}
     </>}</ResourceTable>
     {!rows.length ? <Note theme={theme}>No measured entries match these filters. Clear the search or choose All groups and types.</Note> : null}
@@ -371,17 +369,15 @@ export function WorkspaceList({ theme, compact, report, processes = [], say, onD
   const rows = workspaceTableRows(report?.workspaces ?? [], processes, search, filter, sort);
   const shownPage = Math.min(page, Math.max(0, Math.ceil(rows.length / TABLE_PAGE) - 1));
   if (!report?.workspaces.length) return null;
-  return <View style={{ gap: SPACE.sm }}>
-    <SectionTitle theme={theme} icon="FolderTree">Workspace disk and files</SectionTitle>
+  return <Card theme={theme} title="Workspace disk and files" icon="FolderTree" flush>
     <ResourceToolbar theme={theme} label="Search workspaces, projects, branches or paths" search={search} onSearch={(text) => { setSearch(text); setPage(0); }} filter={filter} onFilter={(id) => { setFilter(id); setPage(0); }}
       filters={[{ id: "all", label: "All statuses" }, ...["working", "waiting", "failed", "idle", "unlinked"].map((id) => ({ id, label: id.charAt(0).toUpperCase() + id.slice(1) }))]} />
-    <ResourceTable compact={compact}>{(narrow) => <>
-      <ResourceHeader theme={theme} columns={WORKSPACE_COLUMNS} compact={narrow} sort={sort} onSort={(id) => { setSort(nextResourceSort(sort, id as WorkspaceSort)); setPage(0); }} />
+    <ResourceTable theme={theme} compact={compact} header={(narrow) => <ResourceHeader theme={theme} columns={WORKSPACE_COLUMNS} compact={narrow} sort={sort} onSort={(id) => { setSort(nextResourceSort(sort, id as WorkspaceSort)); setPage(0); }} />}>{(narrow) => <>
       {rows.slice(shownPage * TABLE_PAGE, (shownPage + 1) * TABLE_PAGE).map(({ workspace, processes: running }) => <WorkspaceRow key={workspace.id} theme={theme} compact={narrow} workspace={workspace} checking={report.scan.state === "running"} processes={running} say={say} onDelete={onDelete} onWatchBrowser={onWatchBrowser} job={job} />)}
     </>}</ResourceTable>
     {!rows.length ? <Note theme={theme}>No workspaces match. Clear the search or choose All statuses. Search uses the last disk check.</Note> : null}
     <TablePages theme={theme} count={rows.length} page={shownPage} onPage={setPage} />
-  </View>;
+  </Card>;
 }
 
 /**

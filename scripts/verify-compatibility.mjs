@@ -54,6 +54,7 @@ function evaluate(bundle, target) {
 
 async function checkServer(bundle, version) {
   const handlers = new Map();
+  const creationHooks = [];
   const projectPath = join(process.env.PASEO_HOME, "project");
   await mkdir(projectPath, { recursive: true });
   await mkdir(join(process.env.PASEO_HOME, "plugin-settings", "daemon-link"), { recursive: true });
@@ -68,12 +69,19 @@ async function checkServer(bundle, version) {
     agents: { list: async () => ({ entries: [], pageInfo: { hasMore: false, nextCursor: null } }) },
   } };
   const contribute = evaluate(bundle, "server");
-  const cleanup = contribute({ registerSettings() {}, before() { return () => {}; }, on() { return () => {}; }, handle(contract, handler) {
+  const cleanup = contribute({ registerSettings() {}, before(name, handler) { if (name === "agent.create") creationHooks.push(handler); return () => {}; }, on() { return () => {}; }, handle(contract, handler) {
     assert(!handlers.has(contract.name), `Duplicate RPC: ${contract.name}`);
     handlers.set(contract.name, { contract, handler });
   } });
   assert.equal(typeof cleanup, "function");
   try {
+    let request = { config: { provider: "codex", cwd: projectPath, systemPrompt: "Keep existing instructions", mcpServers: {} }, env: { FIXTURE: "unchanged" } };
+    for (const hook of creationHooks) request = await hook({ request }, { ...context, signal: new AbortController().signal }) ?? request;
+    assert(request.config.systemPrompt.startsWith("Keep existing instructions\n\n<hosts-resource-guidance>"));
+    assert(request.config.systemPrompt.includes("git ls-files or rg --files"));
+    assert.deepEqual(request.env, { FIXTURE: "unchanged" });
+    assert.deepEqual(request.config.mcpServers, {});
+    console.log(`${version}: compiled agent-create hook preserves instructions and adds resource guidance`);
     assert(handlers.size >= 25, "The supported runtime must register the existing core RPCs");
     for (const name of ["daemon-link.status", "daemon-link.peers.status", "daemon-link.sync.status"]) {
       const { contract, handler } = handlers.get(name);

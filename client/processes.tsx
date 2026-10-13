@@ -27,8 +27,8 @@ const POLL_MS = 5000;
 export const PROCESS_COLUMNS: readonly ResourceColumn[] = [
   { id: "name", label: "Process / PID", weight: 1.8, sortable: true },
   { id: "attribution", label: "Workspace / chat", weight: 2 },
-  { id: "memory", label: "Memory", sortable: true, compactInline: true },
-  { id: "cpu", label: "CPU", sortable: true, compactInline: true },
+  { id: "memory", label: "Memory", sortable: true, compactInline: true, numeric: true },
+  { id: "cpu", label: "CPU", sortable: true, compactInline: true, numeric: true },
   { id: "age", label: "Running", sortable: true, compactInline: true },
   { id: "actions", label: "Actions", weight: 1.4 },
 ];
@@ -387,8 +387,7 @@ function ProcessList({ theme, compact, hostId, say, issues = [], onChanged, heav
             <Button theme={theme} label={`Stop ${chosen.length} selected…`} icon="OctagonX" danger busy={ask.isPending} disabled={ask.isPending || plan !== null} onPress={() => ask.mutate(chosen)} />
           </View>
         ) : null}
-        <ResourceTable compact={compact}>{(narrow) => <>
-          <ResourceHeader theme={theme} columns={PROCESS_COLUMNS} compact={narrow} sort={sort} onSort={(id) => { setSort(nextResourceSort(sort, id as ReportSort)); resetPage(); }} />
+        <ResourceTable theme={theme} compact={compact} header={(narrow) => <ResourceHeader theme={theme} columns={PROCESS_COLUMNS} compact={narrow} sort={sort} onSort={(id) => { setSort(nextResourceSort(sort, id as ReportSort)); resetPage(); }} />}>{(narrow) => <>
           {!rows.length && !query.isPlaceholderData ? <Note theme={theme}>{heavy && !search ? "No heavy jobs are running. All processes shows the other work on this host." : `No processes match these filters${search ? ` and "${search}"` : ""}. ${heavy ? "Clear the search, or use All processes to see other work." : "Try Everything or clear the search."}`}</Note> : null}
           {rows.map((row, index) => <ProcessItem key={processActionKey(row)} hostId={hostId} theme={theme} row={row} compact={narrow} byTree={byTree} first={index === 0} twin={false} selected={selected.has(processActionKey(row))} onSelect={() => row.actionToken && toggle(row.actionToken)} busy={ask.isPending || plan !== null} onStop={() => row.actionToken && ask.mutate([row.actionToken])} />)}
         </>}</ResourceTable>

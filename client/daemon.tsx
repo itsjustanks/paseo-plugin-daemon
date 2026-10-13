@@ -163,7 +163,7 @@ function DaemonBody(props: DaemonProps) {
   const foldKey = (id: Fold) => `${id}-${fold.id === id ? fold.asked : "closed"}`;
 
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: t.color.surface0 }} contentContainerStyle={{ padding: pad, paddingBottom: SPACE.section * 2, maxWidth: t.maxWidth, width: "100%", alignSelf: "center" }}>
+    <ScrollView style={{ flex: 1, backgroundColor: t.color.surface0 }} contentContainerStyle={{ padding: pad, paddingBottom: SPACE.section * 2, maxWidth: tab === "workspaces" || tab === "processes" ? 1320 : t.maxWidth, width: "100%", alignSelf: "center" }}>
       <PageHeader theme={theme} host={props.host.label} tone={headerTone} line={headerLine} onRefresh={refreshAll} refreshing={check.isPending} />
       <TabBar theme={theme} compact={layout.compact} tabs={TAB_IDS} active={tab} onSelect={(next) => go(next)} />
       <TabLine theme={theme} tab={tab} />
