@@ -56,11 +56,27 @@ describe("sync scheduler", () => {
     cleanups.push(registerDaemon(slow));
     await vi.advanceTimersByTimeAsync(1_000);
     requestPeerSync();
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(slow.describe).toHaveBeenCalledTimes(1);
     finishDescribe();
     await vi.advanceTimersByTimeAsync(0);
     expect(slow.describe).toHaveBeenCalledTimes(2);
+    finishDescribe();
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  it("starts later rounds for responding computers after another computer times out", async () => {
+    const good = countingPort();
+    const stuck = countingPort();
+    stuck.describe = vi.fn(() => new Promise<never>(() => {}));
+    cleanups.push(registerDaemon(good), registerDaemon(stuck));
+    await vi.advanceTimersByTimeAsync(6_000);
+    expect(good.setPeers).toHaveBeenCalledTimes(1);
+    requestPeerSync();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(good.describe).toHaveBeenCalledTimes(2);
+    expect(good.setPeers).toHaveBeenCalledTimes(2);
+    expect(stuck.describe).toHaveBeenCalledTimes(1);
   });
 
   it("stops syncing a daemon once its plugin instance is disposed", async () => {

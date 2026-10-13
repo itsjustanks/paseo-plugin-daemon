@@ -6,29 +6,20 @@ import { Button, Disclosure, ItemTitle, Meta, Note, Row, SectionTitle, SPACE, TY
 import { ResourceCells, ResourceTable, type ResourceColumn } from "../resource-table";
 import { Confirm } from "../feedback";
 import { safeCrossDaemonText } from "../../shared/cross-daemon/privacy";
-import { buildDaemonRows, type DescribedDaemon } from "./daemon-rows.client";
+import { buildDaemonRows } from "./daemon-rows.client";
 import { useCrossDaemonHosts } from "./hosts.client";
-import type { DaemonPort } from "./peer-sync.client";
+import { describeDaemons, type DaemonReading as Daemon } from "./readings.client";
 import { listRegisteredDaemons, requestPeerSync } from "./sync-scheduler.client";
 
 const KEY = ["hosts-cross-daemon", "daemons"];
-type Daemon = DescribedDaemon & { port: DaemonPort };
-
-async function describeAll() {
-  const results = await Promise.allSettled(listRegisteredDaemons().map(async (port): Promise<Daemon> => {
-    const [description, peers] = await Promise.all([port.status(), port.listPeers()]);
-    // Only the status RPC is called here. No offer ever enters the query cache.
-    return { serverId: description.serverId, switchedOn: description.switchedOn, available: description.available, peers, port };
-  }));
-  return { daemons: results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []), failedCount: results.filter((result) => result.status === "rejected").length };
-}
+const describeAll = () => describeDaemons(listRegisteredDaemons());
 
 /** Embed within Hosts' existing screen. This component registers no sidebar or route. */
 export function CrossDaemonSection({ theme, layout }: Pick<PluginSurfaceProps, "theme" | "layout">) {
   const hosts = useCrossDaemonHosts();
   const queries = useQueryClient();
   const [confirm, setConfirm] = useState<{ daemon: Daemon; label: string } | null>(null);
-  const daemons = useQuery({ queryKey: KEY, queryFn: describeAll, refetchInterval: 5_000, enabled: hosts !== null });
+  const daemons = useQuery({ queryKey: KEY, queryFn: describeAll, refetchInterval: 5_000, retry: false, enabled: hosts !== null });
   const toggle = useMutation({
     mutationFn: async ({ daemon, enabled }: { daemon: Daemon; enabled: boolean }) => daemon.port.setSwitch(enabled, enabled),
     onSuccess: async () => { setConfirm(null); requestPeerSync(); await queries.invalidateQueries({ queryKey: KEY }); },
@@ -60,16 +51,16 @@ export function CrossDaemonSection({ theme, layout }: Pick<PluginSurfaceProps, "
     <ResourceTable compact={layout.compact}>{(narrow) => <>
       {rows.map((row) => {
         const daemon = daemons.data?.daemons.find((candidate) => candidate.serverId === row.serverId);
-        const disabled = row.state === "unavailable" || !daemon || toggle.isPending;
+        const disabled = !["on", "off"].includes(row.state) || !daemon || toggle.isPending;
         const connection = hosts?.find((host) => host.serverId === row.serverId)?.status;
         return <View key={row.serverId} style={{ paddingVertical: SPACE.row, borderBottomWidth: 1, borderBottomColor: theme.colors.border }}>
           <ResourceCells theme={theme} columns={columns} compact={narrow} cells={{
             computer: <View><ItemTitle theme={theme}>{safeCrossDaemonText(row.label)}</ItemTitle><Meta theme={theme}>{connection === "online" ? "Connected to Paseo" : connection === "connecting" ? "Connecting to Paseo…" : "Not connected to Paseo"}</Meta></View>,
-            status: <View><ItemTitle theme={theme}>{row.state === "on" ? "On" : row.state === "off" ? "Off" : "Unavailable"}</ItemTitle><Meta theme={theme}>{safeCrossDaemonText(row.detail)}</Meta></View>,
+            status: <View><ItemTitle theme={theme}>{row.state === "on" ? "On" : row.state === "off" ? "Off" : row.state === "checking" ? "Checking" : "Unavailable"}</ItemTitle><Meta theme={theme}>{safeCrossDaemonText(row.detail)}</Meta></View>,
             actions: <Pressable accessibilityRole="switch" accessibilityLabel={`Cross-daemon for ${safeCrossDaemonText(row.label)}`} accessibilityState={{ checked: row.state === "on", disabled }} disabled={disabled}
               onPress={() => { if (!daemon) return; if (row.state === "on") toggle.mutate({ daemon, enabled: false }); else { toggle.reset(); setConfirm({ daemon, label: row.label }); } }}
               style={{ alignSelf: "flex-start", minHeight: 44, maxWidth: "100%", justifyContent: "center", paddingVertical: SPACE.sm, paddingHorizontal: SPACE.row, borderRadius: 10, borderWidth: 1, borderColor: theme.colors.border, opacity: disabled ? 0.5 : 1 }}>
-              <Text style={{ ...TYPE.secondary, color: theme.colors.foreground, flexShrink: 1 }}>{row.state === "on" ? "Turn off" : row.state === "unavailable" ? "Unavailable" : "Review and turn on…"}</Text>
+              <Text style={{ ...TYPE.secondary, color: theme.colors.foreground, flexShrink: 1 }}>{row.state === "on" ? "Turn off" : row.state === "checking" ? "Checking…" : row.state === "unavailable" ? "Unavailable" : "Review and turn on…"}</Text>
             </Pressable>,
           }} />
         </View>;

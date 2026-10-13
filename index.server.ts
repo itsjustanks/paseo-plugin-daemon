@@ -18,6 +18,7 @@ import { processLog, processPreview, processReport, processStop } from "./shared
 import { hostSummary, summarize } from "./shared/summary";
 import { watchSuggestions } from "./shared/watch";
 import { readHostsSettings, registerHooks } from "./server/hooks";
+import { registerResourceGuidance } from "./server/resource-guidance";
 import { HealthChecker } from "./server/health";
 import { summaryWriter } from "./server/summary-file";
 import { suggestions } from "./server/watch";
@@ -64,6 +65,7 @@ function housekeepingReader(handle: SettingsHandle): () => Promise<HousekeepingS
 }
 
 export default function contribute(server: PluginServerContext) {
+  const removeResourceGuidance = registerResourceGuidance(server);
   const closeManagedBrowser = contributeManagedBrowser(server);
   const handle = server.registerSettings(hostsSettings) as SettingsHandle;
   const stopCrossDaemon = contributeCrossDaemon(server);
@@ -151,7 +153,7 @@ export default function contribute(server: PluginServerContext) {
   return () => stopActiveWork({
     cross: stopCrossDaemon, recovery: closeRecovery,
     housekeeping: () => runtime.housekeeper.close(), browsers: () => browsers.close(),
-    cancel: [removeHooks, () => { if (typeof offArchived === "function") offArchived(); }, unsubscribe,
+    cancel: [removeHooks, removeResourceGuidance, () => { if (typeof offArchived === "function") offArchived(); }, unsubscribe,
       () => health.close(), () => runtime.guard?.close(), () => runtime.processes.close()],
     close: [closeManagedBrowser, () => runtime.disk.close(), () => runtime.links.close(), () => runtime.peers.close(), () => runtime.transfers.close()],
   }).then(() => undefined);

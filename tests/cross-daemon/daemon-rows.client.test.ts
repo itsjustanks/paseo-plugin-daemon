@@ -41,7 +41,7 @@ describe("buildDaemonRows", () => {
 
   it("says it is checking while the daemons have not answered yet", () => {
     const [row] = buildDaemonRows([host("srv_mac", "MacBook")], null);
-    expect(row).toEqual({ serverId: "srv_mac", label: "MacBook", state: "unavailable", detail: "Checking…" });
+    expect(row).toEqual({ serverId: "srv_mac", label: "MacBook", state: "checking", detail: "Waiting for this computer's agent-access status." });
   });
 
   it("does not claim the plugin is missing when a daemon failed to answer", () => {

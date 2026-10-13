@@ -315,6 +315,13 @@ through 0.17.0 are migrated in place: every value you chose is kept and new sett
 defaults. Defaults are safe on a shared team daemon: nothing is published, paired or stopped until
 someone presses a button, enables the memory guard, or confirms live Housekeeping.
 
+### Resource-aware agent prompts
+
+Hosts adds [resource guidance](docs/resource-guidance.md) to new non-internal agents: reuse suitable
+dev servers and browsers, avoid duplicate watchers and unbounded scans, and limit parallel heavy work.
+Existing instructions and tool permissions are preserved. Existing chats are not rewritten or restarted.
+This is prompt guidance, not an enforced CPU/memory cap or a change to automatic cleanup settings.
+
 ### Housekeeping (0.18.0, Linux only)
 
 **Processes → Housekeeping** is a small, folded row. Open it for free RAM, 1-minute load, each job's

@@ -12,7 +12,7 @@ export interface DescribedDaemon {
 export interface DaemonRow {
   serverId: string;
   label: string;
-  state: "on" | "off" | "unavailable";
+  state: "on" | "off" | "checking" | "unavailable";
   detail: string;
 }
 
@@ -25,7 +25,7 @@ export interface DaemonReadings {
 export function buildDaemonRows(hosts: readonly PluginHostSummary[], readings: DaemonReadings | null): DaemonRow[] {
   return hosts.map(({ serverId, label, status }) => {
     if (status !== "online") return { serverId, label, state: "unavailable", detail: "Offline." };
-    if (!readings) return { serverId, label, state: "unavailable", detail: "Checking…" };
+    if (!readings) return { serverId, label, state: "checking", detail: "Waiting for this computer's agent-access status." };
     const daemon = readings.daemons.find((candidate) => candidate.serverId === serverId);
     if (!daemon && readings.failedCount > 0) {
       return { serverId, label, state: "unavailable", detail: "Could not read this host. Reconnect it and check that Paseo and Hosts are up to date." };

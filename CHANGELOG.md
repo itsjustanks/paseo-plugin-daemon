@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.21.1 — 2026-10-13
+
+- Add resource-aware instructions to new agents, preserving their existing prompt and
+  permissions. Prefer server/browser reuse, bounded heavy work and ownership-aware cleanup.
+  Existing chats are not changed. See [resource guidance](docs/resource-guidance.md).
+- Bound each computer's Connections requests. One silent computer no longer blocks all
+  rows or later sync rounds. Preserve stored links when authority cannot be verified and
+  prevent overlapping uncertain peer writes across host installations. Updated clients
+  coordinate in a separate scheduler; update every connected host to include it.
+- Align table headers and cells, right-align numeric columns, frame workspace tables and
+  keep desktop headers visible while rows scroll. Narrow panels retain labelled rows.
+
 ## 0.21.0 — 2026-10-12
 
 - Added a full-height workspace Browser with shared tabs, navigation, real input and server-enforced
