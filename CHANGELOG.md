@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.21.1 — 2026-10-13
 
 - Add resource-aware instructions to new agents, preserving their existing prompt and
   permissions. Prefer server/browser reuse, bounded heavy work and ownership-aware cleanup.
