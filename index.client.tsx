@@ -1,6 +1,9 @@
 import { contributeCrossDaemonClient } from "./client/cross-daemon/register";
 import { workspaceBrowserOpener } from "./client/browser-navigation";
 import { WorkspaceBrowserPanel } from "./client/managed-browser/panel";
+import { registerBrowserChat } from "./client/browser-chat";
+import { registerBrowserPresence } from "./client/browser-presence";
+import { createBrowserChatNavigation } from "./client/browser-chat-navigation";
 import type { PluginClientContext, PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { hostHealth } from "./shared/health";
 import { diskReport } from "./shared/disk";
@@ -17,10 +20,13 @@ const MAIN_SCREEN = "daemon-link";
 
 export default function contribute(client: PluginClientContext) {
   const stopCrossDaemonSync = contributeCrossDaemonClient(client);
+  const browserNavigation = createBrowserChatNavigation(client);
+  const removeBrowserChat = registerBrowserChat(client, browserNavigation.open);
+  const removeBrowserPresence = registerBrowserPresence(client);
   const onWatchBrowser = workspaceBrowserOpener(client);
   const shortcuts = typeof client.addSlashCommand === "function";
-  client.addWorkspacePanel({ id: "hosts-browser", title: "Browser", icon: "Globe", context: "workspace", locations: ["workspace", "explorer"], Component: WorkspaceBrowserPanel });
-  client.addCommandCenterItem({ id: "open-hosts-browser", title: "Open workspace browser", icon: "Globe", context: "workspace", keywords: ["browser", "agent-browser", "remote", "live", "hosts"], onSelect({ openPanel }) { openPanel("hosts-browser"); } });
+  client.addWorkspacePanel({ id: "hosts-browser", title: "Hosts Browser", icon: "Globe", context: "workspace", locations: ["workspace", "explorer"], Component: browserNavigation.wrap(WorkspaceBrowserPanel) });
+  client.addCommandCenterItem({ id: "open-hosts-browser", title: "Open Hosts Browser", icon: "Globe", context: "workspace", keywords: ["browser", "agent-browser", "remote", "live", "hosts"], onSelect({ openPanel }) { openPanel("hosts-browser"); } });
   const Surface = (props: PluginSurfaceProps & { params?: Record<string, string> }) => <DaemonSurface {...props} shortcuts={shortcuts} onWatchBrowser={onWatchBrowser} />;
   // A screen and the app's own sidebar row on Paseo 0.11 apps; the surface and sidebar item before.
   // On 0.11 the row also carries a status dot; pressing it opens a quick health check.
@@ -112,7 +118,7 @@ export default function contribute(client: PluginClientContext) {
   // A chip only when a chat needs attention (0.11.0). Host health at a glance is the sidebar row's dot and
   // popover; no sidebar footer item, since on every app that has one the row already shows the same thing.
   const removePills = registerHealthPills(client);
-  return () => { stopCrossDaemonSync(); removePills(); void removeAttachments(); };
+  return () => { stopCrossDaemonSync(); removeBrowserChat(); removeBrowserPresence(); browserNavigation.stop(); removePills(); void removeAttachments(); };
 }
 
 /** Asks the daemon for a fresh health check; the screen, panel and sidebar dot then read it. A failure just opens the page as it is. */

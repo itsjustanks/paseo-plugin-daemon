@@ -33,7 +33,11 @@ interface Props {
   densityDisabled: boolean;
   onDensityChange(value: CaptureDensityMode): void;
   captureQuality: BrowserDisplayPreferences["captureQuality"];
+  videoBitrate: BrowserDisplayPreferences["videoBitrate"];
+  videoFps: BrowserDisplayPreferences["videoFps"];
   onQualityChange(value: Props["captureQuality"]): void;
+  onVideoBitrateChange(value: Props["videoBitrate"]): void;
+  onVideoFpsChange(value: Props["videoFps"]): void;
 }
 function Choices<T extends string | number>(props: {
   theme: Props["theme"];
@@ -110,8 +114,25 @@ export function BrowserQualityControls(props: Props) {
         options={jpeg}
         onChange={props.onQualityChange}
       />
+      <Choices
+        theme={props.theme}
+        disabled={props.disabled}
+        title="Video bitrate"
+        value={props.videoBitrate}
+        options={VIDEO_BITRATES.map((value) => ({ value, label: `${value / 1_000_000} Mbps` }))}
+        onChange={props.onVideoBitrateChange}
+      />
+      <Choices
+        theme={props.theme}
+        disabled={props.disabled}
+        title="Video frame rate limit"
+        value={props.videoFps}
+        options={VIDEO_FRAME_RATES.map((value) => ({ value, label: `Up to ${value} FPS` }))}
+        onChange={props.onVideoFpsChange}
+      />
       <Text style={[styles.detail, { color: props.theme.colors.foregroundMuted }]}>
-        Large JPEGs may reduce quality to fit the frame limit. Capture density changes detail without resizing the page.
+        Large JPEGs may reduce quality to fit the frame limit. Video settings are targets and limits, not guaranteed delivery rates.
+        Other clients use JPEGs. Capture density changes detail without resizing the page.
       </Text>
     </View>
   );

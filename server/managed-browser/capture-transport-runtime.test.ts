@@ -211,3 +211,132 @@ it("reduces quality only to satisfy the byte cap and never substitutes a cached 
   expect((await runtime.frame(100, 70, 0)).transport).toBe("screenshot");
   expect(qualities).toEqual([DEFAULT_JPEG_QUALITY, 70, 65]);
 });
+
+it("keeps native video alive for valid JPEG stream and exact cached screenshot fastpaths", async () => {
+  const { runtime, emit } = fixture();
+  const firstStop = vi.fn(async () => {});
+  Object.assign(runtime, { video: { stop: firstStop } });
+  emit(1);
+  expect((await runtime.frame(100, DEFAULT_JPEG_QUALITY, 0)).transport).toBe("cdp-screencast");
+  expect(firstStop).not.toHaveBeenCalled();
+  const screenshot = await runtime.frame(100, 85, 0);
+  expect(firstStop).toHaveBeenCalledOnce();
+  const nextStop = vi.fn(async () => {});
+  Object.assign(runtime, { video: { stop: nextStop } });
+  expect(await runtime.frame(100, 85, 0)).toBe(screenshot);
+  expect(nextStop).not.toHaveBeenCalled();
+  await runtime.stopVideo();
+});
+
+describe("native snapshot capture path", () => {
+  function nativeFixture(snapshot: (control: Record<string, unknown>) => Promise<unknown>) {
+    const base = fixture();
+    const stop = vi.fn(async () => {});
+    const snapshotCalls: { quality: number; maxBytes: number }[] = [];
+    const internal = base.runtime as unknown as Record<string, unknown> & {
+      capturePolicy: { invalidate(): void };
+    };
+    const video = {
+      stop,
+      snapshot: vi.fn(async (input: { quality: number; maxBytes: number }) => {
+        snapshotCalls.push(input);
+        return snapshot(internal);
+      }),
+    };
+    Object.assign(base.runtime, { video, connection: { isOpen: true } });
+    return { ...base, stop, video, snapshotCalls, internal };
+  }
+  const live = (overrides: Record<string, unknown> = {}) => ({
+    dataBase64: jpeg(3),
+    byteLength: Buffer.byteLength(jpeg(3), "base64"),
+    width: 1280,
+    height: 800,
+    capturedAt: new Date(Date.now() - 200).toISOString(),
+    capturedAtMonotonicMs: clock - 200,
+    ...overrides,
+  });
+
+  it("serves quality-mismatch captures from the live track without stopping video or calling CDP", async () => {
+    const { runtime, calls, stop, snapshotCalls } = nativeFixture(async () => live());
+    const frame = await runtime.frame(100, 70, 0);
+    expect(frame).toMatchObject({ transport: "native-snapshot", width: 1280, height: 800 });
+    expect(frame.capturedAt).toBe(new Date(1_800_000_000_000 + 10_000 - 200).toISOString());
+    expect(snapshotCalls).toEqual([{ quality: 70, maxBytes: 100 }]);
+    expect(stop).not.toHaveBeenCalled();
+    expect(calls).not.toContain("Page.captureScreenshot");
+  });
+
+  it("serves unhealthy-stream fallback captures from the live track too", async () => {
+    const { runtime, calls, stop } = nativeFixture(async () => live());
+    const frame = await runtime.frame(100, DEFAULT_JPEG_QUALITY, 0);
+    expect(frame.transport).toBe("native-snapshot");
+    expect(stop).not.toHaveBeenCalled();
+    expect(calls).not.toContain("Page.captureScreenshot");
+  });
+
+  it("caches by quality with age measured from the source capture time, never relabelled as new", async () => {
+    const { runtime, snapshotCalls } = nativeFixture(async () => live());
+    const first = await runtime.frame(100, 70, 0);
+    clock += 700; // 900ms after source capture
+    expect(await runtime.frame(100, 70, 0)).toBe(first);
+    expect(snapshotCalls).toHaveLength(1);
+    clock += 200; // 1100ms after source capture, though only 900ms after arrival
+    const next = await runtime.frame(100, 70, 0);
+    expect(next).not.toBe(first);
+    expect(snapshotCalls).toHaveLength(2);
+  });
+
+  it("falls back to the arbitrated screenshot when the snapshot refuses or throws", async () => {
+    for (const refuse of [async () => null, async () => { throw new Error("helper refused"); }]) {
+      const { runtime, calls, stop } = nativeFixture(refuse);
+      const frame = await runtime.frame(100, 70, 0);
+      expect(frame.transport).toBe("screenshot");
+      expect(stop).toHaveBeenCalledOnce();
+      expect(calls).toContain("Page.captureScreenshot");
+    }
+  });
+
+  it.each([
+    ["document", (control: Record<string, unknown>) => { control.documentGeneration = Number(control.documentGeneration) + 1; }],
+    ["attachment", (control: Record<string, unknown>) => { control.attachmentGeneration = Number(control.attachmentGeneration) + 1; }],
+    ["viewport", (control: Record<string, unknown>) => { control.viewport = { ...(control.viewport as object) }; }],
+    ["capture policy", (control: Record<string, unknown> & { capturePolicy: { invalidate(): void } }) => { control.capturePolicy.invalidate(); }],
+  ])("refuses and never caches a snapshot whose %s changed while it was pending", async (_label, change) => {
+    const { runtime, calls, snapshotCalls } = nativeFixture(async (control) => {
+      change(control as never);
+      return live();
+    });
+    const frame = await runtime.frame(100, 70, 0);
+    expect(frame.transport).toBe("screenshot");
+    expect(calls).toContain("Page.captureScreenshot");
+    expect(snapshotCalls).toHaveLength(1);
+  });
+
+  it.each([
+    ["undecodable JPEG", { dataBase64: Buffer.from("not a jpeg").toString("base64"), byteLength: 10 }],
+    ["wrong reported size", { width: 1279 }],
+    ["bytes above the caller budget", { byteLength: 101 }],
+  ])("refuses a snapshot with %s", async (_label, overrides) => {
+    const { runtime, calls } = nativeFixture(async () => live(overrides));
+    expect((await runtime.frame(100, 70, 0)).transport).toBe("screenshot");
+    expect(calls).toContain("Page.captureScreenshot");
+  });
+
+  it("does not snapshot while video is retiring or when internally opted out", async () => {
+    const retiring = nativeFixture(async () => live());
+    Object.assign(retiring.runtime, { videoRetirement: Promise.resolve() });
+    expect((await retiring.runtime.frame(100, 70, 0)).transport).toBe("screenshot");
+    expect(retiring.snapshotCalls).toHaveLength(0);
+    const optedOut = nativeFixture(async () => live());
+    Object.assign(optedOut.runtime, { nativeSnapshots: false });
+    expect((await optedOut.runtime.frame(100, 70, 0)).transport).toBe("screenshot");
+    expect(optedOut.snapshotCalls).toHaveLength(0);
+  });
+
+  it("does not snapshot when a screencast frame or exact cache already answers", async () => {
+    const { runtime, emit, snapshotCalls } = nativeFixture(async () => live());
+    emit(1);
+    expect((await runtime.frame(100, DEFAULT_JPEG_QUALITY, 0)).transport).toBe("cdp-screencast");
+    expect(snapshotCalls).toHaveLength(0);
+  });
+});

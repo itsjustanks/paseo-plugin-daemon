@@ -16,6 +16,8 @@ it("retains current defaults and migrates the old coupled quality without losing
   );
   expect(browserDisplayPreferencesSchema.parse(migrated)).toEqual({
     captureQuality: "low",
+    videoBitrate: 2_000_000,
+    videoFps: 30,
     favoritePresetIds: ["pixel-7-sharp"],
   });
 });

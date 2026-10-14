@@ -22,13 +22,19 @@ The plugin is **Daemon Link**; its sidebar entry is **Hosts**, matching Paseo's 
 *Actual plugin components rendered with fictional data. Every screenshot in this repository uses
 an isolated preview: no real accounts, host addresses, project names, credentials, or conversations.*
 
-## Workspace browser in 0.21.0
+## Workspace browser
 
 Select the always-on remote host and open the workspace **Browser** panel. Press **Open browser**
 to start a private browser at `about:blank`. Its address bar, tabs, mouse and keyboard operate the same
 browser exposed to newly created supported workspace agents through `hosts-browser` MCP.
 Human control takes priority in this managed runtime. The browser stays on its host when you disconnect;
 a sleeping laptop cannot keep a browser running on that laptop.
+
+Supported web clients decode streamed video, with JPEG fallback. Display controls offer resolution,
+quality, bitrate and frame-rate ceilings; actual speed depends on the host, page and connection.
+An open managed browser adds a **Browser** shortcut to its workspace chats. Browser tool steps show
+compact status cards and an **Open Browser** action; screenshots remain in Paseo's native timeline.
+These cards describe what happened at that step, not the browser's current availability.
 
 **Watch external browser** in the Browser menu retains the existing read-only observer for independently
 started Agent Browser sessions. Hosts cannot enforce a control lease against an independent CLI.
@@ -50,7 +56,7 @@ background SSH, arbitrary saved commands, browser-control commands or automatic 
 offline, use the provider console. [Headless setup and recovery](docs/headless-setup.md).
 
 MIT sources: browser transport patterns adapted from [Omer Cohen's shared
-browser](https://github.com/omercnet/paseo-plugins/tree/daed6eb12f4156ca392f71c48e7a9ccca231ae8c/paseo-shared-browser)
+browser](https://github.com/omercnet/paseo-plugins/tree/504b5907a3b44d72c0a15757a9a9f6e7ca03dd29/paseo-shared-browser)
 ([retained notice](server/browser-LICENSE.txt)); cross-daemon adapted from
 [maxwell-01/maxs-paseo-plugins](https://github.com/maxwell-01/maxs-paseo-plugins/tree/975f8c4c062cb78ca82b203c8952e6c31621a9e6/cross-daemon)
 ([retained notice](docs/cross-daemon-LICENSE.txt)). See the pinned source notes for exact provenance.
@@ -602,7 +608,7 @@ framework handling, pressure thresholds, and known limitations.
 
 ## Paseo compatibility
 
-Hosts 0.21.0 requires Paseo **0.11.1 or newer**. Both entries compile and register with the real
+Hosts 0.22.0 requires Paseo **0.11.1 or newer**. Both entries compile and register with the real
 0.11.1 and 0.11.2 SDK/compiler under Node 22.23.2. There is no upper version bound. This release does
 not claim Paseo 0.9 compatibility. Existing core Node engine metadata remains `>=20.19.4`; the new
 browser bridge/bootstrap was exercised on Node 22.23.2. Its supervisor, MCP server and CLI wrapper

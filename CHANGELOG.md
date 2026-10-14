@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.22.0 — 2026-10-14
+
+- Add live video with bounded image fallback and display quality controls to the shared workspace
+  browser, adapted from Omer Cohen's MIT shared-browser plugin. See the
+  [source credits](docs/managed-browser-source.md) and [performance limits](docs/managed-browser.md).
+- Show browser tool results in chat history and an existing-browser shortcut in the composer.
+  Historical tab links never create a new browser. Summaries omit URL paths, queries and credentials.
+- Fix agent tab tools being rejected by the runtime parser and preserve request IDs in error replies.
+- Name the panel and chat actions Hosts Browser so sign-in happens in the correct browser session.
+- Serve agent images from an active video track where supported, and stop automatic image polling
+  after two consecutive failures until explicit recovery.
+- Use image updates by default on hidden Linux hosts. Private-display video is opt-in and requires
+  separately installed Xvfb; its live Linux acceptance is still incomplete.
+- Offer a confirmed restart of the previous Hosts browser runtime when upgrading from protocol 2.
+  All managed sessions on the selected host close; unsaved work may be lost. Saved profile folders
+  remain, uncertain outcomes stay blocked, and existing browser-enabled agents need new configuration.
+
 ## 0.21.1 — 2026-10-13
 
 - Add resource-aware instructions to new agents, preserving their existing prompt and

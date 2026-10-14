@@ -1,4 +1,4 @@
-export const RUNTIME_PROTOCOL_VERSION = 2 as const;
+export const RUNTIME_PROTOCOL_VERSION = 3 as const;
 export const DEFAULT_ORPHAN_GRACE_MS = 120_000;
 export const DEFAULT_BRIDGE_HEARTBEAT_MS = 10_000;
 export const DEFAULT_BRIDGE_TIMEOUT_MS = 30_000;
@@ -149,10 +149,18 @@ export function isRuntimeResponse(value: unknown): value is RuntimeResponse {
   );
 }
 
+/** Correlate refusals only with bounded opaque IDs emitted by the private clients. */
+export function readRuntimeRequestId(value: unknown): string | null {
+  if (!isRecord(value)) return null;
+  const id = value.id;
+  return typeof id === "string" && /^[A-Za-z0-9_-]{1,128}$/.test(id) ? id : null;
+}
+
 export function parseRuntimeRequest(value: unknown): RuntimeRequest {
   if (!isRecord(value))
     throw new RuntimeProtocolError("INVALID_REQUEST", "Request must be an object");
-  const id = requireString(value, "id");
+  const id = readRuntimeRequestId(value);
+  if (id === null) throw new RuntimeProtocolError("INVALID_REQUEST", "Invalid request ID");
   const method = requireString(value, "method");
   if (value.version !== RUNTIME_PROTOCOL_VERSION) {
     throw new RuntimeProtocolError(
@@ -297,7 +305,11 @@ function requireAgentOperation(value: unknown): AgentBrowserOperation {
     value === "release-control" ||
     value === "navigate" ||
     value === "input" ||
-    value === "viewport"
+    value === "viewport" ||
+    value === "tabs.list" ||
+    value === "tabs.create" ||
+    value === "tabs.select" ||
+    value === "tabs.close"
   )
     return value;
   throw new RuntimeProtocolError("INVALID_REQUEST", "Unknown agent browser operation");

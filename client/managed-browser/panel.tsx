@@ -1,21 +1,25 @@
-import type { PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 import { useRpc } from "@getpaseo/plugin/client";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, Pressable, Text, View } from "react-native";
 import { listOpenBrowserWorkspacesRpc } from "../../shared/managed-browser/browser";
+import { isBrowserRuntimeUpgradeRequired } from "../../shared/managed-browser/browser-runtime-upgrade";
 import { BrowserWorkspacePanel as ExternalBrowserPanel } from "../browser-sessions";
 import { observeBrowserVisibility } from "../browser-visibility";
 import { ManagedBrowserPanel } from "./browser";
+import { BrowserRuntimeUpgradeAction } from "./browser-runtime-upgrade";
+import type { ChatBrowserPanelProps } from "../browser-chat-navigation";
 
 /** Full-height workspace browser. Visibility releases viewer/input authority;
  * the daemon-owned runtime and agent work survive the client going away. */
-export function WorkspaceBrowserPanel(props: PluginWorkspacePanelProps) {
+export function WorkspaceBrowserPanel(props: ChatBrowserPanelProps) {
   return <WorkspaceBrowser key={`${props.host.id}:${props.workspaceId}`} {...props} />;
 }
-function WorkspaceBrowser(props: PluginWorkspacePanelProps) {
+function WorkspaceBrowser(props: ChatBrowserPanelProps) {
   const readPresence = useRpc(listOpenBrowserWorkspacesRpc);
   const [started, setStarted] = useState(false);
+  // The host/workspace key owns maintenance, not transient query errors.
+  const [runtimeUpgradeBlocked, setRuntimeUpgradeBlocked] = useState(false);
   const createPermit = useRef(false);
   const [external, setExternal] = useState(false);
   const [appActive, setAppActive] = useState(AppState.currentState == null || AppState.currentState === "active");
@@ -30,28 +34,44 @@ function WorkspaceBrowser(props: PluginWorkspacePanelProps) {
     return () => subscription.remove();
   }, []);
   const active = appActive && inView;
+  const targeted = props.initialTabId !== undefined;
   const presence = useQuery({ queryKey: ["hosts-managed-browser-presence", props.host.id, props.workspaceId],
-    queryFn: () => readPresence({}), enabled: active && !started, retry: false,
-    refetchInterval: active && !started ? 5_000 : false, gcTime: 0 });
-  const open = started || presence.data?.workspaceIds.includes(props.workspaceId);
+    queryFn: () => readPresence({}), enabled: active && !started && !targeted, retry: false,
+    refetchInterval: active && !started && !targeted && !runtimeUpgradeBlocked ? 5_000 : false, gcTime: 0 });
+  const upgradeRequired = runtimeUpgradeBlocked || isBrowserRuntimeUpgradeRequired(presence.error);
+  const open = !upgradeRequired && (targeted || started || presence.data?.workspaceIds.includes(props.workspaceId));
+  useEffect(() => {
+    if (isBrowserRuntimeUpgradeRequired(presence.error)) setRuntimeUpgradeBlocked(true);
+  }, [presence.error]);
   const colors = props.theme.colors;
   const button = (label: string, action: () => void) => <Pressable accessibilityRole="button"
     accessibilityLabel={label} onPress={action} style={{ minHeight: 44, padding: 12, justifyContent: "center" }}>
     <Text style={{ color: colors.accent }}>{label}</Text></Pressable>;
   return <View ref={root} collapsable={false} style={{ flex: 1, minHeight: 0, backgroundColor: colors.surface0 }}>
     {active ? external ? <>
-      {button("Back to workspace browser", () => setExternal(false))}
+      {button("Back to Hosts Browser", () => setExternal(false))}
       <ExternalBrowserPanel {...props} />
     </> : open ? <ManagedBrowserPanel {...props} createIfMissing={createPermit.current}
       onCreateAttempt={() => { createPermit.current = false; }} onWatchExternal={() => setExternal(true)} />
       : <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 8 }}>
-        <Text style={{ color: colors.foreground, fontSize: 18, fontWeight: "600" }}>Workspace browser</Text>
+        <Text style={{ color: colors.foreground, fontSize: 18, fontWeight: "600" }}>Hosts Browser</Text>
         <Text style={{ color: colors.foregroundMuted, maxWidth: 360, textAlign: "center" }}>
           You and new workspace agents use the same browser on this host. It keeps running when you disconnect.
         </Text>
-        {button("Open browser", () => { createPermit.current = true; setStarted(true); })}
+        {upgradeRequired ? <>
+          <Text style={{ color: colors.foregroundMuted, maxWidth: 360, textAlign: "center" }}>
+            The previous Hosts browser runtime must be restarted before this browser can connect.
+          </Text>
+          <BrowserRuntimeUpgradeAction key={props.host.id} theme={props.theme} hostLabel={props.host.label}
+            onVerified={() => {
+              setRuntimeUpgradeBlocked(false);
+              createPermit.current = false;
+              setStarted(false);
+              void presence.refetch();
+            }} />
+        </> : button("Open Hosts Browser", () => { createPermit.current = true; setStarted(true); })}
         {button("Watch external browser", () => setExternal(true))}
-        {presence.error ? <Text style={{ color: colors.statusDanger }}>{presence.error.message}</Text> : null}
+        {presence.error && !upgradeRequired ? <Text style={{ color: colors.statusDanger }}>{presence.error.message}</Text> : null}
       </View> : null}
   </View>;
 }

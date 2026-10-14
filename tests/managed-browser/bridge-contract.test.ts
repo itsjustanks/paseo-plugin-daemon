@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -28,6 +29,11 @@ it("registers real bridge contracts, preserves agent configuration, enforces hum
       if (operation === "tabs.create") { tabCount = 2; return { targetId: "tab-two" }; }
       if (operation === "tabs.close") tabCount = 1;
       if (operation === "frame") { const bytes = Buffer.from("fixture-frame"); return { transport: "cdp-screencast", dataBase64: bytes.toString("base64"), byteLength: bytes.length, width: state.width, height: state.height, capturedAt: new Date().toISOString() }; }
+      if (operation === "video.read") return { status: "ready", streamId: "v".repeat(32), inputGeneration: "0:0", packets: [{
+        streamId: "v".repeat(32), captureGeneration: 1, sequence: 1, timestampUs: 1000, type: "key", codec: "vp8",
+        width: state.width, height: state.height, dataBase64: Buffer.alloc(512 * 1024).toString("base64"),
+        capturedAt: new Date().toISOString(), capturedAtMonotonicMs: performance.now(),
+      }] };
       if (operation === "cursor") return "default";
       return null;
     },
@@ -69,6 +75,14 @@ it("registers real bridge contracts, preserves agent configuration, enforces hum
     const viewerToken = attached.viewerToken;
     const controlled = await rpc("control.acquire", { viewerToken, takeover: true });
     const controlToken = controlled.controlToken;
+    const video = await rpc("video.read", { viewerToken });
+    expect(video.status).toBe("ready"); expect(video.packets).toHaveLength(1);
+    expect(video.packets[0].actionable).toBe(true);
+    expect(video.packets[0].frame.runtimeId).toBe(controlled.state.runtimeId);
+    // Real registered RPC -> authenticated socket -> policy -> packet back through the 1 MiB envelope.
+    expect(Buffer.byteLength(JSON.stringify({ id: randomUUID(), ok: true, result: video }))).toBeLessThan(1024 * 1024);
+    expect(Buffer.from(video.packets[0].dataBase64, "base64")).toHaveLength(512 * 1024);
+
     await expect(agent.request("navigate", { action: { kind: "goto", url: "https://fixture.invalid/" } })).rejects.toThrow();
     let state = controlled.state;
     const expected = () => ({ sessionId: state.sessionId, navigationGeneration: state.navigationGeneration, viewportGeneration: state.viewportGeneration });

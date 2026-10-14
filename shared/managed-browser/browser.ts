@@ -95,7 +95,7 @@ export const browserFrameSchema = z.object({
   sessionId: opaqueTokenSchema,
   frameId: opaqueTokenSchema,
   mimeType: z.literal("image/jpeg"),
-  transport: z.enum(["cdp-screencast", "screenshot"]),
+  transport: z.enum(["cdp-screencast", "screenshot", "native-snapshot"]),
   dataBase64: z.string().max(FRAME_MAX_BASE64_CHARS),
   byteLength: z.number().int().positive().max(FRAME_MAX_BYTES),
   width: z.number().int().positive().max(MAX_VIEWPORT.width),

@@ -97,6 +97,8 @@ describe("resolution choices and host preferences", () => {
     expect(browserDisplayPreferencesSchema.parse({})).toEqual({
       favoritePresetIds: [],
       captureQuality: "medium",
+      videoBitrate: 12_000_000,
+      videoFps: 30,
     });
     expect(
       browserDisplayPreferencesSchema.parse({ favoritePresetIds: ["retired"] }).favoritePresetIds,
@@ -115,4 +117,13 @@ describe("resolution choices and host preferences", () => {
       }).success,
     ).toBe(false);
   });
+});
+
+it("reads existing image-only preferences with independent video defaults and preserves favorites", () => {
+  const saved = { captureQuality: "low", favoritePresetIds: ["pixel-7"] };
+  const values = browserDisplayPreferencesSchema.parse(saved);
+  expect(values).toEqual({ ...saved, videoBitrate: 12_000_000, videoFps: 30 });
+  expect(saved).not.toHaveProperty("videoBitrate");
+  expect(browserDisplayPreferencesSchema.safeParse({ ...values, videoFps: 120 }).success).toBe(false);
+  expect(browserDisplayPreferencesSchema.safeParse({ ...values, videoBitrate: 100_000_000 }).success).toBe(false);
 });

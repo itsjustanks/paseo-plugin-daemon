@@ -1,11 +1,13 @@
 # Feature sources and integration status
 
-Hosts 0.21.0 uses these supplied references. A link does not mean the upstream plugin or runtime is
+Hosts uses these supplied references. A link does not mean the upstream plugin or runtime is
 installed, bundled, or fully reproduced.
 
 - **[Shared browser][shared-browser]** — adapted a cohesive managed workspace subsystem for control,
-  input, tabs, JPEG capture, private runtime and workspace MCP, alongside the earlier external observer.
-  Optional video is inaccessible. Source revision `daed6eb12f4156ca392f71c48e7a9ccca231ae8c`;
+  input, tabs, video/JPEG capture, display controls, private runtime and workspace MCP, alongside the
+  earlier external observer. Composer browser presence also adapts upstream code. Base source revision
+  `daed6eb12f4156ca392f71c48e7a9ccca231ae8c`; streaming updates checked against
+  `504b5907a3b44d72c0a15757a9a9f6e7ca03dd29`;
   [retained notices and adaptations](managed-browser-source.md), [managed setup](managed-browser.md),
   and [external observation limits](browser-viewing.md).
 - **[Top][top]** — resource-monitoring design reference.
@@ -30,7 +32,7 @@ installed, bundled, or fully reproduced.
   features, not a devbox-fleet integration.
 
 [shared-browser]:
-  https://github.com/omercnet/paseo-plugins/tree/daed6eb12f4156ca392f71c48e7a9ccca231ae8c/paseo-shared-browser
+  https://github.com/omercnet/paseo-plugins/tree/504b5907a3b44d72c0a15757a9a9f6e7ca03dd29/paseo-shared-browser
 [top]:
   https://github.com/xpufx/paseo/tree/db0d84781271d655afb025d0e4d217cb2c6c288b/plugins/top
 [continuity]:

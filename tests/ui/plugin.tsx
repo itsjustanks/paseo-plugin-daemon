@@ -230,6 +230,10 @@ const paseo = params.has("noagents") ? null : {
   terminals: { create: async () => ({ id: "term-1" }) },
 };
 export function useHosts() { return fixtureHosts; }
+export function useAgent<T>(id: string, selector: (agent: (typeof fakeAgents)[number]) => T): T | undefined {
+  const agent = fakeAgents.find((entry) => entry.id === id);
+  return agent ? selector(agent) : undefined;
+}
 export function usePaseo() { return paseo; }
 export function useRpc(contract: { name: string }) { return useCallback((input: unknown) => stub(contract.name, input), [contract.name]); }
 const toasts: string[] = [];

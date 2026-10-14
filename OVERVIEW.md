@@ -1,4 +1,4 @@
-# Hosts 0.20.0
+# Hosts
 
 See CPU, memory, disk use and dev servers on the selected Paseo host. Processes offers All processes,
 Heavy jobs, Browsers and Housekeeping views. Review a process tree before stopping it; protected agents
@@ -13,9 +13,11 @@ project and port scope; inventory alone does not authorise automatic stops.
 
 ## Work with an always-on remote host
 
-- Watch existing Agent Browser sessions through authenticated Paseo RPC inside a native workspace panel.
-  Workspace actions show verified attribution. Closing or hiding the viewer releases capture and preserves
-  the browser. Hosts does not install or start browsers, navigate, activate tabs or change their viewport.
+- Open the workspace Browser to share tabs, navigation and input with new workspace agents. Human control
+  takes priority. Supported web clients use video with JPEG fallback; hiding the panel detaches its viewer.
+  The browser keeps running on the selected host. Browser cards and a shortcut connect this view to chats.
+- Watch external Agent Browser sessions separately. This observer checks process and endpoint ownership
+  and does not control, navigate or close an independently launched browser.
 - Connections guides optional agent access across computers, off by default. Explicit confirmation shares
   full daemon authority between opted-in hosts, separately from restricted app and file access.
   Turning it off does not revoke pairing links already shared.
@@ -25,11 +27,12 @@ project and port scope; inventory alone does not authorise automatic stops.
 
 ## Setup and limits
 
-Use Paseo 0.9 or newer. Connected-host coordination requires newer connected-host APIs; unavailable
-runtimes show an update explanation. Install browser dependencies deliberately on the host running the
-agent. Agent Browser 0.27.0 local Chromium TCP sessions are supported when fresh same-user IPC, process
+The managed workspace browser requires Paseo 0.11.1 or newer and prepared private assets. Connected-host
+coordination requires connected-host APIs; unavailable runtimes show an update explanation.
+External Agent Browser 0.27.0 local Chromium TCP sessions are supported when fresh same-user IPC, process
 and exact loopback listener ownership can be proven. Pipe-only, external or ambiguous sessions explain
-why attach is unavailable. Capture is bounded to roughly one frame per second; the agent keeps control.
+why attach is unavailable. External observation is bounded to roughly one frame per second; the agent
+keeps control. It is distinct from the managed browser's video and human-control path.
 
 For laptop-off use, run the agent and browser on an always-on remote host. A sleeping laptop cannot keep
 its own local host running. Paseo's desktop browser navigation opens a local tab and is separate from

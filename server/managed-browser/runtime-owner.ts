@@ -1,6 +1,6 @@
 import { setTimeout } from "./node-timers";
 import { createHash, randomUUID } from "node:crypto";
-import { homedir } from "node:os";
+import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { browserGestureKeySchema, MAX_BROWSER_TABS } from "../../shared/managed-browser/browser";
 import { videoBitrateSchema, videoFrameRateSchema } from "../../shared/managed-browser/video-settings";
@@ -17,6 +17,8 @@ import type { RuntimeOwner } from "./supervisor";
 import {
   createPrivateVirtualDisplay,
   PrivateDisplayError,
+  PrivateDisplayCleanupError,
+  assertNoRetainedDisplay,
   type PrivateVirtualDisplay,
 } from "./virtual-display";
 
@@ -39,12 +41,11 @@ interface RuntimeOwnerOptions {
   initialUrl?: string;
   headed?: boolean;
   /**
-   * Trusted opt-in for a private Linux Xvfb display. When omitted, each runtime creation reads
-   * HOSTS_BROWSER_XVFB from this process's environment and enables it only for "1".
-   * Explicit false overrides the environment.
+   * Trusted opt-in for an owned Linux display. When omitted, only HOSTS_BROWSER_XVFB=1
+   * enables it. Explicit false wins. An inherited display is never adopted.
    */
   virtualDisplay?: boolean;
-  /** Encoded video is opt-in; defaults to HOSTS_BROWSER_VIDEO=1 in the daemon environment. */
+  /** Video is requested by default, subject to display capability on Linux. */
   nativeVideo?: boolean;
 }
 
@@ -130,17 +131,23 @@ export async function createRuntimeOwner(
   return {
     async create(workspaceId) {
       const hash = createHash("sha256").update(workspaceId).digest("hex");
-      // Explicit headed mode uses the caller's real display. An opted-in hidden Linux mode
-      // gets a private virtual mouse so native pointer media survive emulation.
+      // Explicit headed mode uses the caller's real display. Hidden Linux must
+      // have an owned display before loading the video extension: agent-browser
+      // treats extension launches as headed even when --headed is omitted.
       let display: PrivateVirtualDisplay | null = null;
       let displayNotice: string | null = null;
-      const wantsDisplay = false;
-      if (!options.headed && wantsDisplay) {
+      const displayRoot = join(root, "displays", hash);
+      if (platform() === "linux") await assertNoRetainedDisplay(displayRoot);
+      const videoRequested = options.nativeVideo ?? process.env.HOSTS_BROWSER_VIDEO !== "0";
+      const wantsDisplay = platform() === "linux" && !options.headed && videoRequested &&
+        (options.virtualDisplay ?? process.env.HOSTS_BROWSER_XVFB === "1");
+      if (wantsDisplay) {
         try {
-          display = await createPrivateVirtualDisplay();
+          display = await createPrivateVirtualDisplay({ root: displayRoot });
           if (!display) displayNotice = "Private display unavailable: Xvfb was not found.";
         } catch (error) {
-          // The helper has finished cleanup and no Chromium was constructed yet.
+          if (error instanceof PrivateDisplayCleanupError) throw error;
+          // Only confirmed display cleanup permits the pre-launch image fallback.
           displayNotice = `Private display unavailable: ${
             error instanceof PrivateDisplayError ? error.message : "unexpected startup failure"
           }.`;
@@ -149,6 +156,11 @@ export async function createRuntimeOwner(
           // The detached supervisor discards stdio; the notice also reaches the viewer state.
           console.warn(`[hosts-browser] ${displayNotice} Using headless mode.`);
         }
+      }
+      const nativeVideo = videoRequested &&
+        (platform() !== "linux" || options.headed === true || display !== null);
+      if (videoRequested && !nativeVideo && !displayNotice) {
+        displayNotice = "Live video isn't available without a virtual display on this computer.";
       }
       let runtime: AgentBrowserRuntime | null = null;
       try {
@@ -160,7 +172,7 @@ export async function createRuntimeOwner(
           session: `ws-${hash.slice(0, 16)}`,
           initialUrl: options.initialUrl ?? DEFAULT_BROWSER_URL,
           headed: display ? true : (options.headed ?? false),
-          nativeVideo: false,
+          nativeVideo,
           ...(display ? { launchEnvironment: display.launchEnvironment } : {}),
         };
         runtime = new AgentBrowserRuntime(runtimeOptions);
@@ -183,14 +195,16 @@ export async function createRuntimeOwner(
           await runtime?.shutdown();
         } catch (failure) {
           cleanupFailure = failure;
-        } finally {
-          await display?.stop();
+        }
+        // A still-unconfirmed browser must keep its display reservation and authority.
+        if (!cleanupFailure) {
+          try { await display?.stop(); } catch (failure) { cleanupFailure = failure; }
         }
         // An unconfirmed cleanup must not hide why creation failed.
         if (cleanupFailure)
           throw new AggregateError(
             [error, cleanupFailure],
-            `Runtime creation failed (${error instanceof Error ? error.message : String(error)}) and its cleanup was not confirmed`,
+            "Runtime creation failed and its cleanup was not confirmed",
           );
         throw error;
       }
@@ -441,16 +455,14 @@ export async function createRuntimeOwner(
       }
     },
     async stop(owned) {
-      try {
-        await Promise.allSettled(
-          [...owned.tabs.values()].map(async (controller) =>
-            (await controller).shutdown().catch(() => undefined),
-          ),
-        );
-        await owned.runtime.shutdown();
-      } finally {
-        await owned.display?.stop();
-      }
+      await Promise.allSettled(
+        [...owned.tabs.values()].map(async (controller) =>
+          (await controller).shutdown().catch(() => undefined),
+        ),
+      );
+      // Do not remove a display that an unconfirmed Chromium shutdown may still use.
+      await owned.runtime.shutdown();
+      await owned.display?.stop();
     },
   };
 }

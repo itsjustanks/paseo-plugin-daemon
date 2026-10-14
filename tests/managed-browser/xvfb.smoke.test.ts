@@ -81,7 +81,7 @@ async function harness(env: Record<string, string | undefined>, virtualDisplay?:
   const lease = supervisor.claimBridge("xvfb-smoke");
   const request = async <T>(operation: string, input: unknown): Promise<T> =>
     (await supervisor.dispatch({
-      version: 2,
+      version: 3,
       id: "xvfb-smoke",
       token: "unused-by-direct-fixture",
       bridgeId: "xvfb-smoke",

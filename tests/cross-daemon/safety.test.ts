@@ -188,9 +188,12 @@ describe("credential containment", () => {
 
 it("shares the four-call transport limit across actual registered MCP tool requests", async () => {
   let active = 0; let peak = 0; let calls = 0;
+  let releaseFirstFour!: () => void;
+  const firstFour = new Promise<void>((resolve) => { releaseFirstFour = resolve; });
   const t = fixture({ run: async () => {
     active++; peak = Math.max(peak, active); calls++;
-    try { await new Promise<void>((resolve) => setTimeout(resolve, 2)); return "[]"; }
+    if (calls === 4) releaseFirstFour();
+    try { await firstFour; return "[]"; }
     finally { active--; }
   } });
   await t.ready(); await t.call("set-peers", { peers: [peer], answeredServerIds: [] });

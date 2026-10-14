@@ -1714,7 +1714,9 @@ export class SessionManager {
       cached &&
       typeof raw.capturedAt === "string" &&
       Number.isFinite(Date.parse(raw.capturedAt)) &&
-      (raw.transport === "screenshot" || raw.transport === "cdp-screencast") &&
+      (raw.transport === "screenshot" ||
+        raw.transport === "cdp-screencast" ||
+        raw.transport === "native-snapshot") &&
       session.frameCache.get(quality) === cached &&
       cached.frame.sessionId === generation.sessionId &&
       cached.frame.runtimeId === generation.runtimeId &&
@@ -1732,7 +1734,11 @@ export class SessionManager {
     const frame: BrowserFrame = {
       frameId: this.issueUniqueToken(),
       mimeType: "image/jpeg",
-      transport: raw.transport === "cdp-screencast" ? "cdp-screencast" : "screenshot",
+      // Preserve known provenance; any other value keeps the legacy screenshot label.
+      transport:
+        raw.transport === "cdp-screencast" || raw.transport === "native-snapshot"
+          ? raw.transport
+          : "screenshot",
       dataBase64,
       byteLength,
       width: Number(raw.width),

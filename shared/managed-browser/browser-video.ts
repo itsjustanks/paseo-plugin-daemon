@@ -1,6 +1,6 @@
 /**
  * Encoded browser-tab video over the existing authenticated Paseo RPC transport.
- * Opt-in on the daemon and decoded by WebCodecs on the web; every other client retains JPEG.
+ * Enabled by the managed owner and decoded by WebCodecs on the web; every other client retains JPEG.
  * Packets never grant control; only a decoded
  * presentation with current browser authority can provide an input target.
  */
@@ -10,8 +10,10 @@ import { browserFrameSchema, browserStateSchema } from "./browser";
 import { videoBitrateSchema, videoFrameRateSchema } from "./video-settings";
 import { MAX_VIEWPORT } from "./viewport-limits";
 
-export const VIDEO_MAX_PACKET_BYTES = 2 * 1024 * 1024;
-export const VIDEO_MAX_BATCH_BYTES = 4 * 1024 * 1024;
+export const VIDEO_MAX_PACKET_BYTES = 512 * 1024;
+export const VIDEO_MAX_BATCH_BYTES = 512 * 1024;
+/** JSON/base64 packet budget reserves space for policy receipts and state in the 1 MiB IPC envelope. */
+export const VIDEO_MAX_BATCH_WIRE_BYTES = 768 * 1024;
 export const VIDEO_MAX_BATCH_PACKETS = 32;
 export const VIDEO_MAX_WAIT_MS = 500;
 export const VIDEO_FRAME_RATE = 30;

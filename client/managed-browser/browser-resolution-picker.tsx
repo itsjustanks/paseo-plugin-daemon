@@ -25,6 +25,10 @@ export interface BrowserResolutionPickerProps {
   viewport: { width: number; height: number } | null;
   onDensityChange(value: CaptureDensityMode): void;
   captureQuality: BrowserDisplayPreferences["captureQuality"];
+  videoBitrate: BrowserDisplayPreferences["videoBitrate"];
+  videoFps: BrowserDisplayPreferences["videoFps"];
+  onVideoBitrateChange(value: BrowserDisplayPreferences["videoBitrate"]): void;
+  onVideoFpsChange(value: BrowserDisplayPreferences["videoFps"]): void;
   onSelect(id: DevicePresetId): void;
   onToggleFavorite(id: DevicePresetId): void;
   onQualityChange(quality: BrowserDisplayPreferences["captureQuality"]): void;
@@ -174,7 +178,11 @@ export function BrowserResolutionPicker(props: BrowserResolutionPickerProps) {
         onDensityChange={props.onDensityChange}
         disabled={props.favoriteDisabled}
         captureQuality={props.captureQuality}
+        videoBitrate={props.videoBitrate}
+        videoFps={props.videoFps}
         onQualityChange={props.onQualityChange}
+        onVideoBitrateChange={props.onVideoBitrateChange}
+        onVideoFpsChange={props.onVideoFpsChange}
       />
     </View>
   );

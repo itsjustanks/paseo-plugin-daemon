@@ -32,6 +32,7 @@ import {
   DEFAULT_ORPHAN_GRACE_MS,
   type JsonValue,
   parseRuntimeRequest,
+  readRuntimeRequestId,
   RUNTIME_PROTOCOL_VERSION,
   type RuntimeDescriptor,
   RuntimeLostError,
@@ -1501,6 +1502,7 @@ async function handleLine<Runtime extends RuntimeInstance>(
   let id = "unknown";
   try {
     const raw: unknown = JSON.parse(line);
+    id = readRuntimeRequestId(raw) ?? "unknown";
     const request = parseRuntimeRequest(raw);
     id = request.id;
     if (request.method !== "agent.request" && !tokensEqual(request.token, token))

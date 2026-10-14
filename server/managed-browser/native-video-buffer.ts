@@ -1,6 +1,7 @@
 /** Bounded per-encoder packet history. Gaps return a fresh keyframe, never a broken delta chain. */
 import {
   VIDEO_MAX_BATCH_BYTES,
+  VIDEO_MAX_BATCH_WIRE_BYTES,
   VIDEO_MAX_BATCH_PACKETS,
   VIDEO_SOURCE_CLOCK_TOLERANCE_MS,
 } from "../../shared/managed-browser/browser-video";
@@ -101,10 +102,16 @@ export function createNativeVideoBuffer() {
         return [];
       }
       let batchBytes = 0;
+      let wireBytes = 0;
       const batch: RuntimeVideoPacket[] = [];
       for (const packet of candidates) {
         const packetBytes = size(packet);
-        if (batchBytes + packetBytes > VIDEO_MAX_BATCH_BYTES) break;
+        // Include base64, codec description and metadata, plus the policy receipt.
+        // Do not skip a delta to fit; the next cursor read continues this exact chain.
+        const packetWireBytes = Buffer.byteLength(JSON.stringify(packet)) + 4096;
+        if (batchBytes + packetBytes > VIDEO_MAX_BATCH_BYTES ||
+            wireBytes + packetWireBytes > VIDEO_MAX_BATCH_WIRE_BYTES) break;
+        wireBytes += packetWireBytes;
         batchBytes += packetBytes;
         batch.push(packet);
       }

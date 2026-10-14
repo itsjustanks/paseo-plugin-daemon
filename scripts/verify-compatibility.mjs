@@ -112,17 +112,32 @@ async function checkServer(bundle, version) {
 
 async function checkClient(bundle, version, supportsShortcuts) {
   const registrations = new Map();
+  const browserPills = [];
+  const removed = [];
+  const openedPanels = [];
+  const rpcNames = [];
   const context = {
-    rpc: async () => ({ status: "ready", values: { showComposerPill: false } }),
+    openPanel: (...args) => openedPanels.push(args),
+    rpc: async (contract) => {
+      rpcNames.push(contract.name);
+      return contract.name === "daemon-link.browser.managed.presence"
+        ? { workspaceIds: ["fixture-workspace"] }
+        : { status: "ready", values: { showComposerPill: false } };
+    },
     paseo: {
       observeEvents() {},
-      agents: { list: async () => ({ entries: [], subscription: {
+      agents: { list: async () => ({ entries: [{ agent: { id: "fixture-agent", workspaceId: "fixture-workspace" } }],
+        pageInfo: { hasMore: false, nextCursor: null }, subscription: {
         subscribe: () => () => {}, release: async () => {},
       } }) },
     },
   };
   for (const method of ["addSurface", "addSidebarItem", "addWorkspacePanel", "addSettingsScreen", "addCommandCenterItem"]) {
-    context[method] = (...args) => { registrations.set(method, args); return () => {}; };
+    context[method] = (...args) => {
+      registrations.set(method, args);
+      if (args[0]?.id) registrations.set(`${method}:${args[0].id}`, args[0]);
+      return () => {};
+    };
   }
   if (["0.11.1", "0.11.2"].includes(version)) for (const method of ["addScreen", "addSidebarHeaderItem"]) {
     context[method] = (...args) => { registrations.set(method, args); return () => {}; };
@@ -131,6 +146,19 @@ async function checkClient(bundle, version, supportsShortcuts) {
   if (supportsShortcuts) context.addSlashCommand = (...args) => {
     registrations.set(`slash:${args[0].name}`, args[0]); return () => {};
   };
+  if (supportsShortcuts) {
+    context.addHeaderButton = () => () => {};
+    context.addComposerPill = (pill) => {
+      browserPills.push(pill);
+      return { update() {}, remove() { removed.push(pill.id); } };
+    };
+    for (const method of ["addTimelineTransformer", "addTimelineRenderer"]) {
+      context[method] = (value) => {
+        registrations.set(method, value);
+        return () => removed.push(method);
+      };
+    }
+  }
   const cleanup = evaluate(bundle, "client")(context);
   assert.equal(typeof cleanup, "function");
   try {
@@ -144,6 +172,7 @@ async function checkClient(bundle, version, supportsShortcuts) {
       assert.equal(registrations.get("addSidebarItem")[0].title, "Hosts");
     }
     assert.equal(registrations.get("addWorkspacePanel")[0].id, "daemon-link");
+    assert.equal(registrations.get("addWorkspacePanel:hosts-browser").context, "workspace");
     assert.equal(registrations.get("addSettingsScreen")[0].id, "hosts");
     assert.equal(registrations.has("slash:hosts"), supportsShortcuts);
     const Surface = ["0.11.1", "0.11.2"].includes(version) ? registrations.get("addScreen")[0].Component : registrations.get("addSurface")[1];
@@ -154,8 +183,31 @@ async function checkClient(bundle, version, supportsShortcuts) {
       assert.equal(command.name, "hosts");
       command.onSubmit({ openPanel(id) { opened = id; } });
       assert.equal(opened, "daemon-link");
+      await new Promise((resolve) => setImmediate(resolve));
+      const transform = registrations.get("addTimelineTransformer").transform;
+      const renderer = registrations.get("addTimelineRenderer");
+      const original = { type: "tool_call", name: "hosts-browser.hosts_browser_navigate", status: "completed",
+        detail: { type: "unknown", output: { state: { workspaceId: "fixture-workspace", tabId: "fixture-tab", title: "Fixture", url: "https://example.test/path?query=private" } } } };
+      const [item] = transform({ item: original, phase: "live" }).items;
+      assert.equal(item.kind, renderer.kind);
+      assert.equal(renderer.schema.parse(item.data).origin, "https://example.test");
+      assert.equal(transform({ item: { type: "assistant_image", data: "fixture" } }), undefined);
+      const pill = browserPills.find((entry) => entry.id === "hosts-workspace-browser");
+      assert(pill, "Compiled presence adds a shortcut only to the known open workspace");
+      assert.equal(pill.agentId, "fixture-agent");
+      pill.button.behavior.onPress();
+      assert.deepEqual(openedPanels.at(-1), ["hosts-browser", { workspaceId: "fixture-workspace", agentId: "fixture-agent" }]);
+      assert(rpcNames.includes("daemon-link.browser.managed.presence"));
+      assert(!rpcNames.some((name) => /managed\.(attach|input|control|navigate)/.test(name)), "Registration does not open or control a browser");
     }
   } finally { await cleanup(); await cleanup(); }
+  if (supportsShortcuts) {
+    for (const name of ["addTimelineTransformer", "addTimelineRenderer", "hosts-workspace-browser"])
+      assert.equal(removed.filter((entry) => entry === name).length, 1, `Cleanup releases ${name} once`);
+  } else {
+    assert.equal(browserPills.length, 0);
+    assert(!registrations.has("addTimelineTransformer"));
+  }
   console.log(`${version}: client registrations verified; composer shortcut ${supportsShortcuts ? "enabled" : "hidden"}`);
 }
 

@@ -85,6 +85,73 @@ function setup() {
   return { runtime, internal, page, connection };
 }
 describe("native video runtime fence", () => {
+  it("awaits native stop before screenshot and fences video reads until current pixels finish", async () => {
+    const { runtime, internal, page } = setup();
+    const stopping = Promise.withResolvers<void>();
+    const stopStarted = Promise.withResolvers<void>();
+    const screenshot = Promise.withResolvers<{ data: string }>();
+    const screenshotStarted = Promise.withResolvers<void>();
+    const data = Buffer.from([255,216,255,192,0,11,8,6,142,3,56,1,1,17,0,255,217]).toString("base64");
+    page.send.mockImplementation(async (method: string) => {
+      if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { pageX: 0, pageY: 0 } };
+      if (method === "Page.captureScreenshot") { screenshotStarted.resolve(); return screenshot.promise; }
+      return {};
+    });
+    await runtime.readVideo({ quality: "high", waitMs: 0 });
+    const former = fixture.captures[0]!;
+    former.stop.mockImplementationOnce(() => { stopStarted.resolve(); return stopping.promise; });
+    const pending = runtime.frame(100, 85, 0);
+    await stopStarted.promise;
+    expect(page.send).not.toHaveBeenCalledWith("Page.captureScreenshot", expect.anything());
+    expect((await runtime.readVideo({ quality: "high", waitMs: 0 })).status).toBe("reset");
+    internal.documentGeneration += 1;
+    stopping.resolve();
+    await screenshotStarted.promise;
+    expect((await runtime.readVideo({ quality: "high", waitMs: 0 })).status).toBe("reset");
+    screenshot.resolve({ data });
+    expect((await pending).transport).toBe("screenshot");
+    const fresh = await runtime.readVideo({ quality: "high", waitMs: 0 });
+    expect(fresh.status).toBe("ready");
+    expect(fresh.inputGeneration).toBe(`${internal.attachmentGeneration}:${internal.documentGeneration}`);
+    expect(fixture.captures).toHaveLength(2);
+    expect((fixture.captures[1]!.options as { isCurrent(): boolean }).isCurrent()).toBe(true);
+    await runtime.stopVideo();
+  });
+
+  it("does not bypass a native retirement already started by a video reader", async () => {
+    const { runtime, page } = setup();
+    const closing = Promise.withResolvers<void>();
+    const closeStarted = Promise.withResolvers<void>();
+    const data = Buffer.from([255,216,255,192,0,11,8,6,142,3,56,1,1,17,0,255,217]).toString("base64");
+    page.send.mockImplementation(async (method: string) => {
+      if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { pageX: 0, pageY: 0 } };
+      if (method === "Page.captureScreenshot") return { data };
+      return {};
+    });
+    await runtime.readVideo({ quality: "high", waitMs: 0 });
+    const former = fixture.captures[0]!;
+    former.idleExpired = true;
+    former.stop.mockImplementationOnce(() => { closeStarted.resolve(); return closing.promise; });
+    expect((await runtime.readVideo({ quality: "high", waitMs: 0 })).status).toBe("reset");
+    await closeStarted.promise;
+    const pending = runtime.frame(100, 85, 0);
+    try {
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect(page.send.mock.calls.some(([method]) => method === "Page.captureScreenshot")).toBe(false);
+    } finally { closing.resolve(); }
+    expect((await pending).transport).toBe("screenshot");
+    await runtime.stopVideo();
+  });
+
+  it("does not publish a screenshot when native stop rejects", async () => {
+    const { runtime, page } = setup();
+    await runtime.readVideo({ quality: "high", waitMs: 0 });
+    fixture.captures[0]!.stop.mockRejectedValueOnce(new Error("Owned helper stop failed"));
+    await expect(runtime.frame(100, 85, 0)).rejects.toThrow("Owned helper stop failed");
+    expect(page.send.mock.calls.some(([method]) => method === "Page.captureScreenshot")).toBe(false);
+    await runtime.stopVideo();
+  });
+
   it.each(["startup", "source-stopped", "source-reset"] as const)(
     "retires %s failure under continued demand and retries only after cooldown",
     async (failure) => {
@@ -441,5 +508,59 @@ describe("native video runtime fence", () => {
     await shutdown;
     expect((await runtime.readVideo({ quality: "high", waitMs: 0 })).status).toBe("reset");
     expect(fixture.captures).toHaveLength(0);
+  });
+});
+
+describe("native snapshot keeps the healthy video instance", () => {
+  const data = Buffer.from([255,216,255,192,0,11,8,6,142,3,56,1,1,17,0,255,217]).toString("base64");
+  function liveSnapshot(onSnapshot: () => void = () => {}) {
+    return vi.fn(async () => {
+      onSnapshot();
+      // Older than the 1s cache window, so every agent capture asks the track again.
+      return {
+        dataBase64: data,
+        byteLength: Buffer.byteLength(data, "base64"),
+        width: 824,
+        height: 1678,
+        capturedAt: new Date(Date.now() - 1_100).toISOString(),
+        capturedAtMonotonicMs: performance.now() - 1_100,
+      };
+    });
+  }
+
+  it("15 agent captures against live video cause no stop, no replacement and no reset", async () => {
+    const { runtime, page } = setup();
+    expect((await runtime.readVideo({ quality: "high", waitMs: 0 })).status).toBe("ready");
+    const capture = fixture.captures[0]! as (typeof fixture.captures)[number] & { snapshot?: unknown };
+    const snapshot = liveSnapshot();
+    capture.snapshot = snapshot;
+    for (let cycle = 0; cycle < 15; cycle++) {
+      expect((await runtime.frame(600_000, 85, 0)).transport).toBe("native-snapshot");
+      expect((await runtime.readVideo({ quality: "high", waitMs: 0 })).status).toBe("ready");
+    }
+    expect(snapshot).toHaveBeenCalledTimes(15);
+    expect(capture.stop).not.toHaveBeenCalled();
+    expect(fixture.captures).toHaveLength(1);
+    expect(page.send.mock.calls.some(([method]) => method === "Page.captureScreenshot")).toBe(false);
+    await runtime.stopVideo();
+  });
+
+  it("a navigation during a pending snapshot refuses it and keeps the arbitrated fallback", async () => {
+    const { runtime, internal, page } = setup();
+    page.send.mockImplementation(async (method: string) => {
+      if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { pageX: 0, pageY: 0 } };
+      if (method === "Page.captureScreenshot") return { data };
+      return {};
+    });
+    await runtime.readVideo({ quality: "high", waitMs: 0 });
+    const capture = fixture.captures[0]! as (typeof fixture.captures)[number] & { snapshot?: unknown };
+    capture.snapshot = liveSnapshot(() => {
+      internal.documentGeneration += 1;
+    });
+    const frame = await runtime.frame(600_000, 85, 0);
+    expect(frame.transport).toBe("screenshot");
+    expect(capture.stop).toHaveBeenCalledOnce();
+    expect(page.send.mock.calls.some(([method]) => method === "Page.captureScreenshot")).toBe(true);
+    await runtime.stopVideo();
   });
 });

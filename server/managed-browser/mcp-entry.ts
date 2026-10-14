@@ -87,8 +87,8 @@ async function main(): Promise<void> {
 
   const server = new McpServer({
     name: "paseo-hosts-browser",
-    version: "0.21.0",
-  }, { instructions: "Use hosts_browser_* for this workspace's shared browser. Humans see and control these same tabs in Hosts Browser. Capture before input and after navigation or handoff. Human control has priority; wait for release and capture again. Do not use an independent CLI to bypass this lease. These tools do not redirect Paseo's separate desktop browser or existing external sessions." });
+    version: "0.22.0",
+  }, { instructions: "Use hosts_browser_* for this workspace's Hosts Browser. Humans see and control these same tabs in the Hosts Browser panel. Capture before input and after navigation or handoff. When a page needs the user to sign in, release control if you hold it, read status for the current tab, and direct them to Open this tab in Hosts Browser in its chat card, or the Hosts Browser panel on this host. Ask them to take Control, sign in there, and Return control when finished; never ask for credentials in chat. Human control has priority; wait for release and capture again. Do not use an independent CLI to bypass this lease. These tools do not redirect Paseo's separate desktop browser, the separate Shared Browser plugin or existing external sessions." });
 
   server.registerTool(
     "hosts_browser_status",
