@@ -11,6 +11,7 @@ export function browserStepCard(open: OpenChatBrowser) {
     const workspaceId = useAgent(agentId, (agent) => agent.workspaceId);
     const data = item.data;
     const canOpen = !!workspaceId && (!data.workspaceId || data.workspaceId === workspaceId);
+    const openLabel = data.tabId ? "Open this tab in Hosts Browser" : "Open Hosts Browser";
     const colors = theme.colors;
     const at = new Date(timestamp);
     const time = Number.isFinite(at.getTime()) ? at.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
@@ -23,8 +24,8 @@ export function browserStepCard(open: OpenChatBrowser) {
       {data.title ? <Text numberOfLines={2} style={{ color: colors.foreground }}>{data.title}</Text> : null}
       {data.origin ? <Text numberOfLines={1} style={{ color: colors.foregroundMuted, fontSize: 12 }}>{data.origin}</Text> : null}
       <Text style={{ color: data.status === "failed" ? colors.statusDanger : colors.foregroundMuted, fontSize: 13 }}>{browserStepMessage(data)}</Text>
-      {canOpen ? <Pressable accessibilityRole="button" accessibilityLabel="Open this workspace's browser" onPress={() => open(workspaceId, agentId, data.tabId)} style={{ minHeight: 44, alignSelf: "flex-start", justifyContent: "center", paddingHorizontal: 8 }}>
-        <Text style={{ color: colors.accent, fontWeight: "500" }}>Open Browser</Text>
+      {canOpen ? <Pressable accessibilityRole="button" accessibilityLabel={openLabel} onPress={() => open(workspaceId, agentId, data.tabId)} style={{ minHeight: 44, alignSelf: "flex-start", justifyContent: "center", paddingHorizontal: 8 }}>
+        <Text style={{ color: colors.accent, fontWeight: "500" }}>{openLabel}</Text>
       </Pressable> : <Text style={{ color: colors.foregroundMuted, fontSize: 12 }}>The original workspace is no longer available here.</Text>}
     </View>;
   };

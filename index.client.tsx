@@ -25,8 +25,8 @@ export default function contribute(client: PluginClientContext) {
   const removeBrowserPresence = registerBrowserPresence(client);
   const onWatchBrowser = workspaceBrowserOpener(client);
   const shortcuts = typeof client.addSlashCommand === "function";
-  client.addWorkspacePanel({ id: "hosts-browser", title: "Browser", icon: "Globe", context: "workspace", locations: ["workspace", "explorer"], Component: browserNavigation.wrap(WorkspaceBrowserPanel) });
-  client.addCommandCenterItem({ id: "open-hosts-browser", title: "Open workspace browser", icon: "Globe", context: "workspace", keywords: ["browser", "agent-browser", "remote", "live", "hosts"], onSelect({ openPanel }) { openPanel("hosts-browser"); } });
+  client.addWorkspacePanel({ id: "hosts-browser", title: "Hosts Browser", icon: "Globe", context: "workspace", locations: ["workspace", "explorer"], Component: browserNavigation.wrap(WorkspaceBrowserPanel) });
+  client.addCommandCenterItem({ id: "open-hosts-browser", title: "Open Hosts Browser", icon: "Globe", context: "workspace", keywords: ["browser", "agent-browser", "remote", "live", "hosts"], onSelect({ openPanel }) { openPanel("hosts-browser"); } });
   const Surface = (props: PluginSurfaceProps & { params?: Record<string, string> }) => <DaemonSurface {...props} shortcuts={shortcuts} onWatchBrowser={onWatchBrowser} />;
   // A screen and the app's own sidebar row on Paseo 0.11 apps; the surface and sidebar item before.
   // On 0.11 the row also carries a status dot; pressing it opens a quick health check.

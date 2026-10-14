@@ -156,7 +156,7 @@ export function registerBrowserPresence(client: PluginClientContext): () => void
     list: (options) => client.paseo.agents.list({ scope: "active", page: { limit: PAGE_LIMIT, ...(options.cursor ? { cursor: options.cursor } : {}) }, signal: options.signal, ...(options.subscribe ? { subscribe: {} } : {}) }) as unknown as ReturnType<BrowserPresencePort["list"]>,
     read: () => client.rpc(listOpenBrowserWorkspacesRpc, {}),
     add: ({ id, workspaceId }) => client.addComposerPill({ id: "hosts-workspace-browser", workspaceId, agentId: id,
-      button: { title: "Open this workspace's browser", label: "Browser", icon: "Globe",
+      button: { title: "Open this workspace's Hosts Browser", label: "Hosts Browser", icon: "Globe",
         behavior: { kind: "action", onPress: () => client.openPanel("hosts-browser", { workspaceId, agentId: id }) } } }).remove,
   });
 }

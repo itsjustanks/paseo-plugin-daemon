@@ -41,7 +41,7 @@ it("routes a historical tab directly to observation, then restores normal startu
   expect(fixture.presence).toHaveBeenCalledOnce();
   expect(renderer!.root.findAllByType("ManagedBrowser" as never)).toHaveLength(0);
   const buttons = renderer!.root.findAllByType("Pressable" as never);
-  const open = buttons.find(button => button.props.accessibilityLabel === "Open browser");
+  const open = buttons.find(button => button.props.accessibilityLabel === "Open Hosts Browser");
   expect(open).toBeDefined();
   await act(async () => open!.props.onPress());
   expect(renderer!.root.findByType("ManagedBrowser" as never).props.createIfMissing).toBe(true);
@@ -53,12 +53,12 @@ it("offers the selected host's restart flow without opening a browser after veri
   for (let i = 0; i < 4; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
   const upgrade = renderer!.root.findByType("RuntimeUpgrade" as never);
   expect(upgrade.props.hostLabel).toBe("Host");
-  expect(renderer!.root.findAllByProps({ accessibilityLabel: "Open browser" })).toHaveLength(0);
+  expect(renderer!.root.findAllByProps({ accessibilityLabel: "Open Hosts Browser" })).toHaveLength(0);
   expect(renderer!.root.findAllByType("ManagedBrowser" as never)).toHaveLength(0);
   fixture.presence.mockResolvedValue({ workspaceIds: [] });
   await act(async () => { upgrade.props.onVerified(); });
   for (let i = 0; i < 4; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
   expect(fixture.presence).toHaveBeenCalledTimes(2);
   expect(renderer!.root.findAllByType("ManagedBrowser" as never)).toHaveLength(0);
-  expect(renderer!.root.findAllByProps({ accessibilityLabel: "Open browser" })).toHaveLength(1);
+  expect(renderer!.root.findAllByProps({ accessibilityLabel: "Open Hosts Browser" })).toHaveLength(1);
 });

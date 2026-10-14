@@ -44,12 +44,12 @@ function WorkspaceBrowser(props: ChatBrowserPanelProps) {
     <Text style={{ color: colors.accent }}>{label}</Text></Pressable>;
   return <View ref={root} collapsable={false} style={{ flex: 1, minHeight: 0, backgroundColor: colors.surface0 }}>
     {active ? external ? <>
-      {button("Back to workspace browser", () => setExternal(false))}
+      {button("Back to Hosts Browser", () => setExternal(false))}
       <ExternalBrowserPanel {...props} />
     </> : open ? <ManagedBrowserPanel {...props} createIfMissing={createPermit.current}
       onCreateAttempt={() => { createPermit.current = false; }} onWatchExternal={() => setExternal(true)} />
       : <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24, gap: 8 }}>
-        <Text style={{ color: colors.foreground, fontSize: 18, fontWeight: "600" }}>Workspace browser</Text>
+        <Text style={{ color: colors.foreground, fontSize: 18, fontWeight: "600" }}>Hosts Browser</Text>
         <Text style={{ color: colors.foregroundMuted, maxWidth: 360, textAlign: "center" }}>
           You and new workspace agents use the same browser on this host. It keeps running when you disconnect.
         </Text>
@@ -63,7 +63,7 @@ function WorkspaceBrowser(props: ChatBrowserPanelProps) {
               setStarted(false);
               void presence.refetch();
             }} />
-        </> : button("Open browser", () => { createPermit.current = true; setStarted(true); })}
+        </> : button("Open Hosts Browser", () => { createPermit.current = true; setStarted(true); })}
         {button("Watch external browser", () => setExternal(true))}
         {presence.error && !upgradeRequired ? <Text style={{ color: colors.statusDanger }}>{presence.error.message}</Text> : null}
       </View> : null}

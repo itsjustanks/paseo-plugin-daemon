@@ -1627,13 +1627,13 @@ export function ManagedBrowserPanel({
         <CanvasPlaceholder
           styles={styles}
           theme={theme}
-          title="Workspace browser closed"
+          title="Hosts Browser closed"
           detail="The browser was closed for everyone. Its saved site data is available when you reopen it."
         >
           <ControlButton
             styles={styles}
             theme={theme}
-            label={reopenPending ? "Opening…" : "Open workspace browser"}
+            label={reopenPending ? "Opening…" : "Open Hosts Browser"}
             icon="PanelsTopLeft"
             primary
             large
@@ -1817,7 +1817,7 @@ export function ManagedBrowserPanel({
                 key={layer.ticket}
                 ticket={layer.ticket}
                 visible={visible}
-                label={state?.title ? `Workspace browser: ${state.title}` : "Workspace browser frame"}
+                label={state?.title ? `Hosts Browser: ${state.title}` : "Hosts Browser frame"}
                 settled={settled}
                 retry={retryFrameCapture}
                 source={layer.source}

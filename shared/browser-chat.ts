@@ -100,17 +100,17 @@ export function transformBrowserStep({ item }: { item: ToolItem; phase?: string 
 }
 
 const labels: Record<BrowserChatData["operation"], string> = {
-  status: "Browser status", capture: "Browser capture", tabs: "Browser tabs", tab_open: "Open browser tab",
-  tab_select: "Select browser tab", tab_close: "Close browser tab", acquire_control: "Take browser control",
-  release_control: "Return browser control", navigate: "Browser navigation", input: "Browser input", viewport: "Browser size",
+  status: "Hosts Browser · Status", capture: "Hosts Browser · Capture", tabs: "Hosts Browser · Tabs", tab_open: "Hosts Browser · Open tab",
+  tab_select: "Hosts Browser · Select tab", tab_close: "Hosts Browser · Close tab", acquire_control: "Hosts Browser · Take control",
+  release_control: "Hosts Browser · Return control", navigate: "Hosts Browser · Navigation", input: "Hosts Browser · Input", viewport: "Hosts Browser · Size",
 };
 export function browserStepLabel(data: BrowserChatData): string { return labels[data.operation]; }
 export function browserStepMessage(data: BrowserChatData): string {
   if (data.status === "running") return "In progress…";
-  if (data.status === "failed") return "This operation failed. Open Browser to check the current session.";
+  if (data.status === "failed") return "This operation failed. Open Hosts Browser to check the current session.";
   if (data.status === "canceled") return "Canceled.";
   if (data.availability === "unavailable") return "The browser was unavailable at this step.";
   if (data.availability === "restarted") return "The browser had restarted at this step.";
-  if (data.captured) return "Capture completed at this step. Open Browser for the live view.";
+  if (data.captured) return "Capture completed at this step. Open Hosts Browser for the live view.";
   return "Completed at this step.";
 }

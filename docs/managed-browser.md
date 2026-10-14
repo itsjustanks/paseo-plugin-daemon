@@ -1,6 +1,6 @@
 # Workspace browser
 
-Open Browser in a workspace on the host that should run Chromium. Open browser starts `about:blank`;
+Open Hosts Browser in a workspace on the host that should run Chromium. Open browser starts `about:blank`;
 merely loading Hosts or creating an agent does not start Chromium. The page owns the available height.
 Use the address bar, back/forward/reload, tabs and direct input. Display options, optional native text
 entry, close/reopen and Watch external browser live in the menu. A backgrounded viewer detaches;
@@ -66,8 +66,9 @@ configuration and are not silently redirected.
 
 ## Browser access from chats
 
-When a managed browser is open, its workspace chats show a Browser shortcut. Known browser MCP tool
-steps also receive a compact history card with the operation result and an Open Browser action. The
+When a managed browser is open, its workspace chats show a Hosts Browser shortcut. Known Hosts MCP tool
+steps also receive a compact history card labelled Hosts Browser, with the operation result and an
+Open Hosts Browser action (Open this tab in Hosts Browser when the result identifies a tab). The
 card uses the selected host's agent workspace; a missing or moved workspace cannot redirect it. When
 the result names a tab, opening the card attaches only to that tab and does not create a browser. A
 closed tab shows an unavailable state with an explicit way to see the remaining tabs.
@@ -77,6 +78,16 @@ per-message polling. Their result is historical; it does not assert that the bro
 now. The browser shortcut uses a shared, bounded presence read. URLs in history summaries omit their
 path, query, fragment and credentials. Existing chats without the Hosts MCP configuration do not gain
 browser tools automatically.
+
+For sign-in, open that chat card or the Hosts Browser panel on the same host, take Control, sign in,
+then Return control so the agent can continue. Opening a card only observes; it does not take control
+or create a replacement for a missing tab. Agent instructions name this panel explicitly. The naming
+guidance applies to new agents; existing agents retain their saved configuration and MCP runtime.
+
+Paseo's built-in browser and the separately installed Shared Browser plugin use different sessions.
+Hosts does not intercept their tool rows or open their panels: the supported plugin API scopes panel
+navigation to the calling plugin. A sign-in prompt from either browser must be handled in that browser.
+Hosts does not infer that sign-in is needed from a page title, URL or page content.
 
 ## Transport and input boundaries
 
