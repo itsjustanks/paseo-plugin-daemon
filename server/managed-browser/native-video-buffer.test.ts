@@ -105,10 +105,10 @@ it("sends the latest complete key chain instead of an obsolete multi-megabyte ba
   buffer.add(large(26, "delta"));
   for (const after of [0, 1, 12, 24]) {
     const selected = buffer.read(after, 1100);
-    expect(selected.map((value) => value.sequence)).toEqual([25, 26]);
+    expect(selected.map((value) => value.sequence)).toEqual([25]);
     expect(
       selected.reduce((bytes, value) => bytes + Buffer.byteLength(value.dataBase64, "base64"), 0),
-    ).toBe(640 * 1024);
+    ).toBe(512 * 1024);
     expect(buffer.needsKeyFrame(after, 1100)).toBe(false);
   }
   // Fast and slow viewers have independent cursors; no arbitrary delta skips.
@@ -139,3 +139,15 @@ it.each([-75_000, 75_000])(
     expect(videoSourceTime(112000100000, clock, 1701, 2200 + jump)).toBeNull();
   },
 );
+
+it("fits metadata-heavy packets in the private wire envelope without dropping the next delta", () => {
+  const buffer = createNativeVideoBuffer();
+  for (let i = 1; i <= 32; i++) buffer.add({ ...packet(i, i === 1 ? "key" : "delta"),
+    dataBase64: Buffer.alloc(16 * 1024).toString("base64"), descriptionBase64: "A".repeat(16384) });
+  const first = buffer.read(0, 1100);
+  expect(first.length).toBeGreaterThan(0); expect(first.length).toBeLessThan(32);
+  expect(Buffer.byteLength(JSON.stringify(first)) + first.length * 4096).toBeLessThan(768 * 1024);
+  const rest = buffer.read(first.at(-1)!.sequence, 1100);
+  expect(rest[0]!.sequence).toBe(first.at(-1)!.sequence + 1);
+  expect(rest.at(-1)!.sequence).toBe(32);
+});

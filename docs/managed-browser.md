@@ -42,22 +42,87 @@ Preparation targets macOS arm64 and Linux x64/glibc. Node's macOS minimum is 13.
 installed. Isolated Linux x64 acceptance passed as described below. Other architectures, Windows, musl and
 display/Xvfb provisioning are outside this release's preparation support.
 
+## Upgrading existing browser sessions
+
+The streaming runtime uses protocol 3. A protocol-2 runtime from Hosts 0.21 can keep running after a
+plugin update, even when its browser windows are closed. Hosts blocks the new runtime until that
+previous runtime has stopped and its shutdown is verified. It does not share profiles between them.
+
+The blocked Browser panel offers **Restart Hosts browser runtime**. Review the selected host and
+confirm closing **all** its Hosts-managed browser sessions; Cancel is the default. A browser that
+does not close normally may be forced to stop by the old runtime, and recent unsaved changes can be
+lost. Saved site profile folders are kept. This does not restart Paseo or the computer.
+
+The action binds the old coordinator's identity and records the attempt before sending one SIGTERM.
+An uncertain outcome keeps browser startup blocked. **Recheck browser runtime restart** verifies the
+result without another signal; it never retries shutdown automatically. If verification remains
+unavailable, restart that host's container or computer and recheck. Unreadable receipts or changed
+profile ownership may still need manual support; Hosts does not delete them automatically.
+
+Successful verification does not open a browser or take control. Open the browser explicitly when
+ready. A historical chat card still points only to its original tab, which may now be unavailable.
+Create new browser-enabled agents after the upgrade: existing agents retain their old MCP runtime
+configuration and are not silently redirected.
+
+## Browser access from chats
+
+When a managed browser is open, its workspace chats show a Browser shortcut. Known browser MCP tool
+steps also receive a compact history card with the operation result and an Open Browser action. The
+card uses the selected host's agent workspace; a missing or moved workspace cannot redirect it. When
+the result names a tab, opening the card attaches only to that tab and does not create a browser. A
+closed tab shows an unavailable state with an explicit way to see the remaining tabs.
+
+Screenshots stay in Paseo's native image timeline. Cards do not capture additional screenshots or run
+per-message polling. Their result is historical; it does not assert that the browser or host is online
+now. The browser shortcut uses a shared, bounded presence read. URLs in history summaries omit their
+path, query, fragment and credentials. Existing chats without the Hosts MCP configuration do not gain
+browser tools automatically.
+
 ## Transport and input boundaries
 
-JPEG frames use existing authenticated Paseo RPC over a private daemon/supervisor socket. Replies are
-bounded to 1 MiB and JPEG payloads to 600,000 bytes. Native video effects and public stream ports are not
-enabled. Identity, lease, bridge epoch, tab, navigation, viewport and current decoded-frame checks are
-retained. No FPS guarantee is made. Pages and screenshots can contain secrets; private profiles persist
+Video and JPEG use authenticated Paseo RPC over a private daemon/supervisor socket; no public stream port
+is exposed. WebCodecs clients can render VP8 video, with JPEG fallback for unsupported clients or
+unavailable video. Display settings include resolution, bitrate and 15/30/60 frame-rate ceilings. These
+are limits, not promised delivery rates. `HOSTS_BROWSER_VIDEO=0` disables native video on the host.
+
+Screenshots can briefly restart video capture. In a synthetic local 1280 × 800 test, one agent capture
+and input per second kept video visible, with a longest measured paint gap of 251 ms. A tight loop
+of 186 capture/input pairs in 15 seconds exhausted video recovery and showed image updates instead,
+with a longest presented-frame gap of 2.7 seconds. These are local test measurements, not remote or
+phone performance guarantees.
+
+Replies remain bounded to 1 MiB, video batches to 512 KiB of raw packets and 768 KiB of encoded packet
+JSON, and JPEG payloads to 600,000 bytes. A complex page at a large resolution can exceed the video
+packet bound even at a lower bitrate; it then uses JPEG fallback. Screenshot acquisition waits for native
+video capture to stop, and video can resume afterward. Identity, lease, bridge epoch, tab, navigation, viewport and
+current decoded-frame checks are retained. Pages and screenshots can contain secrets; private profiles persist
 site state. Runtime failure logs omit raw CLI output and browser content. Detaching stops viewer capture,
 but the upstream frame cache is not immediately purged. Missed workspace-archive events are not
 reconciled automatically; no cleanup guarantee is made for an archive event the plugin did not receive.
 
-## Validation
+## Current browser and chat checks
+
+The isolated Paseo 0.11.2 app rendered browser history cards at desktop and 390-pixel widths in both
+themes. Historical links opened the correct workspace without creating a browser; a later normal
+open did not retain the historical tab. Explicit browser opening, live video, control, navigation and
+trusted input passed. The composer shortcut followed the existing browser's presence. The mock chat
+remained idle with only the six fixed plugin examples, without a provider turn.
+
+This checks the real timeline renderer with fixed examples. Actual provider result transformation is
+covered by compiled fixtures, not by a live provider turn. Current Linux streaming acceptance and the
+legacy-runtime restart action remain separate pending gates; prior Linux results below do not cover
+these changes. Physical phone, OS IME, background behaviour and remote-network latency are unverified.
+
+## Prior 0.21 validation baseline
 
 The full suite passed 1,717 tests with 13 skips; unchanged function coverage floor 85% passed at 85.48%.
 Real 0.11.1/0.11.2 compilers and private bootstrap tests passed under exact Node 22.23.2. Three real Mac
 Chromium smokes passed; two Linux-only smokes were skipped on Mac. Loopback Node 22 bridge to Node 24 supervisor
-and MCP verified navigation, tabs, human priority and stale-agent rejection. Physical keyboard input through
+checks covered navigation, viewer tabs, human priority and stale-agent rejection. Those checks did not
+validate all agent MCP tab operations: later testing found that the released parser rejected them and
+lost the request ID in its error reply. The current fix admits the four declared tab operations and
+preserves bounded request IDs in error replies; separate real MCP checks cover all four operations,
+closed and foreign tab refusal, and prompt invalid-request errors. Physical keyboard input through
 the actual managed UI delivered Hello exactly once, with trusted key/input events. Desktop and 390px web
 layouts were inspected. Synthetic pagehide stopped captures and preserved the runtime. Scoped independent
 runtime and control-boundary reviews passed. The isolated Paseo 0.11.2 app passed actual bundled SVG,

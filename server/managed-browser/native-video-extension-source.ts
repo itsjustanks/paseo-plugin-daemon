@@ -4,6 +4,8 @@
  * Binding acknowledgements limit outstanding packets; a dropped output forces a
  * new keyframe before another delta can be forwarded.
  */
+import { VIDEO_MAX_PACKET_BYTES } from "../../shared/managed-browser/browser-video";
+
 export const NATIVE_VIDEO_EXTENSION_SOURCE = `
 let capture = null;
 const encoders = new Map();
@@ -252,7 +254,7 @@ async function addEncoder(quality, streamId, bitrate, fps) {
           if (!capture || encoders.get(quality) !== state || state.failed) return;
           const generation = state.frameGenerations.get(chunk.timestamp);
           state.frameGenerations.delete(chunk.timestamp);
-          if (chunk.byteLength > 2097152) {
+          if (chunk.byteLength > ${VIDEO_MAX_PACKET_BYTES}) {
             state.failed = true;
             try {
               state.encoder.close();

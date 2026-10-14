@@ -32,6 +32,8 @@ import { createBrowserOperationDiagnostics } from "./browser-operation-diagnosti
 import { resolveBrowserRuntimeAssets, privateBrowserEnvironment } from "./runtime-path";
 import type { JsonValue } from "./runtime-protocol";
 import { resolveSupervisorPaths } from "./supervisor-paths";
+import { assertPreviousBrowserStopped } from "./supervisor-migration";
+import { assertUpgradeReceiptVerified } from "./browser-upgrade-receipt";
 import { SupervisorClient } from "./supervisor-client";
 
 export type {
@@ -232,6 +234,7 @@ let productionStart: Promise<RemoteBrowserManager> | null = null;
 let productionStopped = false;
 
 async function launchSupervisor(): Promise<void> {
+  assertUpgradeReceiptVerified(paseoHome());
   const assets = resolveBrowserRuntimeAssets(paseoHome());
   const supervisorPath = assets.supervisor;
   try {
@@ -239,6 +242,7 @@ async function launchSupervisor(): Promise<void> {
   } catch {
     throw new Error(`Shared Browser supervisor runtime is missing: ${supervisorPath}`);
   }
+  assertUpgradeReceiptVerified(paseoHome());
   await new Promise<void>((resolve, reject) => {
     const child = spawn(assets.node, [supervisorPath], {
       detached: true,
@@ -257,6 +261,8 @@ async function getProductionManager(): Promise<RemoteBrowserManager> {
   if (productionStopped) throw new Error("Shared Browser plugin is stopping");
   if (productionManager) return productionManager;
   productionStart ??= (async () => {
+    await assertPreviousBrowserStopped(paseoHome());
+    assertUpgradeReceiptVerified(paseoHome());
     const manager = new RemoteBrowserManager(
       new SupervisorClient({ bridgeId: randomUUID(), paths: resolveSupervisorPaths(paseoHome()) }),
     );

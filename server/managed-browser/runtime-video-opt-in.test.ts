@@ -24,7 +24,7 @@ afterEach(async () => {
 });
 
 async function fixture(nativeVideo?: boolean) {
-  const directory = await mkdtemp(join(tmpdir(), "hosts-browser-video-opt-in-"));
+  const directory = await mkdtemp(join(tmpdir(), "shared-browser-video-opt-in-"));
   temporary.push(directory);
   const binary = join(directory, "owned-cli");
   const ipcDirectory = join(directory, "ipc");
@@ -50,7 +50,7 @@ async function fixture(nativeVideo?: boolean) {
 
 describe("encoded video opt-in", () => {
   it("launches image-only sessions without the extension, its allowlist or any materialized files", async () => {
-    for (const option of [undefined, false, true]) {
+    for (const option of [undefined, false]) {
       const f = await fixture(option);
       await expect(f.runtime.launch()).rejects.toThrow("stops before a browser");
       const [args] = f.launches;
@@ -60,12 +60,12 @@ describe("encoded video opt-in", () => {
     }
   });
 
-  it("ignores the former video opt-in and never loads its extension", async () => {
+  it("loads and allowlists the capture extension only when the host opted in", async () => {
     const f = await fixture(true);
     await expect(f.runtime.launch()).rejects.toThrow("stops before a browser");
     const [args] = f.launches;
-    expect(args).not.toContain("--extension");
-    expect(args?.join(" ")).not.toContain("--allowlisted-extension-id=");
+    expect(args).toContain("--extension");
+    expect(args?.join(" ")).toContain("--allowlisted-extension-id=");
   });
 
   it("reports a typed disabled reply without creating any capture source", async () => {

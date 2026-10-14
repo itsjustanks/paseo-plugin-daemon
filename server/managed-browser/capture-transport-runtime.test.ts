@@ -211,3 +211,19 @@ it("reduces quality only to satisfy the byte cap and never substitutes a cached 
   expect((await runtime.frame(100, 70, 0)).transport).toBe("screenshot");
   expect(qualities).toEqual([DEFAULT_JPEG_QUALITY, 70, 65]);
 });
+
+it("keeps native video alive for valid JPEG stream and exact cached screenshot fastpaths", async () => {
+  const { runtime, emit } = fixture();
+  const firstStop = vi.fn(async () => {});
+  Object.assign(runtime, { video: { stop: firstStop } });
+  emit(1);
+  expect((await runtime.frame(100, DEFAULT_JPEG_QUALITY, 0)).transport).toBe("cdp-screencast");
+  expect(firstStop).not.toHaveBeenCalled();
+  const screenshot = await runtime.frame(100, 85, 0);
+  expect(firstStop).toHaveBeenCalledOnce();
+  const nextStop = vi.fn(async () => {});
+  Object.assign(runtime, { video: { stop: nextStop } });
+  expect(await runtime.frame(100, 85, 0)).toBe(screenshot);
+  expect(nextStop).not.toHaveBeenCalled();
+  await runtime.stopVideo();
+});

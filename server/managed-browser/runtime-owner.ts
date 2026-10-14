@@ -44,7 +44,7 @@ interface RuntimeOwnerOptions {
    * Explicit false overrides the environment.
    */
   virtualDisplay?: boolean;
-  /** Encoded video is opt-in; defaults to HOSTS_BROWSER_VIDEO=1 in the daemon environment. */
+  /** Encoded video is available by default; HOSTS_BROWSER_VIDEO=0 explicitly disables it. */
   nativeVideo?: boolean;
 }
 
@@ -160,7 +160,7 @@ export async function createRuntimeOwner(
           session: `ws-${hash.slice(0, 16)}`,
           initialUrl: options.initialUrl ?? DEFAULT_BROWSER_URL,
           headed: display ? true : (options.headed ?? false),
-          nativeVideo: false,
+          nativeVideo: options.nativeVideo ?? process.env.HOSTS_BROWSER_VIDEO !== "0",
           ...(display ? { launchEnvironment: display.launchEnvironment } : {}),
         };
         runtime = new AgentBrowserRuntime(runtimeOptions);

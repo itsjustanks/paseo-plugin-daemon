@@ -346,7 +346,7 @@ export class AgentBrowserRuntime {
     // An explicit owned config suppresses user/project auto-connect, extensions and plugins.
     this.environment.AGENT_BROWSER_CONFIG = resolve(this.profilePath, "hosts-cli-config.json");
     this.initialUrl = options.initialUrl ?? "about:blank";
-    this.nativeVideo = false;
+    this.nativeVideo = options.nativeVideo === true;
   }
 
   async launch(): Promise<void> {
@@ -1181,6 +1181,21 @@ export class AgentBrowserRuntime {
 
   /** Capture the configured viewport and cache only an unchanged-session/mutation completion. */
   private async captureScreenshot(
+    maxBytes: number,
+    requestedQuality: number,
+    preserveStreamRecovery = false,
+  ): Promise<RuntimeFrame> {
+    // Chromium can strand screenshot acquisition while native tab capture owns
+    // the surface. Cached images and healthy JPEG screencast reads bypass this.
+    // A video reader may already have retired the source outside the workspace
+    // command queue; join that stop before entering the screenshot transition.
+    if (this.videoRetirement) await this.videoRetirement;
+    return this.withVideoTransition(() =>
+      this.captureScreenshotAfterVideoStop(maxBytes, requestedQuality, preserveStreamRecovery),
+    );
+  }
+
+  private async captureScreenshotAfterVideoStop(
     maxBytes: number,
     requestedQuality: number,
     preserveStreamRecovery = false,

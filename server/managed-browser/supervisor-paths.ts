@@ -13,12 +13,13 @@ export interface SupervisorPaths {
 
 export function resolveSupervisorPaths(
   paseoHome = process.env.PASEO_HOME ?? join(homedir(), ".paseo"),
+  protocolVersion: number = RUNTIME_PROTOCOL_VERSION,
 ): SupervisorPaths {
   const root = join(
     paseoHome,
     "plugin-data",
     "daemon-link", "browser",
-    `supervisor-v${RUNTIME_PROTOCOL_VERSION}`,
+    `supervisor-v${protocolVersion}`,
   );
   const socketId = createHash("sha256").update(root).digest("hex");
   const socket =

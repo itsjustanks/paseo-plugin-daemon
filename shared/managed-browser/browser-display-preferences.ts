@@ -17,6 +17,8 @@ import {
 
 export const browserDisplayPreferencesSchema = z.object({
   captureQuality: z.enum(["low", "medium", "high", "maximum"]).default(DEFAULT_CAPTURE_QUALITY),
+  videoBitrate: videoBitrateSchema.default(12_000_000),
+  videoFps: videoFrameRateSchema.default(30),
   favoritePresetIds: z.array(z.string().min(1).max(128)).max(DEVICE_PRESETS.length).default([]),
 });
 
@@ -36,7 +38,9 @@ export const browserDisplayPreferences = defineSettings({
         : "high";
     return {
       ...previous,
-            };
+      videoBitrate: resolveVideoEncoderSettings({ quality }).bitrate,
+      videoFps: 30,
+    };
   },
   schema: browserDisplayPreferencesSchema,
 });

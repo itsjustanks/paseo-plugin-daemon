@@ -44,16 +44,31 @@ beforeEach(() => {
   });
 });
 
-it("ignores display/video environment opt-ins and keeps browser ownership private", async () => {
+it("keeps display provisioning disabled and selects only the managed video capability", async () => {
   vi.stubEnv("HOSTS_BROWSER_XVFB", "1");
   vi.stubEnv("HOSTS_BROWSER_VIDEO", "1");
   const owner = await createRuntimeOwner({ nativeVideo: true, virtualDisplay: true, runtimeRoot: "/tmp/immutable-owned-runtime" });
   const runtime = await owner.create("workspace-fixture");
   expect(fake.display).not.toHaveBeenCalled();
-  expect(fake.runtime.mock.calls[0]![0]).toMatchObject({ headed: false, nativeVideo: false,
+  expect(fake.runtime.mock.calls[0]![0]).toMatchObject({ headed: false, nativeVideo: true,
     binaryPath: "/tmp/immutable-owned-runtime/node_modules/.bin/agent-browser",
     executablePath: "/tmp/immutable-owned-runtime/chromium/chrome", initialUrl: "about:blank" });
   expect(fake.runtime.mock.calls[0]![0]).not.toHaveProperty("launchEnvironment");
   await owner.stop(runtime);
   expect(fake.shutdown).toHaveBeenCalledTimes(1);
+});
+
+it.each([undefined, "0", "1"])("managed video defaults on with host override %s", async (value) => {
+  vi.stubEnv("HOSTS_BROWSER_VIDEO", value);
+  const owner = await createRuntimeOwner({ runtimeRoot: "/tmp/immutable-owned-runtime" });
+  const runtime = await owner.create("video-workspace-fixture");
+  expect(fake.runtime.mock.calls[0]![0]).toMatchObject({ nativeVideo: value !== "0" });
+  await owner.stop(runtime);
+});
+it("explicit video false overrides the host default without provisioning a display", async () => {
+  vi.stubEnv("HOSTS_BROWSER_VIDEO", "1");
+  const owner = await createRuntimeOwner({ nativeVideo: false, runtimeRoot: "/tmp/immutable-owned-runtime" });
+  const runtime = await owner.create("video-workspace-fixture");
+  expect(fake.runtime.mock.calls[0]![0]).toMatchObject({ nativeVideo: false });
+  expect(fake.display).not.toHaveBeenCalled(); await owner.stop(runtime);
 });

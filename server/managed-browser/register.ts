@@ -21,6 +21,7 @@ import {
   handleListOpenBrowserWorkspaces,
   handleNavigateBrowser,
   handleReleaseControl,
+  handleReadBrowserVideo,
   handleReopenBrowser,
   handleResizeBrowser,
   handleSendBrowserInput,
@@ -52,7 +53,10 @@ import {
   setCaptureDensityRpc,
   updateBrowserGestureRpc,
 } from "../../shared/managed-browser/browser";
+import { readBrowserVideoRpc } from "../../shared/managed-browser/browser-video";
 import { browserDisplayPreferences } from "../../shared/managed-browser/browser-display-preferences";
+import { browserRuntimeUpgradeRpc } from "../../shared/managed-browser/browser-runtime-upgrade";
+import { createBrowserRuntimeUpgrade } from "./browser-upgrade";
 
 const TICKET_ENV = "HOSTS_BROWSER_TICKET";
 const MCP_SERVER_ID = "hosts-browser";
@@ -92,6 +96,9 @@ function paseoHome(): string {
 
 
 export function contributeManagedBrowser(server: PluginServerContext) {
+  // Deliberately bypass getProductionManager: legacy v2 blocks its startup.
+  const upgrade = createBrowserRuntimeUpgrade(paseoHome());
+  server.handle(browserRuntimeUpgradeRpc, input => upgrade.handle(input));
   server.registerSettings(browserDisplayPreferences);
   server.handle(attachBrowserRpc, handleAttachBrowser);
   server.handle(detachBrowserRpc, handleDetachBrowser);
@@ -101,6 +108,7 @@ export function contributeManagedBrowser(server: PluginServerContext) {
   server.handle(listBrowserTabsRpc, handleListBrowserTabs);
   server.handle(reopenBrowserRpc, handleReopenBrowser);
   server.handle(captureBrowserRpc, handleCaptureBrowser);
+  server.handle(readBrowserVideoRpc, handleReadBrowserVideo);
   server.handle(setCaptureDensityRpc, handleSetCaptureDensity);
 
   server.handle(listOpenBrowserWorkspacesRpc, handleListOpenBrowserWorkspaces);

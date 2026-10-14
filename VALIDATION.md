@@ -1,3 +1,38 @@
+# Validation — 0.22.0 candidate, 2026-10-14
+
+The combined browser-streaming, chat and runtime-upgrade source passed 1,976 tests, with 13 skipped.
+Coverage passed the unchanged floors: statements 87.32%, branches 81.10%, functions 85.61% and
+lines 92.24%. Both TypeScript configurations passed. The real pinned Paseo 0.11.1 and 0.11.2 compilers
+built both entries under Node 22.23.2 and registered the same 80 RPCs. Feature fixtures also checked
+enabled cross-daemon MCP injection and the five exact approvals.
+
+Independent reviews covered the streaming transport, screenshot arbitration, agent tab protocol,
+chat privacy/navigation and confirmed legacy-runtime restart. The panel wiring passed 20 focused
+tests, including no automatic browser creation after a restart and no historical-tab substitution.
+The later package and MCP version changes only identify the candidate as 0.22.0; dependency pins
+and runtime behaviour were unchanged.
+
+The actual isolated Paseo 0.11.2 app rendered fixed browser timeline examples in both themes at
+1440 and 390 pixels, without document overflow. Historical links did not create browsers. Explicit
+open, live video, control, navigation and trusted input passed. The composer shortcut followed the
+existing browser. The mock agent stayed idle, with no provider turn. These checks use fixed timeline
+examples; provider result transformation is covered by compiled fixtures.
+
+Real Mac browser checks covered all four agent tab operations, invalid-request correlation,
+oversized video falling back to an image, video recovery and input authority. At one agent capture
+and input per second, local video's maximum measured paint gap was 251 ms. A tight loop of 186 pairs
+in 15 seconds starved native video and used image updates, with a 2.7-second presentation gap.
+See [browser limits](docs/managed-browser.md).
+
+Pending release gates: real protocol-2 retirement in an isolated daemon with another installed
+plugin, current Linux streaming acceptance, and final publication checks. The previous Linux 0.21
+results do not establish acceptance of the new streaming path. No physical phone, native background,
+OS clipboard/IME or remote-network performance claim is made. This candidate is not yet released.
+
+Earlier validation records below describe their original versions, not the current candidate.
+
+---
+
 # Validation — 2026-10-05 (0.10.0)
 
 Built and checked against Paseo **0.11.0-beta.3** (the fleet's and the Mac's version):

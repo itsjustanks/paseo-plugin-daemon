@@ -24,6 +24,7 @@ import {
   type BrowserFrame,
   type BrowserInputEvent,
   type BrowserState,
+  browserTabIdSchema,
   beginBrowserGestureRpc,
   captureBrowserRpc,
   closeBrowserRpc,
@@ -48,6 +49,7 @@ import {
   updateBrowserGestureRpc,
 } from "../../shared/managed-browser/browser";
 import type { BrowserFrameAuthority } from "../../shared/managed-browser/browser-video";
+import { isBrowserRuntimeUpgradeRequired } from "../../shared/managed-browser/browser-runtime-upgrade";
 import { groupResolutionPresets } from "../../shared/managed-browser/resolution-menu";
 import {
   type CaptureDensityMode,
@@ -77,6 +79,7 @@ import type { FrameCandidate } from "./browser-frame-buffer";
 import { BrowserFrameImage } from "./browser-frame-image";
 import { createStyles, DIMENSION, SPACE } from "./browser-panel-styles";
 import { BrowserResolutionPicker } from "./browser-resolution-picker";
+import { BrowserRuntimeUpgradeAction } from "./browser-runtime-upgrade";
 import { BrowserTabs } from "./browser-tabs";
 import {
   BrowserMenuHeading,
@@ -84,7 +87,8 @@ import {
   BrowserMenuSeparator,
   BrowserToolbarMenu,
 } from "./browser-toolbar-menu";
-import { isFrameCurrent } from "./browser-video-currency";
+import { isFrameCurrent, isVideoSourceCurrent } from "./browser-video-currency";
+import { BrowserVideoSurface } from "./browser-video-surface";
 import { isBrowserClosedError, isExpiredBrowserViewerError } from "./browser-viewer-recovery";
 import { createFrameLifecycle } from "./frame-lifecycle";
 import { useBrowserAutoCaptureDensity } from "./use-browser-auto-capture-density";
@@ -95,6 +99,7 @@ import { useBrowserFillViewport } from "./use-browser-fill-viewport";
 import { useBrowserFrameBuffer } from "./use-browser-frame-buffer";
 import { useBrowserImageCapture } from "./use-browser-image-capture";
 import { useBrowserScopedMutation } from "./use-browser-scoped-mutation";
+import { useBrowserVideo } from "./use-browser-video";
 import { useBrowserViewerRecovery } from "./use-browser-viewer-recovery";
 import { useResolutionFavorites } from "./use-resolution-favorites";
 
@@ -187,10 +192,24 @@ export function ManagedBrowserPanel({
   layout,
   workspaceId,
   createIfMissing = false,
+  initialTabId,
   onCreateAttempt,
   onWatchExternal,
-}: PluginWorkspacePanelProps & { createIfMissing?: boolean; onCreateAttempt?(): void; onWatchExternal?(): void }) {
-  const createPermit = useRef(createIfMissing);
+}: PluginWorkspacePanelProps & { createIfMissing?: boolean; initialTabId?: string; onCreateAttempt?(): void; onWatchExternal?(): void }) {
+  const panelScope = `${host.id}/${workspaceId}`;
+  // Root chat navigation remounts the panel. An initial request is never reused
+  // if a caller instead changes this component's host/workspace in place.
+  const [initialTabRequest] = useState(() => ({
+    scope: panelScope, supplied: initialTabId !== undefined,
+    parsed: browserTabIdSchema.safeParse(initialTabId),
+  }));
+  const [initialTabDismissed, setInitialTabDismissed] = useState(false);
+  const initialTabActive = initialTabRequest.scope === panelScope &&
+    initialTabRequest.supplied && !initialTabDismissed;
+  const requestedInitialTabId = initialTabRequest.scope === panelScope && initialTabRequest.parsed.success
+    ? initialTabRequest.parsed.data : null;
+  const invalidInitialTab = initialTabActive && !initialTabRequest.parsed.success;
+  const createPermit = useRef(createIfMissing && initialTabId === undefined);
   const queryClient = useQueryClient();
   const styles = useMemo(() => createStyles(theme, layout.compact), [theme, layout.compact]);
   const { scale: screenPixelRatio } = useWindowDimensions();
@@ -247,7 +266,13 @@ export function ManagedBrowserPanel({
   const [operationError, setOperationError] = useState<string | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   const [browserClosed, setBrowserClosed] = useState(false);
-  const [selectedTabId, setSelectedTabId] = useState<string | null>(null);
+  const [tabSelection, setTabSelection] = useState({ scope: panelScope, id: requestedInitialTabId });
+  const selectedTabId = tabSelection.scope === panelScope ? tabSelection.id : null;
+  const setSelectedTabId = useCallback((id: string | null) => {
+    setTabSelection({ scope: panelScope, id });
+    if (id !== requestedInitialTabId) setInitialTabDismissed(true);
+  }, [panelScope, requestedInitialTabId]);
+  const pinnedInitialTab = initialTabActive && selectedTabId === requestedInitialTabId;
   const selectedTabIdRef = useRef(selectedTabId);
   selectedTabIdRef.current = selectedTabId;
   const [tabMutationPending, setTabMutationPending] = useState(false);
@@ -275,7 +300,6 @@ export function ManagedBrowserPanel({
   const displayAnchorRef = useRef<View | null>(null);
   const actionsAnchorRef = useRef<View | null>(null);
   const [paneSize, setPaneSize] = useState<Size>({ width: 0, height: 0 });
-  const panelScope = `${host.id}/${workspaceId}`;
   const [fillViewportScope, setFillViewportScope] = useState<string | null>(panelScope);
   const fillViewportEnabled = fillViewportScope === panelScope;
   const [densitySelection, setDensitySelection] = useState<{
@@ -383,7 +407,7 @@ export function ManagedBrowserPanel({
   const attachQuery = useQuery({
     queryKey: ["hosts-browser", "attach", host.id, workspaceId, viewerLabel, selectedTabId],
     queryFn: async () => {
-      const create = createPermit.current;
+      const create = createPermit.current && !initialTabActive;
       createPermit.current = false;
       onCreateAttempt?.();
       const result = await attachBrowser({
@@ -392,6 +416,10 @@ export function ManagedBrowserPanel({
         viewerLabel,
         ...(selectedTabId ? { tabId: selectedTabId } : {}),
       });
+      if (selectedTabId && result.state.tabId !== selectedTabId) {
+        await detachBrowser({ viewerToken: result.viewerToken }).catch(() => undefined);
+        throw new Error("The requested browser tab is unavailable.");
+      }
       if (!mountedRef.current) {
         await detachBrowser({ viewerToken: result.viewerToken }).catch(() => undefined);
         throw new Error("The browser panel closed before attachment completed.");
@@ -399,7 +427,7 @@ export function ManagedBrowserPanel({
       return result;
     },
     retry: false,
-    enabled: !browserClosed,
+    enabled: !browserClosed && !invalidInitialTab,
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: 0,
     refetchOnWindowFocus: false,
@@ -425,8 +453,9 @@ export function ManagedBrowserPanel({
     const tabs = tabsQuery.data?.tabs;
     const selected = selectedTabId ?? stateRef.current?.tabId;
     if (!tabs || !selected || tabs.some((tab) => tab.id === selected)) return;
+    if (pinnedInitialTab) return; // Never silently replace a historical tab.
     setSelectedTabId(tabs[0]?.id ?? null);
-  }, [selectedTabId, tabsQuery.data]);
+  }, [pinnedInitialTab, selectedTabId, setSelectedTabId, tabsQuery.data]);
 
   useEffect(() => {
     if (isBrowserClosedError(attachQuery.error)) setBrowserClosed(true);
@@ -448,8 +477,8 @@ export function ManagedBrowserPanel({
   }, [detachBrowser, viewerToken]);
 
   useEffect(() => {
-    if (!reconnecting && attachQuery.data) acceptState(attachQuery.data.state);
-  }, [acceptState, attachQuery.data, reconnecting]);
+    if (!reconnecting && attachedTabMatches && attachQuery.data) acceptState(attachQuery.data.state);
+  }, [acceptState, attachQuery.data, attachedTabMatches, reconnecting]);
 
   useEffect(() => {
     stateRef.current = null;
@@ -463,7 +492,7 @@ export function ManagedBrowserPanel({
     setOperationError(null);
     setRuntimeNotice(null);
     setBrowserClosed(false);
-    setSelectedTabId(null);
+    setSelectedTabId(requestedInitialTabId);
     setTabCloseConfirmationOpen(false);
     setControlRequest(null);
     setPendingControlAction(null);
@@ -492,18 +521,67 @@ export function ManagedBrowserPanel({
       : null;
   }, [state?.sessionId, state?.viewportGeneration]);
 
+  const video = useBrowserVideo({
+    viewerToken,
+    quality: "high",
+    bitrate: preferences.videoBitrate,
+    fps: preferences.videoFps,
+    epoch: () => inputLifecycle.epoch,
+    viewport: () => stateRef.current?.viewport ?? null,
+    isCurrent: (packet, epoch) =>
+      isVideoSourceCurrent(
+        {
+          mounted: mountedRef.current,
+          viewerActive: activeViewerTokenRef.current === viewerToken,
+          epoch: inputLifecycle.epoch,
+          committedViewport: committedViewport.current,
+          state: stateRef.current,
+        },
+        packet,
+        epoch,
+      ),
+    isDisplayCurrent: (packet) => {
+      const current = stateRef.current;
+      return (
+        mountedRef.current &&
+        activeViewerTokenRef.current === viewerToken &&
+        current !== null &&
+        isFrameDisplayCurrent(packet.frame, current)
+      );
+    },
+    acceptState,
+    onPresented: (packet, epoch) => {
+      inputLifecycle.accept(epoch, packet.frame);
+      publishAdmittedPaint(packet.frame.frameId, epoch);
+      setLegacyInputBusy(inputLifecycle.busy);
+    },
+  });
+
   const {
     query: captureQuery,
     refreshCapture,
     retryFrameCapture,
   } = useBrowserImageCapture({
-    active: true,
+    active: !video.supported || video.active,
     viewerToken,
     quality: preferences.captureQuality,
     activeInput,
-    videoOwnsPresentation: false,
-    hasVideoPresentation: () => false,
-    refreshVideo: () => undefined,
+    fallbackRevision: video.fallbackRevision,
+    videoOwnsPresentation: Boolean(
+      video.front &&
+        !video.fallbackRevision &&
+        state &&
+        isFrameDisplayCurrent(video.front.frame, state),
+    ),
+    hasVideoPresentation: () =>
+      Boolean(
+        video.front &&
+          !video.fallbackRevision &&
+          activeViewerTokenRef.current === viewerToken &&
+          stateRef.current &&
+          isFrameDisplayCurrent(video.front.frame, stateRef.current),
+      ),
+    refreshVideo: video.refresh,
     mutationEpoch: () => inputLifecycle.epoch,
     knownFrame: () => frameRef.current,
     capture: captureBrowser,
@@ -612,6 +690,7 @@ export function ManagedBrowserPanel({
       mutationSucceeded(result.state);
       // Only acknowledged navigation grants explicit viewing recovery. Ordinary
       // gesture/image refresh does not rearm an exhausted video reader.
+      video.retry();
     },
     onError: mutationFailed,
   });
@@ -698,10 +777,13 @@ export function ManagedBrowserPanel({
     inputMutation.isPending ||
     controlRequestPending ||
     closePending;
-  const viewingExpired = isExpiredBrowserViewerError(captureQuery.error);
+  const videoViewerExpired =
+    video.errorViewerToken === viewerToken && isExpiredBrowserViewerError(video.error);
+  const viewingExpired = videoViewerExpired || isExpiredBrowserViewerError(captureQuery.error);
   useEffect(() => {
-    if (isBrowserClosedError(captureQuery.error)) setBrowserClosed(true);
-  }, [captureQuery.error]);
+    if (isBrowserClosedError(captureQuery.error) || isBrowserClosedError(video.error))
+      setBrowserClosed(true);
+  }, [captureQuery.error, video.error]);
   const canControl = Boolean(
     viewerToken &&
       controlToken &&
@@ -710,7 +792,22 @@ export function ManagedBrowserPanel({
       !viewingExpired,
   );
   const frontLayer = buffer.front === null ? null : buffer.layers[buffer.front];
+  useLayoutEffect(() => {
+    const candidate = frontLayer?.candidate;
+    if (
+      candidate &&
+      candidate.fallbackRevision === video.fallbackRevision &&
+      candidate.mutationEpoch === inputLifecycle.epoch &&
+      candidate.viewerToken === viewerToken &&
+      state &&
+      isFrameCurrent(candidate.frame, state)
+    )
+      video.completeFallback(candidate.fallbackRevision ?? 0);
+  }, [frontLayer, video.fallbackRevision, state, viewerToken, inputLifecycle]);
+  const videoFrame =
+    video.front && state && isFrameCurrent(video.front.frame, state) ? video.front.frame : null;
   const currentFrame =
+    videoFrame ??
     (frame &&
     state &&
     frontLayer?.candidate.viewerToken === viewerToken &&
@@ -719,25 +816,27 @@ export function ManagedBrowserPanel({
       : null);
   useEffect(() => {
     const candidate = frontLayer?.candidate;
-    if (!frame || !candidate || candidate.mutationEpoch !== inputLifecycle.epoch)
+    if (videoFrame || !frame || !candidate || candidate.mutationEpoch !== inputLifecycle.epoch)
       return;
     inputLifecycle.accept(candidate.mutationEpoch, frame);
     publishAdmittedPaint(frame.frameId, candidate.mutationEpoch);
     setLegacyInputBusy(inputLifecycle.busy);
-  }, [frame, frontLayer, inputLifecycle]);
+  }, [frame, frontLayer, inputLifecycle, videoFrame]);
   const canSendInput =
     canControl && Boolean(currentFrame) && !inputMutation.isPending && !legacyInputBusy;
 
   // Layout belongs to the decoded front frame. A denser capture adds detail,
-  // not a larger 100% layout; scale never writes to the workspace browser state.
-  const visualFrame = frame;
+  // not a larger 100% layout; scale never writes to the shared browser state.
+  const visualFrame = video.front?.frame ?? frame;
   const canvasLayout = useMemo(
     () =>
       visualFrame
         ? getBrowserCanvasLayout(
             containerSize,
             visualFrame,
-            frontLayer?.candidate.viewport ?? state?.viewport ?? visualFrame,
+            video.front
+              ? (video.frontViewport ?? visualFrame)
+              : (frontLayer?.candidate.viewport ?? state?.viewport ?? visualFrame),
             scaleMode,
           )
         : null,
@@ -747,6 +846,8 @@ export function ManagedBrowserPanel({
       frontLayer,
       state?.viewport,
       scaleMode,
+      video.front,
+      video.frontViewport,
     ],
   );
   const displayRect = canvasLayout?.frameRect ?? null;
@@ -777,13 +878,17 @@ export function ManagedBrowserPanel({
   const inputContext = useCallback(() => {
     const context = controlContext();
     const current = stateRef.current;
-    const targetFrame = frameRef.current;
+    const targetVideo = video.frontRef.current;
+    // A revoked video remains painted until React commits the fallback. Never
+    // borrow the JPEG token while those older video pixels still cover it.
+    if (video.front && !targetVideo) return null;
+    const targetFrame = targetVideo?.frame ?? frameRef.current;
     if (
       !context ||
       !current ||
       !targetFrame ||
       !isFrameCurrent(targetFrame, current) ||
-      frontLayer?.candidate.viewerToken !== context.viewerToken
+      (!targetVideo && frontLayer?.candidate.viewerToken !== context.viewerToken)
     ) {
       return null;
     }
@@ -795,7 +900,7 @@ export function ManagedBrowserPanel({
         viewportGeneration: targetFrame.viewportGeneration,
       },
     };
-  }, [controlContext, frontLayer]);
+  }, [controlContext, frontLayer, video.frontRef, video.front]);
 
   const requireControlContext = useCallback(() => {
     const context = controlContext();
@@ -1369,8 +1474,8 @@ export function ManagedBrowserPanel({
   useBrowserViewerRecovery({
     identity: JSON.stringify([host.id, workspaceId]),
     viewerToken,
-    failedViewerToken: viewerToken,
-    captureError: captureQuery.error,
+    failedViewerToken: videoViewerExpired ? video.errorViewerToken : viewerToken,
+    captureError: videoViewerExpired ? video.error : captureQuery.error,
     pending: reconnecting || attachQuery.isFetching,
     reconnect,
   });
@@ -1378,7 +1483,7 @@ export function ManagedBrowserPanel({
   // Expiry belongs to the viewing-only recovery path, not an action failure.
   // A failed reattachment still surfaces its attachQuery error and manual retry.
   const connectionError =
-    attachQuery.error ?? (viewingExpired ? null : captureQuery.error);
+    attachQuery.error ?? (viewingExpired ? null : (captureQuery.error ?? video.error));
   const recoveryError =
     state?.recoveryState === "runtime-unavailable"
       ? (state.error ?? "Browser runtime unavailable.")
@@ -1411,15 +1516,20 @@ export function ManagedBrowserPanel({
   } else if (selectedResolutionPresetId) {
     deviceLabel = activeDevicePreset?.label ?? "Custom display";
   }
-  const transportLabel = frame?.transport === "cdp-screencast" ? "CDP JPEG" : "JPEG";
-  const summaryFrame = currentFrame;
+  const transportLabel =
+    video.front && video.fallbackRevision
+      ? "Refreshing picture…"
+      : video.front
+        ? "Live video"
+        : "Image updates";
+  const summaryFrame = video.front?.frame ?? currentFrame;
   const frameSummary = summaryFrame
     ? layout.compact
       ? `${summaryFrame.width}×${summaryFrame.height} · ${transportLabel}`
-      : `${summaryFrame.width} × ${summaryFrame.height} · ${Math.ceil((frame?.byteLength ?? 0) / BYTES_PER_KIBIBYTE)} KB · ${transportLabel} · ${deviceLabel}`
+      : `${summaryFrame.width} × ${summaryFrame.height} · ${Math.ceil((video.front ? (video.front.dataBase64.length * 3) / 4 : (frame?.byteLength ?? 0)) / BYTES_PER_KIBIBYTE)} KB · ${transportLabel} · ${deviceLabel}`
     : state
-      ? `${state.viewport.width} × ${state.viewport.height} canonical`
-      : "No frame";
+      ? `${state.viewport.width} × ${state.viewport.height} · Waiting for picture…`
+      : "Waiting for picture…";
 
   let controlAction: ReactNode = null;
   if (state?.controller === "self" && controlToken) {
@@ -1476,6 +1586,40 @@ export function ManagedBrowserPanel({
         },
       ]
     : styles.interactionLayer;
+
+  if (isBrowserRuntimeUpgradeRequired(attachQuery.error)) {
+    return <View style={styles.screen}>
+      <CanvasPlaceholder styles={styles} theme={theme} title="Browser runtime restart required"
+        detail="The previous Hosts browser runtime must be restarted before this browser can connect.">
+        <BrowserRuntimeUpgradeAction key={panelScope} theme={theme} hostLabel={host.label}
+          onVerified={() => {
+            createPermit.current = false;
+            onCreateAttempt?.();
+            void attachQuery.refetch({ cancelRefetch: false });
+          }} />
+      </CanvasPlaceholder>
+    </View>;
+  }
+
+  const initialTabUnavailable = invalidInitialTab || (pinnedInitialTab && (
+    attachQuery.isError ||
+    (tabsQuery.data && !tabsQuery.data.tabs.some(tab => tab.id === selectedTabId)) ||
+    isBrowserClosedError(captureQuery.error) || isBrowserClosedError(video.error)
+  ));
+  if (initialTabUnavailable) {
+    return <View style={styles.screen}>
+      <CanvasPlaceholder styles={styles} theme={theme} title="Browser tab unavailable"
+        detail="This linked tab is closed or no longer available. Choose from the existing tabs to view another page.">
+        <ControlButton styles={styles} theme={theme} label="Show open tabs" large primary
+          onPress={() => {
+            createPermit.current = false;
+            setInitialTabDismissed(true);
+            setSelectedTabId(null);
+            setBrowserClosed(false);
+          }} />
+      </CanvasPlaceholder>
+    </View>;
+  }
 
   if (closedView) {
     return (
@@ -1599,6 +1743,32 @@ export function ManagedBrowserPanel({
               );
             }}
           />
+          <View ref={displayAnchorRef} collapsable={false}>
+            <ChromeIconButton
+              styles={styles}
+              theme={theme}
+              label="Display options"
+              icon="Monitor"
+              selected={toolbarMenu === "display"}
+              expanded={toolbarMenu === "display"}
+              onPress={() => toggleToolbarMenu("display")}
+            />
+          </View>
+          {!layout.compact ? (
+            <ChromeIconButton
+              styles={styles}
+              theme={theme}
+              label={`${emulation.mode === "mobile" ? "Disable" : "Enable"} mobile emulation`}
+              icon="Smartphone"
+              selected={emulation.mode === "mobile"}
+              disabled={!viewerToken || anyMutationPending}
+              onPress={() =>
+                requestControlled("change mobile emulation", () =>
+                  controlledActionsRef.current?.toggleEmulation(),
+                )
+              }
+            />
+          ) : null}
           <View ref={actionsAnchorRef} collapsable={false}>
             <ChromeIconButton
               styles={styles}
@@ -1659,6 +1829,21 @@ export function ManagedBrowserPanel({
               />
             );
           })}
+          {video.supported ? (
+            <BrowserVideoSurface
+              canvasRef={video.canvasRef}
+              style={{
+                position: "absolute",
+                left: displayRect?.x ?? 0,
+                top: displayRect?.y ?? 0,
+                width: displayRect?.width ?? containerSize.width,
+                height: displayRect?.height ?? containerSize.height,
+                opacity: video.front ? 1 : 0,
+                overflow: "hidden",
+                borderRadius: 0,
+              }}
+            />
+          ) : null}
           {currentFrame && displayRect ? (
             <View
               ref={canvasInput.canvasRef}
@@ -1667,7 +1852,7 @@ export function ManagedBrowserPanel({
               pointerEvents={liveInputEnabled ? "auto" : "none"}
               style={interactionStyle}
             />
-          ) : imageError ? (
+          ) : video.front ? null : imageError ? (
             <CanvasPlaceholder
               styles={styles}
               theme={theme}
@@ -1759,6 +1944,10 @@ export function ManagedBrowserPanel({
                 );
               }}
               captureQuality={preferences.captureQuality}
+              videoBitrate={preferences.videoBitrate}
+              videoFps={preferences.videoFps}
+              onVideoBitrateChange={preferences.changeVideoBitrate}
+              onVideoFpsChange={preferences.changeVideoFps}
               onSelect={(id) =>
                 requestControlled("change the browser resolution", () =>
                   controlledActionsRef.current?.selectDevicePreset(id),
@@ -1940,7 +2129,7 @@ export function ManagedBrowserPanel({
           title={toolbarMenu === "display" ? "Display options" : "Browser menu"}
           paneRef={paneRef}
           paneSize={paneSize}
-          anchorRef={actionsAnchorRef}
+          anchorRef={toolbarMenu === "display" ? displayAnchorRef : actionsAnchorRef}
           preferredHeight={
             toolbarMenu === "display"
               ? 300 + preferences.favoritePresetIds.length * (layout.compact ? 44 : 36)

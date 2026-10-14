@@ -57,7 +57,7 @@ function harness() {
   const lease = supervisor.claimBridge("bridge");
   const request = (operation: string, input: unknown) =>
     supervisor.dispatch({
-      version: 2,
+      version: 3,
       id: "request",
       token: "unused-by-direct-fixture",
       bridgeId: "bridge",
@@ -165,7 +165,7 @@ describe("display loss recovery", () => {
     const agentRequest = (operation: "status" | "capture") =>
       h.supervisor.dispatch({
         id: "agent",
-        version: 2,
+        version: 3,
         method: "agent.request",
         ticket,
         operation,
@@ -174,7 +174,7 @@ describe("display loss recovery", () => {
     try {
       const human = await h.attach();
       const base = {
-        version: 2 as const,
+        version: 3 as const,
         token: "unused",
         bridgeId: "bridge",
         epoch: h.lease.epoch,
@@ -209,7 +209,7 @@ describe("display loss recovery", () => {
       });
       const late = (await h.supervisor.dispatch({
         id: "agent-late",
-        version: 2,
+        version: 3,
         method: "agent.request",
         ticket: lateTicket,
         operation: "status",
@@ -241,11 +241,11 @@ describe("display loss recovery", () => {
   it("keeps a lost runtime whose stop failed away from implicit agent paths until explicit recovery", async () => {
     const h = harness();
     const ticket = `agent_${"x".repeat(40)}`;
-    const base = { version: 2 as const, token: "unused", bridgeId: "bridge", epoch: h.lease.epoch };
+    const base = { version: 3 as const, token: "unused", bridgeId: "bridge", epoch: h.lease.epoch };
     const agentRequest = (operation: "status" | "capture") =>
       h.supervisor.dispatch({
         id: "agent",
-        version: 2,
+        version: 3,
         method: "agent.request",
         ticket,
         operation,

@@ -42,7 +42,7 @@ it("routes validated human gestures, fences replaced plugin bridges and never ex
     bridgeId = "bridge",
   ) =>
     supervisor.dispatch({
-      version: 2,
+      version: 3,
       id: "request",
       token: "unused-by-direct-fixture",
       bridgeId,
@@ -133,7 +133,7 @@ it("routes validated human gestures, fences replaced plugin bridges and never ex
     expect(calls.filter((value) => value === "input.end")).toHaveLength(1);
     await expect(
       supervisor.dispatch({
-        version: 2,
+        version: 3,
         id: "request",
         method: "agent.request",
         ticket: "invalid",
