@@ -5,11 +5,130 @@
  * new keyframe before another delta can be forwarded.
  */
 import { VIDEO_MAX_PACKET_BYTES } from "../../shared/managed-browser/browser-video";
+import { FRAME_MAX_BYTES } from "../../shared/managed-browser/capture-settings";
+
+export const NATIVE_SNAPSHOT_MAX_TIMEOUT_MS = 1_500;
 
 export const NATIVE_VIDEO_EXTENSION_SOURCE = `
 let capture = null;
 const encoders = new Map();
 const pendingEncoders = new Map();
+// One reserved snapshot job and one reusable canvas, across capture restarts.
+// The reservation outlives cancellation until an unabortable conversion settles.
+let snapshotJob = null;
+let snapshotCanvas = null;
+const SNAPSHOT_MAX_BYTES = ${FRAME_MAX_BYTES};
+const SNAPSHOT_MAX_TIMEOUT_MS = ${NATIVE_SNAPSHOT_MAX_TIMEOUT_MS};
+function snapshotSlotState() {
+  return { reserved: snapshotJob !== null };
+}
+function settleSnapshot(job, value) {
+  if (job.settled) return;
+  job.settled = true;
+  clearTimeout(job.timer);
+  job.resolve(Object.assign({ token: job.token }, value));
+}
+function releaseSnapshot(job) {
+  if (snapshotJob === job) snapshotJob = null;
+}
+/** Refuse publication now. A selected job keeps the slot until its conversion settles. */
+function cancelSnapshot(status) {
+  const job = snapshotJob;
+  if (!job) return;
+  job.cancelled = true;
+  settleSnapshot(job, { status });
+  if (!job.selected) releaseSnapshot(job);
+}
+/** Arm one request for the next current-generation source frame at or after its floor. */
+function captureSnapshot(token, quality, maxBytes, minimumTimestampUs, generation, timeoutMs) {
+  return new Promise((resolve) => {
+    const reply = (status) => resolve({ token, status });
+    if (typeof token !== "string" || !/^[a-f0-9]{32}$/.test(token)) return reply("unsupported");
+    if (typeof OffscreenCanvas !== "function") return reply("unsupported");
+    if (snapshotJob) return reply("busy");
+    if (!capture || capture.stopped) return reply("stopped");
+    if (!Number.isInteger(generation) || generation < capture.generation) return reply("stale");
+    if (!Number.isFinite(minimumTimestampUs) || !Number.isFinite(quality) || !Number.isFinite(maxBytes))
+      return reply("unsupported");
+    const bounded = Math.max(1, Math.min(100, Math.round(quality)));
+    const job = {
+      token,
+      ladder: [...new Set([bounded, 85, 65, 45, 25].filter((value) => value <= bounded))].slice(0, 3),
+      cap: Math.min(SNAPSHOT_MAX_BYTES, Math.max(1, Math.floor(maxBytes))),
+      floor: Math.max(minimumTimestampUs, capture.minimumTimestampUs),
+      generation,
+      source: capture,
+      selected: false,
+      cancelled: false,
+      settled: false,
+      resolve,
+      timer: null,
+    };
+    snapshotJob = job;
+    job.timer = setTimeout(() => {
+      if (job.settled) return;
+      job.cancelled = true;
+      settleSnapshot(job, { status: "timeout" });
+      if (!job.selected) releaseSnapshot(job);
+    }, Math.max(1, Math.min(SNAPSHOT_MAX_TIMEOUT_MS, Number(timeoutMs) || 1)));
+  });
+}
+/** Draw synchronously from a short-lived clone, then convert outside the capture loop. */
+function selectSnapshot(job, encodingFrame, timestampUs, width, height) {
+  job.selected = true;
+  let canvas;
+  try {
+    if (!snapshotCanvas || snapshotCanvas.width !== width || snapshotCanvas.height !== height)
+      snapshotCanvas = new OffscreenCanvas(width, height);
+    canvas = snapshotCanvas;
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("Snapshot canvas is unavailable");
+    const clone = encodingFrame.clone();
+    try {
+      context.drawImage(clone, 0, 0, width, height);
+    } finally {
+      clone.close();
+    }
+  } catch {
+    job.cancelled = true;
+    settleSnapshot(job, { status: "unsupported" });
+    releaseSnapshot(job);
+    return;
+  }
+  void encodeSnapshot(job, canvas, timestampUs, width, height);
+}
+async function encodeSnapshot(job, canvas, timestampUs, width, height) {
+  try {
+    for (const quality of job.ladder) {
+      if (job.cancelled) return;
+      const blob = await canvas.convertToBlob({ type: "image/jpeg", quality: quality / 100 });
+      if (job.cancelled) return;
+      if (blob.type !== "image/jpeg" || blob.size > job.cap) continue;
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      if (job.cancelled) return;
+      if (bytes.length < 1 || bytes.length > job.cap) continue;
+      settleSnapshot(job, {
+        status: "ready",
+        generation: job.generation,
+        timestampUs,
+        width,
+        height,
+        byteLength: bytes.length,
+        dataBase64: bytes64(bytes),
+      });
+      return;
+    }
+    settleSnapshot(job, { status: "too-large" });
+  } catch {
+    settleSnapshot(job, { status: "unsupported" });
+  } finally {
+    job.cancelled = true;
+    releaseSnapshot(job);
+    // A stop during conversion left this canvas for the settling job. Release it
+    // now only if no capture restarted and no newer job owns the slot.
+    if (!capture && !snapshotJob && snapshotCanvas === canvas) snapshotCanvas = null;
+  }
+}
 const bytes64 = (bytes) => {
   // Native byte conversion avoids constructing/copying a large binary string.
   // Retain the bounded legacy path for browsers without the newer byte API.
@@ -24,6 +143,9 @@ const bytes64 = (bytes) => {
 async function stopCapture() {
   const previous = capture;
   capture = null;
+  cancelSnapshot("stopped");
+  // A still-converting job keeps its own canvas reference and the global reservation.
+  if (!snapshotJob) snapshotCanvas = null;
   pendingEncoders.clear();
   if (!previous) return;
   previous.stopped = true;
@@ -113,6 +235,16 @@ async function startCapture(targetId, width, height, generation) {
               );
               break;
             }
+            const job = snapshotJob;
+            if (
+              job &&
+              !job.selected &&
+              !job.cancelled &&
+              job.source === current &&
+              current.generation === job.generation &&
+              frame.timestamp >= job.floor
+            )
+              selectSnapshot(job, encodingFrame, frame.timestamp, width, height);
             for (const state of encoders.values()) {
               if (state.failed || performance.now() - state.lastRequestedAt > 2000) continue;
               if (state.pending.size >= 2 || state.encoder.encodeQueueSize >= 2) {
@@ -352,6 +484,11 @@ function resetCapture(generation, minimumTimestampUs) {
   if (generation < capture.generation) return;
   capture.generation = generation;
   capture.minimumTimestampUs = minimumTimestampUs;
+  // An older request is stale. A request already issued for this new generation
+  // (reset still in flight) keeps waiting, with the stronger floor applied.
+  const job = snapshotJob;
+  if (job && job.generation < generation) cancelSnapshot("stale");
+  else if (job && !job.selected) job.floor = Math.max(job.floor, minimumTimestampUs);
   for (const state of encoders.values()) {
     if (state.failed) continue;
     state.forceKey = true;

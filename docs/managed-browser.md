@@ -42,6 +42,33 @@ Preparation targets macOS arm64 and Linux x64/glibc. Node's macOS minimum is 13.
 installed. Isolated Linux x64 acceptance passed as described below. Other architectures, Windows, musl and
 display/Xvfb provisioning are outside this release's preparation support.
 
+Hidden Linux browsers use image updates unless the host explicitly opts into an owned virtual display.
+The pinned agent-browser video extension needs an X display even when headed mode is omitted. Set
+`HOSTS_BROWSER_XVFB=1` in the prepared browser supervisor's host launch configuration only after Xvfb
+and its Debian dependencies have been provisioned and reviewed. Hosts does not install packages;
+changing the environment does not retarget or restart an already-running supervisor. The trusted
+internal `virtualDisplay:false` option overrides this opt-in; video-off also prevents display creation.
+macOS and explicitly headed callers retain their existing behavior.
+
+On an opted-in hidden Linux host, Hosts validates the exact root-owned `/usr/bin/Xvfb` ELF, creates a
+private authenticated display, and only then constructs the managed Chromium runtime. It never adopts
+an inherited desktop display or uses the global Agent Browser/Chrome. Missing or disabled display
+support selects extension-free images before the first browser launch, with a visible reason. Full
+Linux video remains subject to isolated runtime acceptance; image fallback does not satisfy that gate.
+
+Display authority and private ownership records live under
+`$PASEO_HOME/plugin-data/daemon-link/browser/displays/<workspace-hash>`, with a 0700 directory and 0600
+files. A retained reservation blocks a replacement even after opt-out or a supervisor restart. Shutdown
+rechecks the directly spawned child's PID, UID, birth, executable and argument digest. Only that child
+receives TERM and, after one second if still identically owned, KILL; descendants are never signalled.
+An observed XKB descendant, failed identity/signal, or unconfirmed exit retains the authority/root and
+refuses fallback/replacement. An unconfirmed Chromium shutdown also retains its display. Do not remove
+those files until independently verified cleanup is approved.
+The cooperative child/proof/cleanup deadline is 2.5 seconds; filesystem removal can finish late only
+after confirmed child exit and a verified owned root. No live force test is approved by the pure tests.
+No OS isolation or complete orphan census is claimed: task-child snapshots cannot eliminate fork/exit
+races, and live acceptance must verify the exact display socket/child/XKB lifecycle.
+
 ## Upgrading existing browser sessions
 
 The streaming runtime uses protocol 3. A protocol-2 runtime from Hosts 0.21 can keep running after a

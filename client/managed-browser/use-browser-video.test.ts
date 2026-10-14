@@ -36,12 +36,12 @@ const harness = vi.hoisted(() => ({
   decoderCloses: 0,
 }));
 const imageQuery = vi.hoisted(() => ({
-  options: null as null | { enabled: boolean; queryFn(): Promise<unknown> },
+  options: null as null | { enabled: boolean | (() => boolean); queryFn(): Promise<unknown> },
   refetch: vi.fn(() => Promise.resolve()),
 }));
 vi.mock("@tanstack/react-query", () => ({
   CancelledError: class extends Error {},
-  useQuery(options: { enabled: boolean; queryFn(): Promise<unknown> }) {
+  useQuery(options: { enabled: boolean | (() => boolean); queryFn(): Promise<unknown> }) {
     imageQuery.options = options;
     return { refetch: imageQuery.refetch };
   },
@@ -1009,11 +1009,11 @@ it("stops hidden-panel JPEG requests, including a queued refresh follow-up", asy
     });
   };
   const shown = render();
-  expect(imageQuery.options?.enabled).toBe(true);
+  expect((imageQuery.options?.enabled as () => boolean)()).toBe(true);
   const queuedCapture = imageQuery.options!.queryFn;
   active = false;
   const hidden = render();
-  expect(imageQuery.options?.enabled).toBe(false);
+  expect((imageQuery.options?.enabled as () => boolean)()).toBe(false);
   await expect(queuedCapture()).rejects.toBeDefined();
   hidden.refreshCapture();
   hidden.retryFrameCapture();

@@ -597,3 +597,294 @@ it("keeps idle teardown single-flight while native cleanup is slow", async () =>
     vi.useRealTimers();
   }
 });
+
+describe("native snapshot from the live track", () => {
+  const SNAPSHOT =
+    /^captureSnapshot\("([a-f0-9]{32})",(\d+),(\d+),(-?\d+),(\d+),(\d+)\)$/;
+  type Request = { token: string; quality: number; cap: number; floor: number; generation: number; timeoutMs: number };
+  function parse(expression: string): Request | null {
+    const match = SNAPSHOT.exec(expression);
+    if (!match) return null;
+    return {
+      token: match[1]!,
+      quality: Number(match[2]),
+      cap: Number(match[3]),
+      floor: Number(match[4]),
+      generation: Number(match[5]),
+      timeoutMs: Number(match[6]),
+    };
+  }
+  const jpeg = Buffer.from("fixture jpeg bytes");
+  function ready(request: Request, overrides: Record<string, unknown> = {}) {
+    return {
+      token: request.token,
+      status: "ready",
+      generation: request.generation,
+      timestampUs: request.floor + 1_000,
+      width: 1280,
+      height: 800,
+      byteLength: jpeg.length,
+      dataBase64: jpeg.toString("base64"),
+      ...overrides,
+    };
+  }
+  /** Route only snapshot/slot evaluations; keep every other helper command intact. */
+  /** Slot replies may be delayed; like CDP, a reply slower than its timeoutMs rejects at that timeout. */
+  function route(
+    helper: Helper,
+    answer: (request: Request, index: number) => unknown,
+    slot: () => boolean = () => false,
+    slotDelayMs: (index: number) => number = () => 0,
+  ) {
+    const requests: Request[] = [];
+    const slotTimeouts: (number | undefined)[] = [];
+    const send = helper.send.bind(helper);
+    helper.send = (async (method: string, params: Record<string, unknown> = {}, options: { timeoutMs?: number } = {}) => {
+      if (method === "Runtime.evaluate") {
+        const expression = String(params.expression);
+        const request = parse(expression);
+        if (request) {
+          helper.expressions.push(expression);
+          requests.push(request);
+          return { result: { value: answer(request, requests.length - 1) } };
+        }
+        if (expression === "snapshotSlotState()") {
+          helper.expressions.push(expression);
+          const index = slotTimeouts.length;
+          slotTimeouts.push(options.timeoutMs);
+          const delay = slotDelayMs(index);
+          if (!delay) return { result: { value: { reserved: slot() } } };
+          return new Promise<unknown>((resolve, reject) => {
+            const reply = setTimeout(() => resolve({ result: { value: { reserved: slot() } } }), delay);
+            if (options.timeoutMs !== undefined && options.timeoutMs < delay)
+              setTimeout(() => { clearTimeout(reply); reject(new Error("Runtime.evaluate timed out")); }, options.timeoutMs);
+          });
+        }
+      }
+      return send(method, params);
+    }) as Helper["send"];
+    return Object.assign(requests, { slotTimeouts });
+  }
+
+  it("refuses without a live healthy video cohort and issues no helper work", async () => {
+    const { capture, helper } = setup();
+    try {
+      expect(await capture.snapshot({ quality: 80, maxBytes: 600_000 })).toBeNull();
+      expect(helper.expressions.some((expression) => expression.startsWith("captureSnapshot"))).toBe(false);
+    } finally {
+      await capture.stop();
+    }
+  });
+
+  it("binds each request to its own token, source-time floor, generation and byte cap", async () => {
+    const { capture, helper } = setup();
+    try {
+      await capture.read({ quality: "high", waitMs: 0 });
+      const requests = route(helper, (request) => ready(request));
+      const before = Math.floor(performance.now() * 1000);
+      const first = await capture.snapshot({ quality: 80, maxBytes: 900_000 });
+      const second = await capture.snapshot({ quality: 80, maxBytes: 100_000 });
+      expect(requests).toHaveLength(2);
+      expect(requests[0]!.token).not.toBe(requests[1]!.token);
+      expect(requests[0]!.floor).toBeGreaterThanOrEqual(before);
+      expect(requests[1]!.floor).toBeGreaterThanOrEqual(requests[0]!.floor);
+      expect(requests[0]!.cap).toBe(600_000);
+      expect(requests[1]!.cap).toBe(100_000);
+      expect(requests[0]!.generation).toBe(1);
+      expect(requests[0]!.timeoutMs).toBe(1_500);
+      expect(first).toMatchObject({ dataBase64: jpeg.toString("base64"), byteLength: jpeg.length, width: 1280, height: 800 });
+      // Source time, not reply arrival time: the frame was captured 1ms after its floor.
+      expect(first!.capturedAtMonotonicMs).toBeCloseTo(requests[0]!.floor / 1000 + 1, 3);
+      expect(second).not.toBeNull();
+      expect(capture.sourceFailure).toBeNull();
+    } finally {
+      await capture.stop();
+    }
+  });
+
+  it.each([
+    ["a foreign token", (request: Request) => ({ ...ready(request), token: "f".repeat(32) })],
+    ["a frame older than the floor", (request: Request) => ready(request, { timestampUs: request.floor - 1 })],
+    ["another generation", (request: Request) => ready(request, { generation: request.generation + 1 })],
+    ["other dimensions", (request: Request) => ready(request, { width: 1279 })],
+    ["bytes above the request cap", (request: Request) => ready(request, { byteLength: request.cap + 1 })],
+    ["a byte length that does not match its data", (request: Request) => ready(request, { byteLength: jpeg.length + 1 })],
+    ["an unknown status", (request: Request) => ({ token: request.token, status: "published" })],
+  ])("drops %s without marking the source failed", async (_label, answer) => {
+    const { capture, helper } = setup();
+    try {
+      await capture.read({ quality: "high", waitMs: 0 });
+      route(helper, answer);
+      expect(await capture.snapshot({ quality: 80, maxBytes: 600_000 })).toBeNull();
+      expect(capture.sourceFailure).toBeNull();
+    } finally {
+      await capture.stop();
+    }
+  });
+
+  it("drops a reply whose generation was invalidated while it was pending", async () => {
+    const { capture, helper } = setup();
+    try {
+      await capture.read({ quality: "high", waitMs: 0 });
+      route(helper, (request) => {
+        capture.invalidateQueuedFrames(); // navigation/action boundary during the helper await
+        return ready(request);
+      });
+      expect(await capture.snapshot({ quality: 80, maxBytes: 600_000 })).toBeNull();
+    } finally {
+      await capture.stop();
+    }
+  });
+
+  it("waits boundedly for an earlier reservation, then sends a fresh request", async () => {
+    vi.useFakeTimers();
+    const { capture, helper } = setup();
+    try {
+      await capture.read({ quality: "high", waitMs: 0 });
+      let reserved = 2;
+      const requests = route(
+        helper,
+        (request, index) => (index === 0 ? { token: request.token, status: "busy" } : ready(request)),
+        () => reserved-- > 0,
+      );
+      const result = capture.snapshot({ quality: 80, maxBytes: 600_000 });
+      await vi.advanceTimersByTimeAsync(400);
+      expect(await result).not.toBeNull();
+      expect(requests).toHaveLength(2);
+      expect(requests[1]!.token).not.toBe(requests[0]!.token);
+      expect(requests[1]!.floor).toBeGreaterThanOrEqual(requests[0]!.floor);
+      expect(capture.sourceFailure).toBeNull();
+    } finally {
+      await capture.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops waiting at the deadline, then refuses until the stuck slot settles", async () => {
+    vi.useFakeTimers();
+    const { capture, helper } = setup(() => Date.now());
+    try {
+      await capture.read({ quality: "high", waitMs: 0 });
+      let stuck = true;
+      const requests = route(
+        helper,
+        (request) => (stuck ? { token: request.token, status: "busy" } : ready(request)),
+        () => stuck,
+      );
+      const started = Date.now();
+      const result = capture.snapshot({ quality: 80, maxBytes: 600_000 }).then((value) => ({ value, at: Date.now() }));
+      await vi.advanceTimersByTimeAsync(1_600);
+      const settled = await result;
+      expect(settled.value).toBeNull();
+      expect(settled.at - started).toBeLessThanOrEqual(1_500);
+      expect(requests).toHaveLength(1);
+      // Probes at 100..1400ms; the 1500ms deadline ends the wait without another RPC.
+      expect(requests.slotTimeouts).toHaveLength(14);
+      expect(requests.slotTimeouts.every((timeout, index) => timeout === 1_500 - 100 * (index + 1))).toBe(true);
+      // Circuit: one bounded probe; a reserved slot refuses before arming anything new.
+      expect(await capture.snapshot({ quality: 80, maxBytes: 600_000 })).toBeNull();
+      expect(requests).toHaveLength(1);
+      expect(requests.slotTimeouts.at(-1)).toBe(100);
+      stuck = false;
+      expect(await capture.snapshot({ quality: 80, maxBytes: 600_000 })).not.toBeNull();
+      expect(requests).toHaveLength(2);
+      expect(capture.sourceFailure).toBeNull();
+    } finally {
+      await capture.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("slow successful reserved replies cannot extend the busy wait past its absolute 1500ms deadline", async () => {
+    vi.useFakeTimers();
+    const { capture, helper } = setup(() => Date.now());
+    try {
+      await capture.read({ quality: "high", waitMs: 0 });
+      const requests = route(helper, (request) => ({ token: request.token, status: "busy" }), () => true, () => 250);
+      const started = Date.now();
+      const result = capture.snapshot({ quality: 80, maxBytes: 600_000 }).then((value) => ({ value, at: Date.now() }));
+      await vi.advanceTimersByTimeAsync(2_000); // past the deadline, below encoder idle expiry
+      const settled = await result;
+      expect(settled.value).toBeNull();
+      expect(settled.at - started).toBeLessThanOrEqual(1_500);
+      // Each RPC was given only the remaining budget as its CDP timeout.
+      expect(requests.slotTimeouts.every((timeout) => timeout !== undefined && timeout <= 1_400)).toBe(true);
+      expect(requests).toHaveLength(1); // exhausted: no fresh request, slot circuit opened
+      // The blocked probe is itself bounded at 100ms; its slower reply rejects and stays blocked.
+      const probeStarted = Date.now();
+      const probe = capture.snapshot({ quality: 80, maxBytes: 600_000 }).then((value) => ({ value, at: Date.now() }));
+      await vi.advanceTimersByTimeAsync(150);
+      const probed = await probe;
+      expect(probed.value).toBeNull();
+      expect(probed.at - probeStarted).toBeLessThanOrEqual(100);
+      expect(requests.slotTimeouts.at(-1)).toBe(100);
+      expect(requests).toHaveLength(1);
+      expect(capture.sourceFailure).toBeNull();
+    } finally {
+      await capture.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("a free reply that would arrive after the deadline is refused, not accepted late", async () => {
+    vi.useFakeTimers();
+    const { capture, helper } = setup(() => Date.now());
+    try {
+      await capture.read({ quality: "high", waitMs: 0 });
+      let reads = 0;
+      const requests = route(
+        helper,
+        (request) => ({ token: request.token, status: "busy" }),
+        () => ++reads < 2, // reserved on the first reply, free on the second
+        () => 900,
+      );
+      const started = Date.now();
+      const result = capture.snapshot({ quality: 80, maxBytes: 600_000 }).then((value) => ({ value, at: Date.now() }));
+      await vi.advanceTimersByTimeAsync(3_000);
+      const settled = await result;
+      expect(settled.value).toBeNull();
+      expect(settled.at - started).toBeLessThanOrEqual(1_500);
+      expect(requests.slotTimeouts).toEqual([1_400, 400]);
+      expect(requests).toHaveLength(1);
+      // Exhaustion leaves no queued polling: no further slot RPCs, no fresh snapshot, no source failure.
+      await vi.advanceTimersByTimeAsync(400);
+      expect(requests.slotTimeouts).toEqual([1_400, 400]);
+      expect(requests).toHaveLength(1);
+      expect(capture.sourceFailure).toBeNull();
+    } finally {
+      await capture.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("disables snapshots for this instance after two consecutive timeouts, without a source failure", async () => {
+    const { capture, helper } = setup();
+    try {
+      await capture.read({ quality: "high", waitMs: 0 });
+      const requests = route(helper, (request) => ({ token: request.token, status: "timeout" }));
+      expect(await capture.snapshot({ quality: 80, maxBytes: 600_000 })).toBeNull();
+      expect(await capture.snapshot({ quality: 80, maxBytes: 600_000 })).toBeNull();
+      expect(await capture.snapshot({ quality: 80, maxBytes: 600_000 })).toBeNull();
+      expect(requests).toHaveLength(2);
+      expect(capture.sourceFailure).toBeNull();
+      expect(await capture.read({ quality: "high", waitMs: 0 })).toMatchObject({ status: expect.not.stringMatching(/unsupported/) });
+    } finally {
+      await capture.stop();
+    }
+  });
+
+  it("refuses after stop and when the helper evaluation rejects", async () => {
+    const { capture, helper } = setup();
+    await capture.read({ quality: "high", waitMs: 0 });
+    const send = helper.send.bind(helper);
+    helper.send = (async (method: string, params: Record<string, unknown> = {}) => {
+      if (method === "Runtime.evaluate" && String(params.expression).startsWith("captureSnapshot"))
+        return { exceptionDetails: { text: "private helper error" } };
+      return send(method, params);
+    }) as Helper["send"];
+    expect(await capture.snapshot({ quality: 80, maxBytes: 600_000 })).toBeNull();
+    expect(capture.sourceFailure).toBeNull();
+    await capture.stop();
+    expect(await capture.snapshot({ quality: 80, maxBytes: 600_000 })).toBeNull();
+  });
+});

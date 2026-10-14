@@ -1,9 +1,23 @@
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-const fixture = vi.hoisted(() => ({ calls: [] as any[], fail: false, unknown: false, notSent: false, expired: false, expires: 0 }));
+const fixture = vi.hoisted(() => ({ calls: [] as any[], fail: false, unknown: false, notSent: false, expired: false, expires: 0, focused: null as string | null, focusCalls: [] as string[] }));
 vi.mock("react-native", () => ({ View: "View", Text: "Text", Pressable: "Pressable" }));
-vi.mock("@getpaseo/plugin/client/react-native", () => ({ Modal: Object.assign(({ open, children }: any) => open ? children : null, { Content: ({ children }: any) => children }) }));
+vi.mock("@getpaseo/plugin/client/react-native", async () => {
+  const { createElement, useEffect, useState } = await import("react");
+  return { Modal: Object.assign(({ open, children }: any) => {
+    // Installed desktop Modal commits its portal after its visibility effect.
+    const [shown, setShown] = useState(open);
+    useEffect(() => { setShown(open); }, [open]);
+    useEffect(() => {
+      if (shown && fixture.focused !== "Cancel") {
+        fixture.focused = "Close";
+        fixture.focusCalls.push("Close");
+      }
+    }, [shown]);
+    return shown ? createElement("View", null, createElement("Pressable", { accessibilityLabel: "Close" }), children) : null;
+  }, { Content: ({ children }: any) => children }) };
+});
 vi.mock("@getpaseo/plugin/client", () => ({ useRpc: () => async (input: any) => {
   fixture.calls.push(input);
   if (fixture.fail) throw Error("SECRET raw stderr argv");
@@ -19,10 +33,19 @@ import { isBrowserRuntimeUpgradeRequired } from "../../shared/managed-browser/br
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
 let tree: ReactTestRenderer | null = null;
 const verified = vi.fn();
-async function render() { await act(async () => { tree = create(<BrowserRuntimeUpgradeAction theme={{ colors: {} } as any} hostLabel="Fixture host" onVerified={verified} />); }); }
+async function render() {
+  await act(async () => {
+    tree = create(<BrowserRuntimeUpgradeAction theme={{ colors: {} } as any} hostLabel="Fixture host" onVerified={verified} />, {
+      createNodeMock: node => {
+        const { accessibilityLabel } = node.props as { accessibilityLabel: string };
+        return { focus() { fixture.focused = accessibilityLabel; fixture.focusCalls.push(accessibilityLabel); } };
+      },
+    });
+  });
+}
 async function press(label: string) { await act(async () => { tree!.root.findAllByType("Pressable" as any).find(node => node.props.accessibilityLabel === label)!.props.onPress(); }); }
 const labels = () => tree!.root.findAllByType("Pressable" as any).map(node => node.props.accessibilityLabel);
-beforeEach(() => { fixture.calls = []; fixture.fail = false; fixture.unknown = false; fixture.notSent = false; fixture.expired = false; fixture.expires = Date.now() + 60000; verified.mockClear(); });
+beforeEach(() => { fixture.calls = []; fixture.fail = false; fixture.unknown = false; fixture.notSent = false; fixture.expired = false; fixture.expires = Date.now() + 60000; fixture.focused = null; fixture.focusCalls = []; verified.mockClear(); });
 afterEach(async () => { if (tree) await act(async () => tree!.unmount()); tree = null; });
 it("mount does not inspect or signal; explicit preview shows Cancel first and ALL-session copy", async () => {
   await render(); expect(fixture.calls).toEqual([]);
@@ -78,4 +101,14 @@ it("recognises the observed official RPC error wrapper with bounded matching", (
   for (const text of [wrapped.replace("plugin.rpc.invoke.request", "agent.create.request"), wrapped.replace("handler_error", "unrelated_error"),
     wrapped.replace("Request failed: ", "Unrelated prefix: "), wrapped.replace(": ...", ": " + "x".repeat(4096)),
     "HOSTS_BROWSER_RUNTIME_UPGRADE_REQUIRED: " + "x".repeat(4096)]) expect(isBrowserRuntimeUpgradeRequired(new Error(text))).toBe(false);
+});
+
+it("focuses Cancel on delayed portal mount and keeps the ref stable across renders", async () => {
+  await render(); await press("Restart Hosts browser runtime");
+  expect(fixture.focused).toBe("Cancel");
+  expect(fixture.focusCalls).toEqual(["Cancel"]);
+  await act(async () => tree!.update(<BrowserRuntimeUpgradeAction theme={{ colors: {} } as any}
+    hostLabel="Updated fixture label" onVerified={verified} />));
+  expect(fixture.focusCalls).toEqual(["Cancel"]);
+  expect(fixture.calls.map(call => call.action)).toEqual(["preview"]);
 });

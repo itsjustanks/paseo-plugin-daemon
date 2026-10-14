@@ -197,6 +197,8 @@ export function ManagedBrowserPanel({
   onWatchExternal,
 }: PluginWorkspacePanelProps & { createIfMissing?: boolean; initialTabId?: string; onCreateAttempt?(): void; onWatchExternal?(): void }) {
   const panelScope = `${host.id}/${workspaceId}`;
+  const [runtimeUpgradeScope, setRuntimeUpgradeScope] = useState<string | null>(null);
+  const runtimeUpgradeBlocked = runtimeUpgradeScope === panelScope;
   // Root chat navigation remounts the panel. An initial request is never reused
   // if a caller instead changes this component's host/workspace in place.
   const [initialTabRequest] = useState(() => ({
@@ -316,6 +318,7 @@ export function ManagedBrowserPanel({
     setFillViewportScope(panelScope);
     setDensitySelection({ scope: panelScope, mode: "auto" });
     setAutomaticDensityFailureScope(null);
+    setRuntimeUpgradeScope(null);
   }, [panelScope]);
   const panelScopeRef = useRef(panelScope);
   panelScopeRef.current = panelScope;
@@ -432,6 +435,10 @@ export function ManagedBrowserPanel({
     gcTime: 0,
     refetchOnWindowFocus: false,
   });
+
+  useEffect(() => {
+    if (isBrowserRuntimeUpgradeRequired(attachQuery.error)) setRuntimeUpgradeScope(panelScope);
+  }, [attachQuery.error, panelScope]);
 
   const closedView = browserClosed || isBrowserClosedError(attachQuery.error);
   const closedViewRef = useRef(closedView);
@@ -1587,12 +1594,13 @@ export function ManagedBrowserPanel({
       ]
     : styles.interactionLayer;
 
-  if (isBrowserRuntimeUpgradeRequired(attachQuery.error)) {
+  if (runtimeUpgradeBlocked || isBrowserRuntimeUpgradeRequired(attachQuery.error)) {
     return <View style={styles.screen}>
       <CanvasPlaceholder styles={styles} theme={theme} title="Browser runtime restart required"
         detail="The previous Hosts browser runtime must be restarted before this browser can connect.">
         <BrowserRuntimeUpgradeAction key={panelScope} theme={theme} hostLabel={host.label}
           onVerified={() => {
+            setRuntimeUpgradeScope(null);
             createPermit.current = false;
             onCreateAttempt?.();
             void attachQuery.refetch({ cancelRefetch: false });

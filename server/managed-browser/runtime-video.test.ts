@@ -510,3 +510,57 @@ describe("native video runtime fence", () => {
     expect(fixture.captures).toHaveLength(0);
   });
 });
+
+describe("native snapshot keeps the healthy video instance", () => {
+  const data = Buffer.from([255,216,255,192,0,11,8,6,142,3,56,1,1,17,0,255,217]).toString("base64");
+  function liveSnapshot(onSnapshot: () => void = () => {}) {
+    return vi.fn(async () => {
+      onSnapshot();
+      // Older than the 1s cache window, so every agent capture asks the track again.
+      return {
+        dataBase64: data,
+        byteLength: Buffer.byteLength(data, "base64"),
+        width: 824,
+        height: 1678,
+        capturedAt: new Date(Date.now() - 1_100).toISOString(),
+        capturedAtMonotonicMs: performance.now() - 1_100,
+      };
+    });
+  }
+
+  it("15 agent captures against live video cause no stop, no replacement and no reset", async () => {
+    const { runtime, page } = setup();
+    expect((await runtime.readVideo({ quality: "high", waitMs: 0 })).status).toBe("ready");
+    const capture = fixture.captures[0]! as (typeof fixture.captures)[number] & { snapshot?: unknown };
+    const snapshot = liveSnapshot();
+    capture.snapshot = snapshot;
+    for (let cycle = 0; cycle < 15; cycle++) {
+      expect((await runtime.frame(600_000, 85, 0)).transport).toBe("native-snapshot");
+      expect((await runtime.readVideo({ quality: "high", waitMs: 0 })).status).toBe("ready");
+    }
+    expect(snapshot).toHaveBeenCalledTimes(15);
+    expect(capture.stop).not.toHaveBeenCalled();
+    expect(fixture.captures).toHaveLength(1);
+    expect(page.send.mock.calls.some(([method]) => method === "Page.captureScreenshot")).toBe(false);
+    await runtime.stopVideo();
+  });
+
+  it("a navigation during a pending snapshot refuses it and keeps the arbitrated fallback", async () => {
+    const { runtime, internal, page } = setup();
+    page.send.mockImplementation(async (method: string) => {
+      if (method === "Page.getLayoutMetrics") return { cssVisualViewport: { pageX: 0, pageY: 0 } };
+      if (method === "Page.captureScreenshot") return { data };
+      return {};
+    });
+    await runtime.readVideo({ quality: "high", waitMs: 0 });
+    const capture = fixture.captures[0]! as (typeof fixture.captures)[number] & { snapshot?: unknown };
+    capture.snapshot = liveSnapshot(() => {
+      internal.documentGeneration += 1;
+    });
+    const frame = await runtime.frame(600_000, 85, 0);
+    expect(frame.transport).toBe("screenshot");
+    expect(capture.stop).toHaveBeenCalledOnce();
+    expect(page.send.mock.calls.some(([method]) => method === "Page.captureScreenshot")).toBe(true);
+    await runtime.stopVideo();
+  });
+});

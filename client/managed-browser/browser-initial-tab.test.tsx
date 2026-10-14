@@ -3,7 +3,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const fixture = vi.hoisted(() => ({ calls: [] as { name: string; input: any }[], missing: false, upgrade: false,
-  wrong: false, viewers: new Map<string, any>(), rpc: new Map<string, any>(), sequence: 0 }));
+  wrong: false, attachGate: null as Promise<void> | null, viewers: new Map<string, any>(), rpc: new Map<string, any>(), sequence: 0 }));
 vi.mock("react-native", () => ({ View: "View", Text: "Text", Pressable: "Pressable",
   ScrollView: "ScrollView", TextInput: "TextInput", ActivityIndicator: "ActivityIndicator",
   StyleSheet: { create: (value: unknown) => value, absoluteFillObject: {} },
@@ -24,6 +24,7 @@ vi.mock("@getpaseo/plugin/client", () => ({
       const input = contract.input.parse(raw); fixture.calls.push({ name: contract.name, input });
       let result;
       if (contract.name.endsWith(".attach")) {
+        if (fixture.attachGate) await fixture.attachGate;
         if (fixture.upgrade) throw new Error("HOSTS_BROWSER_RUNTIME_UPGRADE_REQUIRED: restart required");
         if (fixture.missing && input.tabId) throw new Error("Browser tab is no longer available");
         const tabId = fixture.wrong ? "unrelated-tab" : input.tabId ?? "open-tab";
@@ -63,7 +64,7 @@ function noMutations() {
   expect(fixture.calls.some(c => /control\.acquire|tabs\.create|\.reopen|\.navigate|viewport\.resize/.test(c.name))).toBe(false);
   expect(fixture.calls.filter(c => c.name.endsWith(".attach")).every(c => c.input.create === false)).toBe(true);
 }
-beforeEach(() => { fixture.calls=[]; fixture.missing=false; fixture.upgrade=false; fixture.wrong=false; fixture.viewers.clear();
+beforeEach(() => { fixture.calls=[]; fixture.missing=false; fixture.upgrade=false; fixture.wrong=false; fixture.attachGate=null; fixture.viewers.clear();
   fixture.rpc.clear(); fixture.sequence=0; client=new QueryClient({ defaultOptions: { queries: { retry: false } } }); });
 afterEach(async () => { if(tree) await act(async () => {tree!.unmount();}); tree=null; client.clear(); });
 it("preserves a validated initial tab through mount resets and observes it without creating or acquiring", async () => {
@@ -125,4 +126,34 @@ it("consumes an explicit create permit before the blocked attach and never repla
   const attaches = fixture.calls.filter(c => c.name.endsWith(".attach"));
   expect(attaches.map(c => c.input.create)).toEqual([true, false]);
   expect(fixture.calls.some(c => /control\.acquire|tabs\.create|\.reopen|\.navigate/.test(c.name))).toBe(false);
+});
+
+it("retains historical maintenance across a pending and same-error attachment refetch", async () => {
+  fixture.upgrade = true; await render({ initialTabId: "historical-tab", createIfMissing: true });
+  const original = tree!.root.findByType("RuntimeUpgrade" as never);
+  const query = client.getQueryCache().findAll({ queryKey: ["hosts-browser", "attach"] })[0]!;
+  expect(query.isActive()).toBe(true);
+  let release!: () => void; fixture.attachGate = new Promise<void>(resolve => { release = resolve; });
+  let pending!: Promise<unknown>;
+  await act(async () => { pending = query.fetch().catch(() => undefined); });
+  for (let i = 0; i < 4; i++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
+  expect(query.state.error).toBeNull(); expect(query.state.status).toBe("pending");
+  expect(tree!.root.findByType("RuntimeUpgrade" as never)).toBe(original);
+  expect(JSON.stringify(tree!.toJSON())).not.toContain("Browser tab unavailable");
+  await act(async () => { release(); await pending; });
+  await render({ initialTabId: "historical-tab", createIfMissing: true }, true);
+  expect(tree!.root.findByType("RuntimeUpgrade" as never)).toBe(original);
+  expect(fixture.calls.filter(c => c.name.endsWith(".attach")).every(c => c.input.tabId === "historical-tab")).toBe(true);
+  noMutations();
+});
+it.each(["host", "workspace"])("resets historical maintenance when the %s scope changes in place", async changed => {
+  fixture.upgrade = true; await render({ initialTabId: "historical-tab", createIfMissing: true });
+  expect(tree!.root.findAllByType("RuntimeUpgrade" as never)).toHaveLength(1);
+  fixture.upgrade = false;
+  const other = changed === "host" ? { host: { id: "other-host", label: "Other" } } : { workspaceId: "other-workspace" };
+  await render({ initialTabId: "historical-tab", createIfMissing: true, ...other }, true);
+  expect(tree!.root.findAllByType("RuntimeUpgrade" as never)).toHaveLength(0);
+  await render({ initialTabId: "historical-tab", createIfMissing: true }, true);
+  expect(tree!.root.findAllByType("RuntimeUpgrade" as never)).toHaveLength(0);
+  noMutations();
 });

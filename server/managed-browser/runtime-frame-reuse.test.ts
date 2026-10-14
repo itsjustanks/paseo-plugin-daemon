@@ -293,3 +293,70 @@ describe("exact runtime receipt reuse across policy cache expiry", () => {
     }
   });
 });
+
+describe("native-snapshot provenance in policy receipts", () => {
+  it("labels native snapshots exactly, reuses only their exact receipt, and still authorizes input", async () => {
+    const f = await fixture();
+    try {
+      f.raw.transport = "native-snapshot";
+      const first = await f.manager.capture(f.viewer.viewerToken);
+      expect(first.frame?.transport).toBe("native-snapshot");
+      f.advance();
+      const repeated = await f.manager.capture(f.viewer.viewerToken, DEFAULT_CAPTURE_QUALITY, first.frame!.frameId);
+      expect(repeated.frame).toBeNull();
+      const result = await f.manager.beginGesture({
+        viewerToken: f.viewer.viewerToken,
+        controlToken: f.control.controlToken,
+        expected: f.expected(first.state),
+        target: target(first.frame!),
+        pointerKind: "mouse",
+      });
+      expect(result).toHaveProperty("gestureId");
+    } finally {
+      f.manager.disconnect();
+    }
+  });
+
+  it("a provenance change between snapshot and screenshot always issues a new token", async () => {
+    const f = await fixture();
+    try {
+      f.raw.transport = "native-snapshot";
+      const first = await f.manager.capture(f.viewer.viewerToken);
+      f.advance();
+      f.raw.transport = "screenshot";
+      const next = await f.manager.capture(f.viewer.viewerToken, DEFAULT_CAPTURE_QUALITY, first.frame!.frameId);
+      expect(next.frame?.frameId).not.toBe(first.frame!.frameId);
+      expect(next.frame?.transport).toBe("screenshot");
+    } finally {
+      f.manager.disconnect();
+    }
+  });
+
+  it("an unknown transport keeps the legacy screenshot label and is never reused", async () => {
+    const f = await fixture();
+    try {
+      f.raw.transport = "unlisted-provider";
+      const first = await f.manager.capture(f.viewer.viewerToken);
+      expect(first.frame?.transport).toBe("screenshot");
+      f.advance();
+      const next = await f.manager.capture(f.viewer.viewerToken, DEFAULT_CAPTURE_QUALITY, first.frame!.frameId);
+      expect(next.frame?.frameId).not.toBe(first.frame!.frameId);
+    } finally {
+      f.manager.disconnect();
+    }
+  });
+
+  it("a document change revokes native-snapshot reuse like any other receipt", async () => {
+    const f = await fixture();
+    try {
+      f.raw.transport = "native-snapshot";
+      const first = await f.manager.capture(f.viewer.viewerToken);
+      f.advance();
+      f.documentChange();
+      const next = await f.manager.capture(f.viewer.viewerToken, DEFAULT_CAPTURE_QUALITY, first.frame!.frameId);
+      expect(next.frame?.frameId).not.toBe(first.frame!.frameId);
+    } finally {
+      f.manager.disconnect();
+    }
+  });
+});

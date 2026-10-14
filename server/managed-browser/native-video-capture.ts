@@ -19,6 +19,7 @@ import {
   type VideoEncoderSettings,
   videoEncoderKey,
 } from "../../shared/managed-browser/video-settings";
+import { FRAME_MAX_BASE64_CHARS, FRAME_MAX_BYTES } from "../../shared/managed-browser/capture-settings";
 import { attachToTarget, type CdpConnection, type CdpSession, CdpUnavailableError } from "./cdp";
 import {
   createNativeVideoBuffer,
@@ -26,6 +27,7 @@ import {
   videoSourceTime,
 } from "./native-video-buffer";
 import { NATIVE_VIDEO_EXTENSION_ID } from "./native-video-extension";
+import { NATIVE_SNAPSHOT_MAX_TIMEOUT_MS } from "./native-video-extension-source";
 import { type RuntimeVideoPacket, runtimeVideoPacketSchema } from "./native-video-packet";
 import type { VideoSourceFailureCode } from "./video-source-recovery";
 export type NativeVideoQuality = "low" | "medium" | "high";
@@ -47,6 +49,20 @@ interface EncoderState {
   keyRequestedAt: number;
 }
 class VideoEncoderLimitError extends Error {}
+/** A JPEG encoded from the live native track. Time is the frame's own source time. */
+export interface NativeSnapshot {
+  dataBase64: string;
+  byteLength: number;
+  width: number;
+  height: number;
+  capturedAt: string;
+  capturedAtMonotonicMs: number;
+}
+const NATIVE_SNAPSHOT_SLOT_POLL_MS = 100;
+/** Bound for the single slot probe a blocked instance makes per request. */
+const NATIVE_SNAPSHOT_SLOT_PROBE_MS = 100;
+const NATIVE_SNAPSHOT_TIMEOUT_LIMIT = 2;
+type SnapshotStatus = "ready" | "busy" | "timeout" | "stale" | "stopped" | "too-large" | "unsupported";
 interface Evaluation<T> {
   result?: { value?: T };
   exceptionDetails?: unknown;
@@ -84,6 +100,11 @@ export class NativeVideoCapture {
   private failure: string | null = null;
   private failureCode: VideoSourceFailureCode | null = null;
   private readonly ready: Promise<void>;
+  private sourceReady = false;
+  /** Snapshot degradation is per instance and never a source failure. */
+  private snapshotTimeouts = 0;
+  private snapshotDisabled = false;
+  private snapshotSlotBlocked = false;
   constructor(private readonly options: NativeVideoCaptureOptions) {
     this.lastDemandAt = this.now();
     this.ready = this.start();
@@ -139,15 +160,16 @@ export class NativeVideoCapture {
       throw new CdpUnavailableError("Native video attachment changed");
     }
   }
-  private async evaluate<T>(expression: string): Promise<T> {
+  /** `timeoutMs` uses the existing per-command CDP deadline; omitted keeps the session default. */
+  private async evaluate<T>(expression: string, timeoutMs?: number): Promise<T> {
     this.assertCurrent();
     const helper = this.helper;
     if (!helper) throw new CdpUnavailableError("Native video helper is unavailable");
-    const result = await helper.send<Evaluation<T>>("Runtime.evaluate", {
-      expression,
-      awaitPromise: true,
-      returnByValue: true,
-    });
+    const result = await helper.send<Evaluation<T>>(
+      "Runtime.evaluate",
+      { expression, awaitPromise: true, returnByValue: true },
+      timeoutMs === undefined ? {} : { timeoutMs },
+    );
     this.assertCurrent();
     if (result.exceptionDetails) throw new Error("Native video helper rejected acquisition");
     return result.result?.value as T;
@@ -192,6 +214,7 @@ export class NativeVideoCapture {
       await this.evaluate(
         `startCapture(${JSON.stringify(this.options.targetId)},${this.options.width},${this.options.height},${this.generation})`,
       );
+      this.sourceReady = true;
     } catch (error) {
       await this.closeHelper();
       throw error;
@@ -434,6 +457,151 @@ export class NativeVideoCapture {
         this.pendingSourceReads -= 1;
         this.lastDemandAt = this.now();
       }
+    }
+  }
+  /**
+   * Encode the next current-generation source frame captured at or after this
+   * request. Only while a healthy video cohort keeps the track live. Busy,
+   * timeout and refusal return null for the caller's existing fallback; none of
+   * them is a source failure. Callers are serialized by the workspace lane.
+   */
+  async snapshot(input: { quality: number; maxBytes: number }): Promise<NativeSnapshot | null> {
+    try {
+      if (!this.snapshotAdmissible()) return null;
+      if (this.snapshotSlotBlocked) {
+        // One bounded probe per request while blocked; a slow or failed probe stays blocked.
+        let reserved = true;
+        try {
+          reserved = await this.snapshotSlotReserved(NATIVE_SNAPSHOT_SLOT_PROBE_MS);
+        } catch {}
+        if (reserved) return null;
+        this.snapshotSlotBlocked = false;
+      }
+      let attempt = await this.requestSnapshot(input);
+      if (attempt?.status === "busy") {
+        // Only an earlier cancelled job can still own the slot. Wait boundedly in
+        // this lane, then issue a fresh request with its own floor and generation.
+        if (!(await this.waitForSnapshotSlot()) || !this.snapshotAdmissible()) {
+          this.snapshotSlotBlocked = true;
+          return null;
+        }
+        attempt = await this.requestSnapshot(input);
+        if (attempt?.status === "busy") {
+          this.snapshotSlotBlocked = true;
+          return null;
+        }
+      }
+      if (!attempt) return null;
+      if (attempt.status === "timeout") {
+        this.snapshotTimeouts += 1;
+        if (this.snapshotTimeouts >= NATIVE_SNAPSHOT_TIMEOUT_LIMIT) this.snapshotDisabled = true;
+        return null;
+      }
+      if (attempt.status !== "ready") return null;
+      const value = attempt.value;
+      const clock = this.clock;
+      const timestampUs = value.timestampUs;
+      const byteLength = value.byteLength;
+      const dataBase64 = value.dataBase64;
+      if (
+        !clock ||
+        this.stopped ||
+        !this.options.isCurrent() ||
+        value.generation !== attempt.generation ||
+        this.generation !== attempt.generation ||
+        typeof timestampUs !== "number" ||
+        !Number.isFinite(timestampUs) ||
+        timestampUs < attempt.floor ||
+        value.width !== this.options.width ||
+        value.height !== this.options.height ||
+        typeof byteLength !== "number" ||
+        !Number.isInteger(byteLength) ||
+        byteLength < 1 ||
+        byteLength > attempt.cap ||
+        typeof dataBase64 !== "string" ||
+        dataBase64.length > FRAME_MAX_BASE64_CHARS ||
+        Buffer.byteLength(dataBase64, "base64") !== byteLength
+      )
+        return null;
+      const sourceTime = videoSourceTime(timestampUs, clock, performance.now(), Date.now());
+      if (!sourceTime) return null;
+      this.snapshotTimeouts = 0;
+      return {
+        dataBase64,
+        byteLength,
+        width: this.options.width,
+        height: this.options.height,
+        ...sourceTime,
+      };
+    } catch {
+      // CDP/helper refusal leaves video state untouched; the caller falls back.
+      return null;
+    }
+  }
+  private snapshotAdmissible(): boolean {
+    return (
+      !this.stopped &&
+      !this.idleStopped &&
+      !this.failure &&
+      !this.snapshotDisabled &&
+      this.sourceReady &&
+      this.clock !== null &&
+      [...this.encoders.values()].some((state) => state.failure === null)
+    );
+  }
+  private async requestSnapshot(input: { quality: number; maxBytes: number }): Promise<{
+    status: SnapshotStatus;
+    value: Record<string, unknown>;
+    generation: number;
+    floor: number;
+    cap: number;
+  } | null> {
+    const clock = this.clock;
+    if (!clock) return null;
+    const token = randomUUID().replaceAll("-", "");
+    const generation = this.generation;
+    // The same source-clock floor as invalidateQueuedFrames, computed per request.
+    const floor = Math.ceil((clock.sourceMs + performance.now() - clock.monotonicMs) * 1000);
+    const quality = Math.max(1, Math.min(100, Math.round(input.quality)));
+    const cap = Math.min(FRAME_MAX_BYTES, Math.max(1, Math.floor(input.maxBytes)));
+    const reply = await this.evaluate<unknown>(
+      `captureSnapshot(${JSON.stringify(token)},${quality},${cap},${floor},${generation},${NATIVE_SNAPSHOT_MAX_TIMEOUT_MS})`,
+    );
+    if (!reply || typeof reply !== "object" || Array.isArray(reply)) return null;
+    const value = reply as Record<string, unknown>;
+    // A late or foreign reply never matches this request's exact token.
+    if (value.token !== token) return null;
+    const statuses: SnapshotStatus[] = ["ready", "busy", "timeout", "stale", "stopped", "too-large", "unsupported"];
+    if (!statuses.includes(value.status as SnapshotStatus)) return null;
+    return { status: value.status as SnapshotStatus, value, generation, floor, cap };
+  }
+  private async snapshotSlotReserved(timeoutMs: number): Promise<boolean> {
+    const state = await this.evaluate<unknown>("snapshotSlotState()", Math.max(1, Math.ceil(timeoutMs)));
+    return !(state && typeof state === "object" && (state as { reserved?: unknown }).reserved === false);
+  }
+  /**
+   * One absolute monotonic deadline covers every sleep and every slot RPC. Each
+   * RPC gets only the remaining budget as its CDP timeout; a reply arriving after
+   * the deadline is refused, and any timeout/failure ends the wait as exhausted.
+   */
+  private async waitForSnapshotSlot(): Promise<boolean> {
+    const deadline = this.now() + NATIVE_SNAPSHOT_MAX_TIMEOUT_MS;
+    for (;;) {
+      const sleepMs = Math.min(NATIVE_SNAPSHOT_SLOT_POLL_MS, deadline - this.now());
+      if (sleepMs <= 0) return false;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, sleepMs);
+      });
+      const remaining = deadline - this.now();
+      if (this.stopped || remaining <= 0) return false;
+      let reserved: boolean;
+      try {
+        reserved = await this.snapshotSlotReserved(remaining);
+      } catch {
+        return false;
+      }
+      if (this.now() > deadline) return false;
+      if (!reserved) return true;
     }
   }
   /** Document/action boundary only. Live pointer samples must not call this operation. */

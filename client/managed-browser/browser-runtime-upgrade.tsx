@@ -1,7 +1,7 @@
 import type { PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 import { useRpc } from "@getpaseo/plugin/client";
 import { Modal } from "@getpaseo/plugin/client/react-native";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { BROWSER_RUNTIME_RESTART_IMPACT, browserRuntimeUpgradeRpc, type BrowserRuntimeUpgradeReply } from "../../shared/managed-browser/browser-runtime-upgrade";
 
@@ -13,10 +13,13 @@ export function BrowserRuntimeUpgradeAction({ theme, hostLabel, onVerified }: {
   const rpc = useRpc(browserRuntimeUpgradeRpc);
   const [result, setResult] = useState<BrowserRuntimeUpgradeReply | null>(null);
   const [pending, setPending] = useState(false);
-  const mounted = useRef(true), cancelButton = useRef<{ focus?(): void } | null>(null);
+  const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const confirming = result?.status === "confirmation-required";
-  useEffect(() => { if (confirming) cancelButton.current?.focus?.(); }, [confirming]);
+  // The host commits modal content after its visibility effect.
+  const focusCancel = useCallback((node: unknown) => {
+    (node as { focus?(): void } | null)?.focus?.();
+  }, []);
   const call = async (input: Parameters<typeof rpc>[0]) => {
     if (pending) return;
     setPending(true);
@@ -30,7 +33,7 @@ export function BrowserRuntimeUpgradeAction({ theme, hostLabel, onVerified }: {
   const cancel = () => { if (!pending) { setResult(null); void call({ action: "cancel" }); } };
   const colors = theme.colors;
   const button = (label: string, onPress: () => void, cancelRef = false) => <Pressable
-    ref={cancelRef ? node => { cancelButton.current = node as unknown as { focus?(): void }; } : undefined}
+    ref={cancelRef ? focusCancel : undefined}
     accessibilityRole="button" accessibilityLabel={label} disabled={pending}
     onPress={onPress} style={{ padding: 12, minHeight: 44, opacity: pending ? 0.5 : 1 }}>
     <Text style={{ color: colors.accent }}>{label}</Text>

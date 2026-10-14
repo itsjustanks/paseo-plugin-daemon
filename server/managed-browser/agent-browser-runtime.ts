@@ -128,7 +128,7 @@ export interface RuntimeFrame {
   byteLength: number;
   width: number;
   height: number;
-  transport: "cdp-screencast" | "screenshot";
+  transport: "cdp-screencast" | "screenshot" | "native-snapshot";
   capturedAt: string;
 }
 
@@ -325,6 +325,8 @@ export class AgentBrowserRuntime {
   private readonly videoRecovery = createVideoSourceRecovery();
   private videoTransitionDepth = 0;
   private videoTransitionEpoch = 0;
+  /** Internal opt-out only. Default-on remains contingent on measured acceptance. */
+  private readonly nativeSnapshots = process.env.HOSTS_BROWSER_NATIVE_SNAPSHOT !== "0";
 
   constructor(options: AgentBrowserRuntimeOptions) {
     this.binaryPath = requireAbsolute(options.binaryPath, "agent-browser binary path");
@@ -1141,7 +1143,10 @@ export class AgentBrowserRuntime {
           requestedQuality,
           maxBytes,
         );
-        return cached ?? (await this.captureScreenshot(maxBytes, requestedQuality, true));
+        if (cached) return cached;
+        const native = await this.tryNativeSnapshot(maxBytes, requestedQuality);
+        if (native) return native;
+        return await this.captureScreenshot(maxBytes, requestedQuality, true);
       }
       // Expiry discards pixels without resetting fallback dwell/recovery evidence.
       // Mutations and connection changes use the stronger invalidation below.
@@ -1173,10 +1178,83 @@ export class AgentBrowserRuntime {
       if (cached) {
         return cached;
       }
+      const native = await this.tryNativeSnapshot(maxBytes, requestedQuality);
+      if (native) return native;
       return await this.captureScreenshot(maxBytes, requestedQuality);
     } finally {
       release();
     }
+  }
+
+  /**
+   * Serve a JPEG from the healthy live native track without retiring it. Any
+   * refusal returns null so the caller keeps the arbitrated CDP screenshot path.
+   * Generation, page, connection, viewport and capture-policy fences match the
+   * screenshot body. Cache age starts at the frame's source capture time.
+   */
+  private async tryNativeSnapshot(maxBytes: number, quality: number): Promise<RuntimeFrame | null> {
+    const video = this.video;
+    const page = this.page;
+    const connection = this.connection;
+    const viewport = this.viewport;
+    if (
+      !this.nativeSnapshots ||
+      !video ||
+      this.stopping ||
+      this.videoRetirement ||
+      this.videoTransitionDepth > 0 ||
+      !page ||
+      !connection ||
+      !viewport
+    )
+      return null;
+    const token = this.capturePolicy.currentGeneration();
+    const attachmentGeneration = this.attachmentGeneration;
+    const documentGeneration = this.documentGeneration;
+    const expected = captureDimensions(viewport, viewport.captureScale);
+    let snapshot: Awaited<ReturnType<NativeVideoCapture["snapshot"]>>;
+    try {
+      snapshot = await video.snapshot({ quality, maxBytes });
+    } catch {
+      // Any snapshot failure is a refusal, never a video-state change.
+      return null;
+    }
+    if (
+      !snapshot ||
+      this.stopping ||
+      video !== this.video ||
+      page !== this.page ||
+      connection !== this.connection ||
+      viewport !== this.viewport ||
+      attachmentGeneration !== this.attachmentGeneration ||
+      documentGeneration !== this.documentGeneration ||
+      this.videoRetirement ||
+      this.videoTransitionDepth > 0 ||
+      !this.capturePolicy.isCurrent(token) ||
+      snapshot.width !== expected.width ||
+      snapshot.height !== expected.height ||
+      snapshot.byteLength > maxBytes
+    )
+      return null;
+    const dimensions = readJpegFrameDimensions(snapshot.dataBase64);
+    if (!dimensions || dimensions.width !== expected.width || dimensions.height !== expected.height)
+      return null;
+    const frame: RuntimeFrame = {
+      dataBase64: snapshot.dataBase64,
+      byteLength: snapshot.byteLength,
+      width: snapshot.width,
+      height: snapshot.height,
+      transport: "native-snapshot",
+      capturedAt: snapshot.capturedAt,
+    };
+    this.capturePolicy.rememberScreenshot(
+      token,
+      frame,
+      snapshot.capturedAtMonotonicMs,
+      quality,
+      maxBytes,
+    );
+    return frame;
   }
 
   /** Capture the configured viewport and cache only an unchanged-session/mutation completion. */

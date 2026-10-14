@@ -18,6 +18,8 @@ export function WorkspaceBrowserPanel(props: ChatBrowserPanelProps) {
 function WorkspaceBrowser(props: ChatBrowserPanelProps) {
   const readPresence = useRpc(listOpenBrowserWorkspacesRpc);
   const [started, setStarted] = useState(false);
+  // The host/workspace key owns maintenance, not transient query errors.
+  const [runtimeUpgradeBlocked, setRuntimeUpgradeBlocked] = useState(false);
   const createPermit = useRef(false);
   const [external, setExternal] = useState(false);
   const [appActive, setAppActive] = useState(AppState.currentState == null || AppState.currentState === "active");
@@ -35,9 +37,12 @@ function WorkspaceBrowser(props: ChatBrowserPanelProps) {
   const targeted = props.initialTabId !== undefined;
   const presence = useQuery({ queryKey: ["hosts-managed-browser-presence", props.host.id, props.workspaceId],
     queryFn: () => readPresence({}), enabled: active && !started && !targeted, retry: false,
-    refetchInterval: active && !started && !targeted ? 5_000 : false, gcTime: 0 });
-  const open = targeted || started || presence.data?.workspaceIds.includes(props.workspaceId);
-  const upgradeRequired = isBrowserRuntimeUpgradeRequired(presence.error);
+    refetchInterval: active && !started && !targeted && !runtimeUpgradeBlocked ? 5_000 : false, gcTime: 0 });
+  const upgradeRequired = runtimeUpgradeBlocked || isBrowserRuntimeUpgradeRequired(presence.error);
+  const open = !upgradeRequired && (targeted || started || presence.data?.workspaceIds.includes(props.workspaceId));
+  useEffect(() => {
+    if (isBrowserRuntimeUpgradeRequired(presence.error)) setRuntimeUpgradeBlocked(true);
+  }, [presence.error]);
   const colors = props.theme.colors;
   const button = (label: string, action: () => void) => <Pressable accessibilityRole="button"
     accessibilityLabel={label} onPress={action} style={{ minHeight: 44, padding: 12, justifyContent: "center" }}>
@@ -59,6 +64,7 @@ function WorkspaceBrowser(props: ChatBrowserPanelProps) {
           </Text>
           <BrowserRuntimeUpgradeAction key={props.host.id} theme={props.theme} hostLabel={props.host.label}
             onVerified={() => {
+              setRuntimeUpgradeBlocked(false);
               createPermit.current = false;
               setStarted(false);
               void presence.refetch();

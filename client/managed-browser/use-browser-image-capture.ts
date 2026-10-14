@@ -36,6 +36,13 @@ export function useBrowserImageCapture(options: ImageCaptureOptions) {
   latest.current = options;
   const mounted = useRef(true);
   const inFlight = useRef(false);
+  const failures = useRef({ viewerToken: options.viewerToken, quality: options.quality, count: 0 });
+  if (failures.current.viewerToken !== options.viewerToken || failures.current.quality !== options.quality) {
+    failures.current = { viewerToken: options.viewerToken, quality: options.quality, count: 0 };
+  }
+  // Each query keeps its own counter: a late reply from an old viewer cannot
+  // stop a newly attached viewer. Explicit refresh remains available when stopped.
+  const captureFailures = failures.current;
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -69,6 +76,7 @@ export function useBrowserImageCapture(options: ImageCaptureOptions) {
           // underlying JPEG still matches the server's incremental cache.
           knownFrameId: fallbackRevision ? null : (options.knownFrame()?.frameId ?? null),
         });
+        captureFailures.count = 0;
         return {
           ...result,
           mutationEpoch,
@@ -76,22 +84,27 @@ export function useBrowserImageCapture(options: ImageCaptureOptions) {
           viewerToken: options.viewerToken,
           captureQuality: options.quality,
         };
+      } catch (error) {
+        if (!(error instanceof CancelledError)) captureFailures.count += 1;
+        throw error;
       } finally {
         inFlight.current = false;
       }
     },
-    enabled:
+    enabled: () =>
       options.active !== false &&
       Boolean(options.viewerToken) &&
+      captureFailures.count < 2 &&
       !options.videoOwnsPresentation &&
       !options.hasVideoPresentation(),
     retry: false,
     refetchInterval: (query) =>
-      options.active === false || options.videoOwnsPresentation
+      options.active === false || options.videoOwnsPresentation || captureFailures.count >= 2
         ? false
         : browserCaptureInterval(query.state.data?.state.status, options.activeInput),
     refetchIntervalInBackground: false,
-    refetchOnWindowFocus: !options.videoOwnsPresentation,
+    refetchOnWindowFocus: () => !options.videoOwnsPresentation && captureFailures.count < 2,
+    refetchOnReconnect: () => !options.videoOwnsPresentation && captureFailures.count < 2,
     staleTime: 0,
   });
 
